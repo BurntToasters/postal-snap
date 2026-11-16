@@ -4,6 +4,7 @@ import { useAppStore } from "./store";
 import { conversationRead, conversationUnread } from "./threads";
 import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 /** Marks unread messages in the loaded conversation. Messages not yet loaded stay as they are. */
 export async function markLoadedConversationRead(
@@ -103,6 +104,6 @@ async function markLoadedConversation(
     if (open && idSet.has(open.id) && open.isRead === isRead) {
       current.selectMessage({ ...open, isRead: !isRead });
     }
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }

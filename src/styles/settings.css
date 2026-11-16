@@ -3,11 +3,32 @@
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(0, var(--settings-nav-width)) minmax(0, 1fr);
+  /* Nav grows to its longest label so no tab wraps. */
+  grid-template-columns: minmax(var(--settings-nav-width), max-content) minmax(
+      0,
+      1fr
+    );
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "nav search"
+    "search content"
     "nav content";
+}
+
+/* Window-level macOS chrome: xl corners and the shared window shadow.
+   The class chain outranks window-fx.css's vibrant override. */
+.modal-layer.settings-layer .settings-window {
+  box-shadow: var(--shadow-window);
+}
+
+/* Sidebar tints for nav icon tiles; white glyphs sit on each. */
+.settings-nav {
+  --settings-nav-tile: 1.375rem;
+  --tone-blue: #007aff;
+  --tone-gray: #8e8e93;
+  --tone-indigo: #5856d6;
+  --tone-green: #28a745;
+  --tone-orange: #d06d00;
+  --tone-red: #d70015;
 }
 
 .settings-nav {
@@ -26,15 +47,57 @@
   display: flex;
   min-height: var(--target-size);
   align-items: center;
+  text-align: start;
   gap: var(--space-2);
   padding: var(--control-pad-block) var(--space-3);
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  box-shadow: none;
   color: var(--text);
   cursor: pointer;
   transition: background-color 0.12s ease;
+}
+
+.settings-nav-tile {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: var(--settings-nav-tile);
+  height: var(--settings-nav-tile);
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--tile-tone, transparent);
+}
+
+.settings-nav-tile[data-tone="blue"] {
+  --tile-tone: var(--tone-blue);
+}
+
+.settings-nav-tile[data-tone="gray"] {
+  --tile-tone: var(--tone-gray);
+}
+
+.settings-nav-tile[data-tone="indigo"] {
+  --tile-tone: var(--tone-indigo);
+}
+
+.settings-nav-tile[data-tone="green"] {
+  --tile-tone: var(--tone-green);
+}
+
+.settings-nav-tile[data-tone="orange"] {
+  --tile-tone: var(--tone-orange);
+}
+
+.settings-nav-tile[data-tone="red"] {
+  --tile-tone: var(--tone-red);
+}
+
+.settings-nav .settings-nav-tile svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: #fff;
 }
 
 .settings-nav button:hover {
@@ -44,17 +107,36 @@
 .settings-nav button.active {
   color: var(--text);
   border-color: transparent;
-  background: var(--sidebar-selection);
-  font-weight: 650;
-  box-shadow:
-    inset 0 1px 0 var(--surface-highlight),
-    var(--shadow-control);
+  background: var(--selection-inactive);
+  font-weight: 600;
+}
+
+.settings-nav:focus-within button.active {
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
+  /* Enter at once: a fading fill would mix white text with light blue. */
+  transition: none;
+}
+
+.settings-nav:focus-within button.active svg {
+  color: var(--accent-contrast);
 }
 
 .settings-nav svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
   color: var(--accent);
+}
+
+@media (forced-colors: active) {
+  .settings-nav svg,
+  .settings-nav .settings-nav-tile svg {
+    color: CanvasText;
+  }
+
+  .settings-nav-tile {
+    background: transparent;
+  }
 }
 
 .settings-content {
@@ -63,7 +145,7 @@
   min-width: 0;
   padding: var(--settings-page-pad-block) var(--settings-page-pad-inline);
   overflow-y: auto;
-  background: var(--surface);
+  background: var(--group-canvas);
 }
 
 .settings-panel {
@@ -81,7 +163,7 @@
 .settings-group {
   display: grid;
   border-radius: var(--radius-md);
-  background: var(--fill);
+  background: var(--group-bg);
 }
 
 .settings-group > :is(.settings-row, .switch-row, .shortcut-row) {
@@ -101,8 +183,29 @@
   border-bottom-right-radius: var(--radius-md);
 }
 
+/* Inset hairline: starts at the label edge, not the group edge. */
 .settings-group > :not(:first-child) {
-  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  position: relative;
+}
+
+.settings-group > :not(:first-child)::before {
+  content: "";
+  position: absolute;
+  inset-inline: var(--settings-row-pad-inline) 0;
+  top: 0;
+  height: 1px;
+  background: var(--separator);
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .settings-group > :not(:first-child)::before {
+    display: none;
+  }
+
+  .settings-group > :not(:first-child) {
+    border-top: 1px solid CanvasText;
+  }
 }
 
 .settings-link-row {
@@ -136,6 +239,13 @@
   }
 }
 
+/* Informational row: same padding and copy rhythm as a settings row, no control. */
+.settings-note-row {
+  display: grid;
+  gap: var(--settings-copy-gap);
+  padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
+}
+
 .settings-group > p {
   margin: 0;
   padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
@@ -148,19 +258,19 @@
 
 .settings-group > p.settings-note > strong {
   color: var(--text);
-  font-size: 0.94rem;
+  font-size: var(--fs-ui);
   font-weight: 600;
 }
 
 .settings-row-error {
   color: var(--danger-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .settings-section > h3 {
   margin: 0;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -169,7 +279,7 @@
 .settings-lead {
   margin: 0;
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .settings-warning,
@@ -198,8 +308,8 @@
 
 .settings-panel h2 {
   margin: 0;
-  font-size: 1.15rem;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .security-summary,
@@ -244,21 +354,22 @@
   width: min(var(--settings-confirm-width), 100%);
   display: grid;
   gap: var(--space-3);
-  padding: var(--space-5);
+  padding: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
 
 .settings-confirm-card h2 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 .settings-confirm-card p {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .settings-confirm-field {
@@ -287,8 +398,7 @@
   background: var(--fill);
 }
 
-.settings-data-card > div:first-child,
-.settings-empty-state {
+.settings-data-card > div:first-child {
   display: grid;
   gap: var(--space-1);
 }
@@ -305,10 +415,9 @@
   gap: var(--space-2);
 }
 
-.settings-actions svg,
-.settings-empty-state > svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+.settings-actions svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .settings-panel .settings-data-status {
@@ -317,6 +426,8 @@
 }
 
 .settings-empty-state {
+  display: grid;
+  gap: var(--space-1);
   place-items: center;
   padding: var(--settings-empty-padding-block) var(--space-4);
   text-align: center;
@@ -338,7 +449,7 @@
 
 .settings-note {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   line-height: 1.45;
 }
 
@@ -391,7 +502,7 @@
   margin: 0;
   padding: var(--settings-row-pad-block) var(--settings-row-pad-inline);
   border-radius: var(--radius-sm);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   line-height: 1.45;
 }
@@ -418,7 +529,7 @@
 }
 
 .signature-editor-label {
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .signature-editor-toolbar {
@@ -457,7 +568,7 @@
 .signature-rich-help-fallback {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -496,12 +607,12 @@
 
 .aliases-header strong {
   display: block;
-  font-size: 0.92rem;
-  line-height: 1.35;
+  font-size: var(--fs-ui);
+  line-height: 1.45;
 }
 
 .detect-aliases-button {
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   min-height: var(--target-size);
   padding: var(--space-2) var(--space-3);
   white-space: nowrap;
@@ -509,7 +620,7 @@
 }
 
 .alias-status-message {
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   color: var(--success);
   font-weight: 500;
   line-height: 1.45;
@@ -532,7 +643,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
 }
 
 .alias-chip.primary {
@@ -543,10 +654,10 @@
 }
 
 .alias-badge {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   opacity: 0.85;
 }
 
@@ -554,14 +665,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--target-size);
-  min-height: var(--target-size);
+  min-width: var(--target-size-inset);
+  min-height: var(--target-size-inset);
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   padding: 0 var(--space-1);
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
   line-height: 1;
   border-radius: var(--radius-xs);
 }
@@ -585,7 +696,7 @@
 .add-alias-form button {
   min-height: var(--target-size);
   padding: var(--space-2) var(--space-4);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
 }
 
 /* Update ready card */
@@ -613,7 +724,7 @@
 
 .update-ready-body p {
   margin: 0 0 var(--space-2);
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
   color: var(--text);
 }
 
@@ -641,7 +752,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   background: var(--surface);
   box-shadow: var(--shadow-control);
@@ -655,7 +766,7 @@
 
 .rule-form > label {
   margin-top: var(--settings-label-gap);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .rule-form > label:first-child {
@@ -690,6 +801,62 @@
   gap: var(--space-2);
 }
 
+/* Rules v2 editor: condition and action rows wrap at large text. */
+.rule-group,
+.rule-match-mode {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.rule-group > legend,
+.rule-match-mode > legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+.rule-match-mode {
+  grid-auto-flow: column;
+  justify-content: start;
+  align-items: center;
+}
+
+.rule-match-mode > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--target-size);
+}
+
+.rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rule-row > label {
+  font-weight: 600;
+}
+
+.rule-row > select {
+  min-width: 0;
+}
+
+.rule-row > input {
+  min-width: 0;
+  flex: 1 1 var(--settings-field-min-width);
+}
+
+.rule-error {
+  margin: 0;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
 /* One titled section per job in the account card: password, signature,
    mail rules, and addresses, split by hairlines. */
 .account-settings-card
@@ -710,7 +877,7 @@
 .signature-editor-label,
 .signature-fallback > label,
 .account-settings-card .aliases-header strong {
-  font-size: 0.95rem;
+  font-size: var(--fs-ui);
   font-weight: 700;
 }
 
@@ -742,7 +909,7 @@
 .settings-section p[role="alert"],
 .connection-panel p[role="alert"] {
   color: var(--danger-ink);
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   line-height: 1.45;
   margin: 0;
@@ -763,16 +930,63 @@
 .settings-search {
   grid-area: search;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
   padding-block: var(--settings-search-pad-block) var(--settings-search-pad-end);
-  padding-inline: var(--settings-page-pad-inline);
+  padding-inline: var(--space-3);
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+
+@media (max-width: 760px) {
+  .settings-search {
+    padding-inline: var(--settings-page-pad-inline);
+    border-right: 0;
+    background: transparent;
+  }
 }
 .settings-search input {
   min-width: 0;
   flex: 1;
   min-height: var(--control-height);
+}
+
+/* One-sentence help; the rest opens under "Learn more". */
+.help-more {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* Row with a "Learn more" sits beneath its label, outside the label. */
+.settings-row-stack {
+  display: grid;
+}
+
+.settings-row-stack > .help-more {
+  padding: 0 var(--settings-row-pad-inline) var(--settings-row-pad-block);
+}
+
+.help-more summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target-size-inset);
+  color: var(--accent-ink);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.help-more small {
+  color: var(--text-muted);
+}
+
+/* Autosave status sits under the search field, out of the header. */
+.settings-search .settings-autosave {
+  flex: 1 0 100%;
+  padding-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
 }
 .settings-save-error {
   margin: 0;
@@ -819,14 +1033,31 @@
   align-items: stretch;
   gap: var(--space-2);
 }
+
+.account-overview-row .sync-indicator {
+  margin-top: 0;
+  padding: 0;
+  flex-shrink: 0;
+}
 .account-overview-order {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
   gap: var(--space-1);
 }
 .account-overview-order button {
-  min-height: var(--target-size);
+  width: var(--target-size-inset);
+  min-width: var(--target-size-inset);
+  height: var(--target-size-inset);
+  min-height: var(--target-size-inset);
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.account-overview-order svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 .account-overview-row {
   display: flex;
@@ -935,7 +1166,7 @@
 .certificate-details dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 @media (max-width: 760px) {
   .settings-search-result {

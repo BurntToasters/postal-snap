@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import test from "node:test";
 import { join } from "node:path";
 import { artifactArch, artifactPlatform } from "./lib/artifacts.js";
 import { root } from "./lib/paths.js";
+import { buildMasTauriArgs } from "./build-mas-args.js";
+import { buildTauriBuildArgs, resolveBuildInput } from "./tauri-build-args.js";
 import { isSemVer } from "./lib/versions.js";
 import { validateManifest } from "./validate-updater-manifest.js";
 import {
@@ -784,6 +795,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   );
 
   assert.deepEqual(direct.app.security.capabilities, ["default"]);
+  assert.equal(direct.plugins.updater.requireSignedVersion, true);
   assert.deepEqual(mas.app.security.capabilities, ["store"]);
   assert.deepEqual(msstore.app.security.capabilities, ["store"]);
   assert.deepEqual(flatpak.app.security.capabilities, ["store"]);
@@ -1331,32 +1343,27 @@ test("per-platform continue uploads without requiring the complete artifact set"
   );
 });
 
-test("rust:update passes clippy and rustfmt as one --component value", async () => {
+test("rust scripts derive the toolchain from rust-toolchain.toml", async () => {
   const packageJson = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
-  const rustUpdate = packageJson.scripts["rust:update"];
   assert.equal(
-    rustUpdate,
-    "rustup toolchain install 1.97.1 --profile minimal --component cargo,clippy,rustfmt",
+    packageJson.scripts["rust:update"],
+    "node scripts/rust-toolchain.mjs --install",
   );
 
   for (const [name, script] of Object.entries(packageJson.scripts)) {
-    const argv = String(script).split(/\s+/);
-    if (argv[0] !== "rustup") continue;
-    for (let index = 0; index < argv.length; index += 1) {
-      if (argv[index] !== "--component" && argv[index] !== "-c") continue;
-      const value = argv[index + 1];
-      assert.ok(
-        value && !value.startsWith("-"),
-        `${name} must pass a value to --component`,
-      );
-      const next = argv[index + 2];
-      assert.ok(
-        next === undefined || next.startsWith("-"),
-        `${name} must not pass extra rustup components as positional args`,
-      );
-    }
+    if (!name.startsWith("rust:") || script.includes("npm run")) continue;
+    assert.match(
+      script,
+      /^node scripts\/rust-toolchain\.mjs (?:--install|--target )/,
+      `${name} must delegate to scripts/rust-toolchain.mjs`,
+    );
+    assert.doesNotMatch(
+      script,
+      /\b\d+\.\d+\.\d+\b/,
+      `${name} must not hardcode a Rust version`,
+    );
   }
 });
 
@@ -1505,7 +1512,7 @@ test("test-all and package.json include cargo safe update and policy check", asy
   );
   assert.equal(
     packageJson.scripts["test:cargo-safe-update"],
-    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs",
+    "node --test scripts/cargo/safe-update.test.mjs scripts/cargo/check-update-policy.test.mjs scripts/deps-majors.test.mjs",
   );
   assert.equal(
     packageJson.scripts["check:cargo-update-policy"],
@@ -1599,4 +1606,179 @@ test("platform CI runs Clippy and Cargo update integration tests on Windows and 
     compile,
     /- if: matrix\.name != 'linux'\s*\n\s*run: npm run test:cargo-safe-update/,
   );
+});
+
+test("rust toolchain CLI --print matches the bare pin and never combines with an action", () => {
+  const script = join(root, "scripts", "rust-toolchain.mjs");
+  const run = (args) =>
+    spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  const bare = run([]);
+  assert.equal(bare.status, 0, bare.stderr);
+  assert.match(bare.stdout, /^\d+\.\d+\.\d+\n$/u);
+  const printed = run(["--print"]);
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(printed.stdout, bare.stdout);
+  for (const args of [
+    ["--print", "--install"],
+    ["--install", "--print"],
+    ["--print", "--target", "x86_64-pc-windows-msvc"],
+    ["--target", "x86_64-pc-windows-msvc", "--print"],
+  ]) {
+    const result = run(args);
+    const label = args.join(" ");
+    assert.notEqual(result.status, 0, `${label} must fail`);
+    assert.match(
+      result.stderr,
+      /--print cannot be combined/u,
+      `${label} must name --print`,
+    );
+    assert.equal(result.stdout, "", `${label} must not print or act`);
+  }
+});
+
+const VIBRANCY_FEATURE = "macos-vibrancy";
+const MAC_DIRECT = { target: "universal-apple-darwin", platform: "darwin" };
+const MAS_CONFIG = "src-tauri/tauri.mas.conf.json";
+
+function featuresOf(args) {
+  const index = args.indexOf("--features");
+  return index < 0 ? [] : args[index + 1].split(",");
+}
+
+function buildFor({ input = [], ...options }) {
+  return buildTauriBuildArgs({
+    input: resolveBuildInput({ input, ...options }),
+    target: options.target,
+    overridePath: "override.json",
+  });
+}
+
+test("direct macOS builds enable macos-vibrancy", () => {
+  for (const options of [
+    { ...MAC_DIRECT, additionalConfig: undefined },
+    { ...MAC_DIRECT, target: undefined },
+    { ...MAC_DIRECT, requireMacosSigning: true },
+  ]) {
+    const args = buildFor(options);
+    assert.ok(
+      featuresOf(args).includes(VIBRANCY_FEATURE),
+      `direct macOS build must enable ${VIBRANCY_FEATURE}`,
+    );
+  }
+});
+
+test("store, Windows, and Linux builds never enable macos-vibrancy", () => {
+  const cases = [
+    {
+      name: "Mac App Store config",
+      options: { ...MAC_DIRECT, additionalConfig: MAS_CONFIG },
+    },
+    {
+      name: "Mac App Store feature",
+      options: { ...MAC_DIRECT, input: ["--features", "mas"] },
+    },
+    {
+      name: "Microsoft Store",
+      options: {
+        target: "x86_64-pc-windows-msvc",
+        platform: "win32",
+        additionalConfig: "src-tauri/tauri.msstore.conf.json",
+        input: ["--features", "msstore"],
+      },
+    },
+    {
+      name: "Flatpak",
+      options: {
+        target: "x86_64-unknown-linux-gnu",
+        platform: "linux",
+        additionalConfig: "src-tauri/tauri.flatpak.conf.json",
+        input: ["--features", "flatpak"],
+      },
+    },
+    {
+      name: "Windows direct",
+      options: { target: "x86_64-pc-windows-msvc", platform: "win32" },
+    },
+    {
+      name: "Linux AppImage",
+      options: {
+        target: "x86_64-unknown-linux-gnu",
+        platform: "linux",
+        input: [],
+      },
+    },
+  ];
+  for (const { name, options } of cases) {
+    const args = buildFor(options);
+    assert.ok(
+      !featuresOf(args).includes(VIBRANCY_FEATURE),
+      `${name} must not enable ${VIBRANCY_FEATURE}`,
+    );
+    assert.ok(!args.includes(VIBRANCY_FEATURE), `${name} leaked the feature`);
+  }
+});
+
+test("feature merge keeps caller features and never duplicates", () => {
+  assert.deepEqual(
+    resolveBuildInput({
+      input: ["--features", "foo", "--", "--locked"],
+      ...MAC_DIRECT,
+    }),
+    ["--features", `foo,${VIBRANCY_FEATURE}`, "--", "--locked"],
+  );
+  assert.deepEqual(
+    resolveBuildInput({
+      input: ["--features", VIBRANCY_FEATURE],
+      ...MAC_DIRECT,
+    }),
+    ["--features", VIBRANCY_FEATURE],
+  );
+});
+
+test("mas Tauri args never contain macos-vibrancy", () => {
+  const args = buildMasTauriArgs({ storeConfigPath: "store.json" });
+  assert.ok(!args.join(" ").includes(VIBRANCY_FEATURE));
+  assert.ok(args.includes("mas"));
+});
+
+test("macos-vibrancy is a feature that maps to the Tauri private API", async () => {
+  const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
+  assert.match(cargo, /^macos-vibrancy = \["tauri\/macos-private-api"\]$/m);
+  assert.match(cargo, /^mas = \[\]$/m);
+});
+
+test("only the dev vibrancy script names macos-vibrancy", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  const named = Object.entries(packageJson.scripts)
+    .filter(([, command]) => command.includes(VIBRANCY_FEATURE))
+    .map(([name]) => name);
+  assert.deepEqual(named, ["tauri:dev:vibrancy"]);
+  const dev = packageJson.scripts["tauri:dev:vibrancy"];
+  assert.match(dev, /tauri dev .*--features macos-vibrancy/);
+  assert.match(dev, /tauri\.direct\.conf\.json/);
+});
+
+test("macOSPrivateApi stays false in every Tauri config", async () => {
+  const dir = join(root, "src-tauri");
+  const configs = (await readdir(dir)).filter((name) =>
+    /^tauri.*\.conf\.json$/.test(name),
+  );
+  assert.ok(configs.includes("tauri.conf.json"));
+  const found = [];
+  const visit = (value, file) => {
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "macOSPrivateApi") found.push([file, child]);
+      visit(child, file);
+    }
+  };
+  for (const name of configs) {
+    visit(JSON.parse(await readFile(join(dir, name), "utf8")), name);
+  }
+  assert.ok(found.length >= configs.length - 1);
+  for (const [file, value] of found) {
+    assert.equal(value, false, `${file} must keep macOSPrivateApi false`);
+  }
 });

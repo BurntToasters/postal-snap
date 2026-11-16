@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Typing "/" in the search box jumps focus instead of typing.

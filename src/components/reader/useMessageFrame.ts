@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/immutability, react-hooks/exhaustive-deps -- refs arrive as params; code moved verbatim. */
 import {
   useCallback,
   useEffect,
@@ -24,14 +23,60 @@ import {
   differentLinkAddress,
   hasAuthorColors,
   messageFrameDocument,
+  pickLinkUrl,
   withFrameLinks,
   type SanitizedMail,
 } from "../../security";
-import type { AppSettings, Attachment, MessageDetail } from "../../types";
+import type {
+  AppSettings,
+  Attachment,
+  MessageDetail,
+  UiDensity,
+} from "../../types";
 import { collapseQuotedMail, hydrateInlineImages } from "./readerUtils";
 
+// Reading keys the letter forwards to the app, as the shell would receive them.
+const READING_KEYS = new Set([
+  "j",
+  "k",
+  "n",
+  "p",
+  "r",
+  "a",
+  "i",
+  "]",
+  "[",
+  "ArrowDown",
+  "ArrowUp",
+  "Home",
+  "End",
+  "Delete",
+  " ",
+]);
+
+// List and dialog keys; forwarded only when the app takes them.
+const PARENT_KEYS = new Set(["Escape", "s", "u", "x", "e", "#", "!", "?"]);
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest("input, textarea, select, [contenteditable='true']") !== null
+  );
+}
+
 /** Smallest shrink-to-fit scale before wide mail scrolls sideways. */
-const MIN_FIT_ZOOM = 0.6;
+const MIN_FIT_ZOOM = 0.8;
+
+// Mirrors --reader-frame-margin-block per density; the frame is its own document.
+export const FRAME_MARGIN_BLOCK: Record<UiDensity, number> = {
+  normal: 12,
+  comfortable: 16,
+  compact: 10,
+};
+
+export function frameMarginBlock(density: UiDensity): number {
+  return FRAME_MARGIN_BLOCK[density] ?? FRAME_MARGIN_BLOCK.normal;
+}
 
 interface Options {
   frame: RefObject<HTMLIFrameElement | null>;
@@ -43,7 +88,15 @@ interface Options {
   currentLoadedHtml: string | undefined;
   inlineAttachments: Attachment[];
   setLoadedHtml: Dispatch<
-    SetStateAction<{ messageId: number; html: string } | undefined>
+    SetStateAction<
+      | {
+          messageId: number;
+          html: string;
+          sourceHtml?: string;
+          remoteAttempted?: boolean;
+        }
+      | undefined
+    >
   >;
   searchQuery: string | undefined;
   settings: AppSettings;
@@ -82,17 +135,28 @@ export function useMessageFrame({
         settings.textScale,
         // Colorless mail follows dark mode; designed mail keeps its page.
         isDark && !hasAuthorColors(frameSource),
+        frameMarginBlock(settings.density),
       ) +
       // Identical bodies must still reload, so the frame gets its link wiring.
       `<!-- ${messageId ?? ""} -->`,
-    [frameSource, isDark, messageId, searchQuery, settings.textScale],
+    [
+      frameSource,
+      isDark,
+      messageId,
+      searchQuery,
+      settings.textScale,
+      settings.density,
+    ],
   );
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- ref or DOM write, not React state.
     contentOperation.current += 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, [messageId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- ref or DOM write, not React state.
     const operation = ++contentOperation.current;
     if (
       !messageId ||
@@ -109,11 +173,17 @@ export function useMessageFrame({
       inlineAttachments,
     ).then(() => {
       if (contentOperation.current === operation)
-        setLoadedHtml({ messageId, html: doc.body.innerHTML });
+        setLoadedHtml({
+          messageId,
+          html: doc.body.innerHTML,
+          sourceHtml: sanitized.html,
+          remoteAttempted: false,
+        });
     });
     return () => {
       if (contentOperation.current === operation) contentOperation.current += 1;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, [inlineAttachments, messageAccountId, messageId, sanitized]);
 
   const frameLinkCleanup = useRef<(() => void) | undefined>(undefined);
@@ -124,6 +194,7 @@ export function useMessageFrame({
     const iframe = frame.current;
     const doc = iframe?.contentDocument;
     if (!doc?.body || !iframe) return;
+    // eslint-disable-next-line react-hooks/immutability -- ref or DOM write, not React state.
     doc.body.style.zoom = "";
     const header = iframe
       .closest(".reader-pane")
@@ -140,6 +211,7 @@ export function useMessageFrame({
       const zoom = Math.max(MIN_FIT_ZOOM, available / needed);
       doc.body.style.zoom = String(Math.floor(zoom * 100) / 100);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, []);
 
   useEffect(() => {
@@ -148,6 +220,7 @@ export function useMessageFrame({
     const observer = new ResizeObserver(() => fitFrameContent());
     observer.observe(node);
     return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, [fitFrameContent, frameHtml]);
 
   function wireFrameLinks() {
@@ -170,13 +243,7 @@ export function useMessageFrame({
       event.stopPropagation();
       const marked = target.getAttribute("data-external-href")?.trim() ?? "";
       const href = target.getAttribute("href")?.trim() ?? "";
-      const url = /^https?:/i.test(marked)
-        ? marked
-        : /^https?:/i.test(href)
-          ? href
-          : /^mailto:/i.test(href)
-            ? href
-            : "";
+      const url = pickLinkUrl(marked, href);
       if (/^https?:/i.test(url)) {
         void handleExternalLink(url, target.textContent ?? "");
         return;
@@ -193,15 +260,7 @@ export function useMessageFrame({
       );
       const marked = target?.getAttribute("data-external-href")?.trim() ?? "";
       const href = target?.getAttribute("href")?.trim() ?? "";
-      const url = /^https?:/i.test(marked)
-        ? marked
-        : /^https?:/i.test(href)
-          ? href
-          : /^mailto:/i.test(href)
-            ? href
-            : /^mailto:/i.test(marked)
-              ? marked
-              : "";
+      const url = pickLinkUrl(marked, href);
       const detail: IframeContextMenuDetail = {
         x: event.clientX + rect.left,
         y: event.clientY + rect.top,
@@ -218,37 +277,24 @@ export function useMessageFrame({
       );
     };
     const forwardKey = (event: KeyboardEvent) => {
-      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
+      if (event.isComposing || isEditableTarget(event.target)) return;
       const key = event.key;
-      const readingKey =
-        key === "j" ||
-        key === "k" ||
-        key === "n" ||
-        key === "p" ||
-        key === "r" ||
-        key === "a" ||
-        key === "i" ||
-        key === "]" ||
-        key === "[" ||
-        key === "ArrowDown" ||
-        key === "ArrowUp" ||
-        key === "Home" ||
-        key === "End" ||
-        key === "Delete" ||
-        key === " ";
-      if (!readingKey) return;
-      event.preventDefault();
-      window.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: event.key,
-          code: event.code,
-          shiftKey: event.shiftKey,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
+      const chord = event.metaKey || event.ctrlKey || event.altKey;
+      const readingKey = !chord && READING_KEYS.has(key);
+      if (!readingKey && !chord && !PARENT_KEYS.has(key)) return;
+      // Reading keys always stop; other keys stop only if the app handled them.
+      const copy = new KeyboardEvent("keydown", {
+        key,
+        code: event.code,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      const handled = !document.dispatchEvent(copy);
+      if (readingKey || handled) event.preventDefault();
     };
     body.addEventListener("click", handleLink);
     body.addEventListener("auxclick", handleLink);
@@ -264,6 +310,7 @@ export function useMessageFrame({
     };
     if (letterId != null) {
       const top = rememberedLetterScroll(letterId);
+      // eslint-disable-next-line react-hooks/immutability -- ref or DOM write, not React state.
       if (top > 0) scrolling.scrollTop = top;
     }
     scrolling.addEventListener("scroll", onLetterScroll);
@@ -287,6 +334,7 @@ export function useMessageFrame({
     const letterId = message?.id;
     return () => {
       // Read at cleanup on purpose: the frame may mount after this effect runs.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
       const doc = frame.current?.contentDocument;
       const scrolling = doc?.scrollingElement ?? doc?.documentElement;
       if (letterId != null && scrolling && scrolling.scrollTop > 0) {
@@ -295,6 +343,7 @@ export function useMessageFrame({
       frameLinkCleanup.current?.();
       frameLinkCleanup.current = undefined;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, [message?.id]);
 
   return { frameSource, frameHtml, fitFrameContent, wireFrameLinks };

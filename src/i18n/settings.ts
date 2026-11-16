@@ -8,6 +8,7 @@ export const settings = {
   sectionSelector: "Settings section",
   backAccounts: "Back to accounts",
   manageAccount: (name: string) => `Manage ${name}`,
+  manageAccountVerb: "Manage",
   moveUp: "Move up",
   moveDown: "Move down",
   moveAccountUp: (name: string) => `Move ${name} up`,
@@ -96,7 +97,8 @@ export const settings = {
   light: "Light",
   dark: "Dark",
   spacing: "Interface spacing",
-  spacingHelp: "Comfortable is easiest to scan. Compact shows more mail.",
+  spacingHelp:
+    "Normal fits most screens. Comfortable is larger and easier to read. Compact shows the most mail.",
   badgeScope: "Unread badge",
   badgeScopeHelp:
     "Show unread Inbox mail for the active account or across all accounts.",
@@ -104,7 +106,8 @@ export const settings = {
   badgeScopeAllInboxes: "All account Inboxes",
   sidebar: "Mailboxes sidebar",
   sidebarHelp: "Keep account folders visible beside your messages.",
-  comfortable: "Comfortable",
+  densityNormal: "Normal",
+  comfortable: "Comfortable (larger)",
   compact: "Compact",
   windowEffects: "Translucent window background",
   windowEffectsHelp:
@@ -126,11 +129,16 @@ export const settings = {
   protectionAdsOffHelp:
     "Advertising and tracking image checks are off. Reported-address warnings are still on.",
   reviewAdvanced: "Review Advanced",
-  advancedHelp:
-    "These options change how Postal Snap checks images and links. Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
+  advancedHelp: "These options change how Postal Snap checks images and links.",
+  advancedHelpMore:
+    "Leave them on unless you have a specific reason to turn them off. Choosing Load images, private-network blocking, and other safety checks still apply.",
+  learnMore: "Learn more",
+  learnMoreAbout: (name: string) => `Learn more about ${name}`,
   blockAds: "Block advertising and tracking images",
   blockAdsHelp:
-    "After you choose Load images, Postal Snap still hides known advertising and tracking pictures. Turning this off can let those pictures load and tell senders more about you.",
+    "After you choose Load images, Postal Snap still hides known advertising and tracking pictures.",
+  blockAdsHelpMore:
+    "Turning this off can let those pictures load and tell senders more about you.",
   disableAdblockTitle: "Allow advertising and tracking images?",
   disableAdblockQuestion:
     "Postal Snap will no longer hide known advertising and tracking pictures after you choose Load images. Image consent and private-network protections stay on.",
@@ -138,7 +146,7 @@ export const settings = {
   blockThreatsHelp:
     "Postal Snap checks links and remote images against a local reported-threat list before they can load or open. Turning this off is dangerous. You can turn it back on at any time.",
   threatOffWarning:
-    "Reported-address warnings are off. Postal Snap will not warn you about listed dangerous links or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
+    "Reported-address warnings are off. Postal Snap will not warn you about links reported as potentially dangerous or block those remote images. Turn this back on unless you have a specific reason to leave it off.",
   threatDisableTitle: "Turn off reported-address warnings?",
   threatDisableLead:
     "This is not a good idea. Postal Snap will no longer warn you about addresses that have been reported as potentially dangerous, and it will not block those remote images. Private-network and image-consent protections stay on, but they do not replace this list.",
@@ -177,10 +185,10 @@ export const settings = {
   textSize: "Text size",
   textSizeHelp: "Changes Postal Snap controls and text.",
   small: "Small (85%)",
-  normal: "Normal",
-  large: "Large",
-  extraLarge: "Extra large",
-  veryLarge: "Very large",
+  normal: "Default (100%)",
+  large: "Large (115%)",
+  extraLarge: "Extra large (130%)",
+  veryLarge: "Very large (150%)",
   evenLarger: "Even larger (175%)",
   largest: "Largest (200%)",
   shortcuts: "Shortcuts",
@@ -195,8 +203,8 @@ export const settings = {
   shortcutFirstLastMessage: "First or last message",
   shortcutScrollReader: "Scroll message, then open the next",
   shortcutMarkReadUnread: "Mark read or unread",
-  shortcutStarMessage: "Star or unstar message",
-  shortcutStarFocused: "Star or unstar the focused message",
+  shortcutStarMessage: "Flag or unflag message",
+  shortcutStarFocused: "Flag or unflag the focused message",
   shortcutReadFocused: "Mark the focused message read or unread",
   shortcutCheckFocused: "Check or uncheck the focused message",
   shortcutArchiveFocused: "Archive the focused message",
@@ -236,9 +244,17 @@ export const settings = {
   accountNameHelp:
     "Recipients see this name with your address. Up to 120 characters.",
   accountNameSaved: "Name saved.",
+  accountNotifyNewMail: "Notify for new mail",
+  accountNotifyNewMailHelp:
+    "Show a desktop notification when new mail arrives in this account.",
+  accountNotifyNewMailFor: (name: string) => `Notify for new mail: ${name}`,
+  notifyPerAccount: "Accounts",
+  accountNotifyNewMailFailed:
+    "The notification setting could not be saved. Try again.",
   accountColor: "Account color",
   accountColorHelp: "This color marks the account in the account list.",
   accountColorFailed: "The account color could not be saved. Try again.",
+  accountColorClear: "Use default color",
   accountColors: {
     blue: "Blue",
     teal: "Teal",
@@ -306,14 +322,33 @@ export const settings = {
   actionFolder: "Move to folder…",
   actionMoveToFolder: (folder: string) => `Move to “${folder}”`,
   chooseFolder: "Choose folder…",
+  matchAll: "Match all conditions",
+  matchAny: "Match any condition",
+  addCondition: "Add condition",
+  removeCondition: (position: number) => `Remove condition ${position}`,
+  addAction: "Add action",
+  removeAction: (position: number) => `Remove action ${position}`,
+  conditionsLegend: "Conditions",
+  actionsLegend: "Actions",
+  matchModeLegend: "Apply the rule when",
+  actionFlag: "Flag",
+  actionFlagWith: (color: string) => `Flag ${color}`,
+  actionPin: "Pin",
+  actionNotify: "Notify",
+  ruleFlagColor: "Flag color",
+  ruleJoinAll: " and ",
+  ruleJoinAny: " or ",
+  ruleFolderRequired: "Choose the folder to move matching mail into.",
+  ruleFlagRequired: "Choose a flag color.",
+  ruleActionRequired: "Choose an action for the rule.",
   addRule: "Add rule",
   ruleSaved: "Rule saved.",
   ruleRemoved: "Rule removed.",
   ruleNameRequired: "Name the rule first.",
   ruleMatchRequired: "Enter the text to match.",
   removeRuleConfirm: (name: string) => `Delete the “${name}” rule?`,
-  describeRule: (field: string, contains: string, action: string) =>
-    `If ${field} “${contains}”, ${action}.`,
+  describeRule: (conditions: string, actions: string) =>
+    `If ${conditions}, ${actions}.`,
   aliasesTitle: "Email Aliases & Custom Domains",
   aliasesHelp:
     "Send and receive using iCloud aliases, legacy Apple domains, or custom email domains.",
@@ -402,15 +437,18 @@ export const settings = {
   flatpakEdition: "Flatpak edition",
   updateCheckInterval: "Check for updates",
   updateCheckIntervalHelp:
-    "Postal Snap looks for signed updates when it starts, and can keep checking while it stays open. Store and Flatpak editions use their own update tools.",
+    "Postal Snap looks for signed updates when it starts, and can keep checking while it stays open.",
+  updateCheckIntervalHelpMore:
+    "Store and Flatpak editions use their own update tools.",
   updateCheckStartupAnd6h: "On startup and every 6 hours",
   updateCheckStartupAnd12h: "On startup and every 12 hours",
   updateCheckStartupAnd24h: "On startup and every 24 hours",
   updateCheckStartup: "On startup only",
   updateCheckManual: "Only when I check",
   updateChannel: "Update channel",
-  updateChannelHelp:
-    "Auto follows the version you run. Stable gets only finished releases. Beta also gets pre-releases, which may be unstable. Switching from Beta to Stable waits for a newer stable release; it never downgrades.",
+  updateChannelHelp: "Auto follows the version you run.",
+  updateChannelHelpMore:
+    "Stable gets only finished releases. Beta also gets pre-releases, which may be unstable. Switching from Beta to Stable waits for a newer stable release; it never downgrades.",
   updateChannelAuto: "Auto",
   updateChannelStable: "Stable",
   updateChannelBeta: "Beta",

@@ -5,6 +5,9 @@ import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Exercise the handler shipped by the locked Tauri dependency, not a JS copy
 // that could keep passing after native behavior changes. Cargo fetch supplies it.
@@ -684,5 +687,49 @@ test.describe("Windows Store caption lifecycle", () => {
     await expect(page.getByRole("alert")).toHaveText(
       /The window action could not finish/,
     );
+  });
+});
+
+test.describe("macOS caption layout", () => {
+  test.use({ userAgent: platforms.macos });
+  test.beforeEach(async ({ page }) => {
+    await installMockIpc(page);
+    await page.addInitScript({ content: nativeDragScript("macos") });
+  });
+
+  test("clears traffic lights when collapsed and matches the drag strip to the toolbar", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1240, height: 820 });
+    for (const density of ["normal", "comfortable", "compact"]) {
+      await page.goto(`/?density=${density}`);
+      await page.locator(".mail-shell").waitFor();
+      const toolbar = page.locator(".app-toolbar");
+      const strip = page.locator(".sidebar-titlebar-drag");
+      await expect(strip).toBeVisible();
+      // Compare with the resolved --toolbar-height token, not the rendered bar.
+      const tokenHeight = await page.evaluate(() => {
+        const probe = document.createElement("div");
+        probe.style.height = "var(--toolbar-height)";
+        document.body.append(probe);
+        const height = probe.getBoundingClientRect().height;
+        probe.remove();
+        return height;
+      });
+      expect((await strip.boundingBox())!.height).toBeCloseTo(tokenHeight, 1);
+
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+      await page.getByLabel("Mailboxes sidebar").uncheck();
+      await page.getByRole("button", { name: "Close settings" }).click();
+      await expect(page.locator(".mail-shell")).toHaveClass(
+        /sidebar-collapsed/,
+      );
+      await expect(toolbar).toHaveCSS("padding-left", "84px");
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+      await page.getByLabel("Mailboxes sidebar").check();
+      await page.getByRole("button", { name: "Close settings" }).click();
+    }
   });
 });

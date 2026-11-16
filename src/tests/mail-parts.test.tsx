@@ -6,9 +6,11 @@ import { PostalError } from "../errors";
 import {
   DraftList,
   OutboxList,
+  OutboxRetryAll,
   SnoozedList,
 } from "../components/mail/localLists";
 import { SentNoticeToast } from "../components/mail/mailDialogs";
+import { NoticeRegion } from "../components/NoticeRegion";
 import {
   isOversizeError,
   matchesLocalQuery,
@@ -57,7 +59,7 @@ describe("listed star", () => {
     flags.mockRejectedValueOnce(new Error("offline"));
     await toggleListedStar(message.id);
     expect(useAppStore.getState().messages[0]?.isStarred).toBe(true);
-    expect(useAppStore.getState().error).toMatch(/offline/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("marks a listed message read and restores the unread count when saving fails", async () => {
@@ -78,7 +80,7 @@ describe("listed star", () => {
     await toggleListedRead(message.id);
     expect(useAppStore.getState().messages[0]?.isRead).toBe(true);
     expect(useAppStore.getState().mailboxes[0]?.unreadCount).toBe(1);
-    expect(useAppStore.getState().error).toMatch(/offline/i);
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 });
 
@@ -232,20 +234,21 @@ describe("local mailbox lists", () => {
       createdAt: "2026-09-01T12:00:00Z",
       sendAt: null,
     };
+    const items = [
+      { ...base, id: "outbox-1", state: "needs_attention" as const },
+      {
+        ...base,
+        id: "outbox-2",
+        state: "needs_attention" as const,
+        subject: "Later",
+      },
+      { ...base, id: "outbox-3", state: "queued" as const },
+    ];
+    render(<OutboxRetryAll items={items} onRetryAll={onRetryAll} />);
     render(
       <OutboxList
-        items={[
-          { ...base, id: "outbox-1", state: "needs_attention" },
-          {
-            ...base,
-            id: "outbox-2",
-            state: "needs_attention",
-            subject: "Later",
-          },
-          { ...base, id: "outbox-3", state: "queued" },
-        ]}
+        items={items}
         onRetry={vi.fn()}
-        onRetryAll={onRetryAll}
         onRetryCopy={vi.fn()}
         onSendNow={vi.fn()}
         onDiscard={vi.fn()}
@@ -267,21 +270,46 @@ describe("sent notice", () => {
     vi.spyOn(api, "restoreOutbox").mockRejectedValue(
       new Error("restore failed"),
     );
+    const toast = (
+      <>
+        <SentNoticeToast />
+        <NoticeRegion />
+      </>
+    );
     useAppStore.setState({
       lastSent: { outboxId: "outbox", accountId: "account-1", scheduled: true },
     });
-    const { rerender } = render(<SentNoticeToast />);
+    const { rerender } = render(toast);
     expect(screen.getByText(strings.mail.messageScheduled)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: strings.mail.undoSend }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: strings.mail.viewOutbox }),
+    );
+    await vi.runAllTicks();
+    expect(useAppStore.getState().activeLocalView).toBe("outbox");
+    expect(useAppStore.getState().lastSent).toBeUndefined();
+
+    // A failed undo ends the notice and reports the error; it never silently passes.
+    useAppStore.setState({
+      lastSent: {
+        outboxId: "outbox-undo",
+        accountId: "account-1",
+        scheduled: false,
+        undoSeconds: 10,
+      },
+    });
+    rerender(toast);
+    expect(screen.getByText(strings.composer.messageHeld)).toBeVisible();
     fireEvent.click(
       screen.getByRole("button", { name: strings.mail.undoSend }),
     );
     await vi.runAllTicks();
-    expect(useAppStore.getState().error).toBe("Error: restore failed");
-    fireEvent.click(
-      screen.getByRole("button", { name: strings.mail.viewOutbox }),
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().lastSent).toBeUndefined(),
     );
-    expect(useAppStore.getState().activeLocalView).toBe("outbox");
-    expect(useAppStore.getState().lastSent).toBeUndefined();
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
 
     useAppStore.setState({
       lastSent: {
@@ -290,16 +318,16 @@ describe("sent notice", () => {
         scheduled: false,
       },
     });
-    rerender(<SentNoticeToast />);
+    rerender(toast);
     fireEvent.click(
-      screen.getByRole("button", { name: strings.mail.dismissNotice }),
+      screen.getByRole("button", { name: strings.notices.dismiss }),
     );
     expect(useAppStore.getState().lastSent).toBeUndefined();
 
     useAppStore.setState({
       lastSent: { outboxId: "third", accountId: "account-1", scheduled: false },
     });
-    rerender(<SentNoticeToast />);
+    rerender(toast);
     vi.advanceTimersByTime(17_000);
     expect(useAppStore.getState().lastSent).toBeUndefined();
   });
@@ -327,7 +355,12 @@ describe("sent notice", () => {
         undoSeconds: 10,
       },
     });
-    render(<SentNoticeToast />);
+    render(
+      <>
+        <SentNoticeToast />
+        <NoticeRegion />
+      </>,
+    );
     fireEvent.click(
       screen.getByRole("button", { name: strings.mail.undoSend }),
     );

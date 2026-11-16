@@ -63,8 +63,10 @@ pub(crate) fn decode(name: &str) -> String {
                 output.push_str(&remaining[start..start + end + 2]);
             } else {
                 let units = bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_be_bytes(*pair))
                     .collect::<Vec<_>>();
                 if let Ok(decoded) = String::from_utf16(&units) {
                     output.push_str(&decoded);
@@ -77,4 +79,25 @@ pub(crate) fn decode(name: &str) -> String {
     }
     output.push_str(remaining);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+
+    #[test]
+    fn decodes_utf16_units_and_keeps_malformed_runs_raw() {
+        for (wire, expected) in [
+            ("INBOX", "INBOX"),
+            ("A&-B", "A&B"),
+            ("Entw&APw-rfe", "Entwürfe"),
+            ("&ZeVnLIqe-", "日本語"),
+            ("&2D3eAA-", "😀"),
+            // Odd byte count and a lone surrogate stay as sent.
+            ("&AA-", "&AA-"),
+            ("&2D0-", "&2D0-"),
+        ] {
+            assert_eq!(decode(wire), expected, "{wire}");
+        }
+    }
 }

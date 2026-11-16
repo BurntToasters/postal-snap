@@ -7,6 +7,7 @@ import {
 } from "../../settings";
 import { useAppStore } from "../../store";
 import type { AppSettings, SettingsPatch } from "../../types";
+import { errorText } from "../../errors";
 
 export interface SettingsSaveOptions {
   // Background writes (for example setup progress) fail silently unless a
@@ -20,7 +21,7 @@ export type SettingsSaveUpdate = (
   patch: SettingsPatch,
   confirmToken?: string,
   options?: SettingsSaveOptions,
-) => Promise<void>;
+) => Promise<boolean>;
 
 // One chain for the whole app: every caller's full-settings write runs in
 // order, so a later save always includes earlier ones.
@@ -56,6 +57,7 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
   const pendingConfirmToken = useRef<string | undefined>(undefined);
   const onErrorRef = useRef(onError);
   const pendingReportsError = useRef(false);
+  const pendingBatch = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     onErrorRef.current = onError;
@@ -67,7 +69,7 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
       patch: SettingsPatch,
       confirmToken?: string,
       options?: SettingsSaveOptions,
-    ) {
+    ): Promise<boolean> {
       pendingSettingsPatch.current = mergeSettingsPatches(
         pendingSettingsPatch.current,
         patch,
@@ -81,7 +83,9 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
       }
       if (confirmToken) pendingConfirmToken.current = confirmToken;
       if (!options?.quiet) pendingReportsError.current = true;
-      const queued = sharedSaveChain.then(async () => {
+      if (pendingBatch.current) return pendingBatch.current;
+      const queued = sharedSaveChain.then(async (): Promise<boolean> => {
+        pendingBatch.current = null;
         const merged = pendingSettingsPatch.current;
         const rollbackPatch = pendingRollbackPatch.current;
         const token = pendingConfirmToken.current;
@@ -90,7 +94,7 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
         pendingConfirmToken.current = undefined;
         const reportsError = pendingReportsError.current;
         pendingReportsError.current = false;
-        if (Object.keys(merged).length === 0 && !token) return;
+        if (Object.keys(merged).length === 0 && !token) return false;
         const previous = useAppStore.getState().settings;
         const next = applySettingsPatch(previous, merged);
         // Quiet background writes should not disable the caller's buttons.
@@ -103,6 +107,7 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
             : await api.saveSettings(next);
           setSettings(saved);
           applySettings(saved);
+          return true;
         } catch (cause) {
           const reverted = revertFields(
             useAppStore.getState().settings,
@@ -112,13 +117,16 @@ export function useSettingsSave(onError?: (cause: unknown) => void) {
           );
           setSettings(reverted);
           applySettings(reverted);
-          if (!reportsError) return;
-          if (onErrorRef.current) onErrorRef.current(cause);
-          else setError(String(cause));
+          if (reportsError) {
+            if (onErrorRef.current) onErrorRef.current(cause);
+            else setError(errorText(cause));
+          }
+          return false;
         } finally {
           if (reportsError) setSaving(false);
         }
       });
+      pendingBatch.current = queued;
       sharedSaveChain = queued.then(
         () => undefined,
         () => undefined,

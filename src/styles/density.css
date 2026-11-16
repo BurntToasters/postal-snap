@@ -1,4 +1,4 @@
-/* Compact density. Sizes come from the tokens in variables.css; this file
+/* Density layout overrides. Sizes come from variables.css tokens; this file
    holds only layout changes tokens cannot express. */
 :root[data-density="compact"] .message-row {
   grid-template-areas: "dot sender date" "dot subject subject";
@@ -6,7 +6,7 @@
 
 :root[data-density="compact"] .message-row .message-sender,
 :root[data-density="compact"] .message-row .message-subject {
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
   letter-spacing: 0;
 }
 
@@ -14,46 +14,42 @@
   display: none;
 }
 
-/* Title and count share one line, like Mail's compact list header. */
-:root[data-density="compact"] .pane-heading > span {
+/* Title and count share one line in normal and compact, like Mail's list header. */
+:root:not([data-density="comfortable"]) .pane-heading > span {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pane-heading-gap);
   min-width: 0;
 }
 
 :root[data-density="compact"] .pane-heading h1 {
-  font-size: 1.08rem;
-}
-
-:root[data-density="compact"] .message-header {
-  padding-block: 10px 8px;
+  font-size: var(--fs-lg);
 }
 
 :root[data-density="compact"] .folder-pane {
-  padding-block: 10px 8px;
+  padding-block: var(--folder-pane-pad-block);
 }
 
 :root[data-density="compact"] .folder-pane .folder svg {
-  width: 1rem;
-  height: 1rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 :root[data-density="compact"] .sidebar-section-title {
-  margin-block: 10px 3px;
+  margin-block: var(--sidebar-title-margin-block);
 }
 
 :root[data-density="compact"] .add-account-button {
-  margin-bottom: 4px;
+  margin-bottom: var(--add-account-margin-bottom);
 }
 
 :root[data-density="compact"] .account-heading {
-  padding-block: 2px;
+  padding-block: var(--account-heading-pad-block);
 }
 
 :root[data-density="compact"] .app-toolbar {
-  gap: 6px;
+  gap: var(--app-toolbar-gap);
 }
 
 :root[data-density="compact"] .search-box > input {
@@ -61,21 +57,41 @@
 }
 
 :root[data-density="compact"] .search-scope {
-  padding-block: 2px;
+  padding-block: var(--search-scope-pad-block);
 }
 
-:root[data-density="compact"] .reader-actions button {
-  padding-block: 3px;
+/* Normal and Compact: sender and subject share one line in the preview. */
+:root:not([data-density="comfortable"]) .setup-preview-row {
+  grid-auto-flow: column;
+  align-items: center;
+  justify-content: start;
+  column-gap: var(--space-2);
+}
+
+:root:not([data-density="comfortable"]) .setup-preview-row span {
+  min-width: 0;
 }
 
 :root[data-density="compact"] .setup-preview-row {
-  padding-block: 6px;
-}
-
-:root[data-density="compact"] .setup-preview-row span {
-  display: none;
+  padding-block: var(--setup-preview-pad-block);
 }
 
 :root[data-density="compact"] .setup-preview-row strong {
-  font-size: 0.86rem;
+  font-size: var(--fs-md);
+}
+
+/* Compact keeps its traditional smaller filter track. */
+:root[data-density="compact"] .mailbox-filter-segment {
+  min-height: var(--target-size-inset);
+}
+
+/* The day count stays in the day button's name; comfortable shows it too. */
+:root:not([data-density="comfortable"]) .list-day-count {
+  display: none;
+}
+
+/* Reply, Forward and Delete are primary controls: full target size outside Compact. */
+:root:not([data-density="compact"]) .reader-actions .reader-reply-action,
+:root:not([data-density="compact"]) .reader-actions .reader-icon-action {
+  min-height: var(--target-size);
 }

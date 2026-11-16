@@ -77,10 +77,10 @@ export function ReadingTab({ update }: ReadingTabProps) {
             }
           />
         </label>
-        <p className="settings-note">
-          <strong>{strings.settings.imageSenders}</strong>{" "}
-          {strings.settings.imageSendersHelp}
-        </p>
+        <div className="settings-note-row">
+          <strong>{strings.settings.imageSenders}</strong>
+          <small>{strings.settings.imageSendersHelp}</small>
+        </div>
         <SettingRow
           title={strings.settings.markRead}
           help={strings.settings.markReadHelp}

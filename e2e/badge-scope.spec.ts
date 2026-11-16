@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import type { TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. The default badge leaves other accounts and non-Inbox folders out.
@@ -13,6 +13,8 @@ import { installMockIpc } from "./mock-ipc";
 
 const variants = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },
@@ -109,7 +111,7 @@ test("a delayed count cannot restore a removed account badge", async ({
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page
     .locator(".account-settings-card")

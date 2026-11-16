@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 const focusable =
   'button, input, select, textarea, iframe, a[href], area[href], [tabindex], summary, [contenteditable]:not([contenteditable="false"]), audio[controls], video[controls]';
@@ -50,9 +50,10 @@ function isNaturallyTabbable(item: HTMLElement): boolean {
 
 export function useDialogFocus(
   onClose: () => void,
-  options?: { trapFocus?: boolean },
+  options?: { trapFocus?: boolean; ref?: RefObject<HTMLElement | null> },
 ) {
-  const ref = useRef<HTMLElement>(null);
+  const internalRef = useRef<HTMLElement>(null);
+  const ref = options?.ref ?? internalRef;
   const closeRef = useRef(onClose);
   const trapFocus = options?.trapFocus ?? true;
 
@@ -158,9 +159,19 @@ export function useDialogFocus(
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       if (trapFocus) dialog?.removeAttribute("data-dialog-focus-trap");
-      previous?.focus();
+      if (previous) {
+        if (!previous.closest("[inert]")) {
+          previous.focus();
+        } else {
+          window.queueMicrotask(() => {
+            if (document.contains(previous) && !previous.closest("[inert]")) {
+              previous.focus();
+            }
+          });
+        }
+      }
     };
-  }, [trapFocus]);
+  }, [ref, trapFocus]);
 
   return ref;
 }

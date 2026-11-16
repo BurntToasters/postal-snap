@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A message with no files has no reply-with-attachments action.
@@ -43,7 +47,9 @@ test("reply with attachments includes the file", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
+  await revealMenuItem(page, "Reply with attachments");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Reply with attachments");
   await page
     .getByRole("menuitem", { name: "Reply with attachments", exact: true })
     .click();

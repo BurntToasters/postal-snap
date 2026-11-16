@@ -468,6 +468,7 @@ mod tests {
         };
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
                 email: "fixture@example.test".into(),

@@ -7,7 +7,7 @@
   min-height: var(--toolbar-height);
   align-items: center;
   flex-wrap: nowrap;
-  gap: 8px;
+  gap: var(--space-2);
   padding: var(--toolbar-pad-block) var(--toolbar-pad-inline);
   /* A real bar (macOS 27): one solid material and a hairline, no glow. */
   border-bottom: 1px solid var(--border);
@@ -24,11 +24,11 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: var(--toolbar-cluster-gap);
 }
 
 .toolbar-flex-spacer {
-  min-width: 12px;
+  min-width: var(--toolbar-spacer-min);
   flex: 1 1 auto;
 }
 
@@ -48,6 +48,17 @@
   overflow: hidden;
 }
 
+/* At 200% text the Compose label only fits wide windows; the button keeps its name. */
+.app-toolbar {
+  container: toolbar / inline-size;
+}
+
+@container toolbar (max-width: 56rem) {
+  html[data-text-scale="large"] .app-toolbar .compose-button > span {
+    display: none;
+  }
+}
+
 /* Only search shrinks; clipping Compose or the badge corrupts the bar. */
 .toolbar-trailing > :not(.search-box) {
   flex-shrink: 0;
@@ -64,12 +75,19 @@
 .app-toolbar .toolbar-button:hover,
 .app-toolbar .icon-button:hover {
   border-color: transparent;
-  background: color-mix(in srgb, var(--surface-hover) 78%, transparent);
+  background: var(--fill-hover);
 }
 
+/* Compose is an accent pill with white text; no colored glow. */
 .app-toolbar .compose-button {
   border-radius: var(--radius-pill);
-  box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: none;
+}
+
+/* Programmatic or pointer focus skips :focus-visible; keep the ring visible. */
+.app-toolbar .compose-button:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .sidebar-toggle,
@@ -96,25 +114,24 @@
   display: flex;
   overflow: visible;
   min-width: var(--search-box-min-width);
-  max-width: 18.125rem;
+  max-width: var(--search-box-max-width);
   min-height: var(--target-size);
-  flex: 1 1 16.875rem;
+  flex: 1 1 var(--search-box-flex-basis);
   align-items: center;
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
 }
 
+/* Same 3px accent ring as other focus states. */
 .search-box:focus-within {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 62%, var(--border)),
-    0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 0.1875rem var(--focus);
 }
 
 .search-box > svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
-  margin-left: 11px;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  margin-left: var(--space-3);
   color: var(--text-muted);
 }
 
@@ -122,7 +139,8 @@
   min-width: 0;
   flex: 1 1 auto;
   min-height: var(--target-size);
-  padding-inline: 8px;
+  padding-block: 0;
+  padding-inline: var(--space-2);
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -135,38 +153,60 @@
   box-shadow: none;
 }
 
-.search-recent {
-  position: absolute;
-  z-index: 2;
-  top: calc(100% + 4px);
-  right: 0;
-  left: 0;
+@media (forced-colors: active) {
+  .search-box {
+    border: 1px solid CanvasText;
+  }
 }
 
+/* Portalled to body with inline top, left, and width (B1: clipped otherwise). */
+.search-recent {
+  position: fixed;
+  z-index: 60;
+}
+
+/* Trailing scope menu inside the capsule; the menu itself is portalled. */
 .search-scope {
   display: inline-flex;
   flex-shrink: 0;
   min-height: var(--target-size-inset);
   align-items: center;
-  margin-right: 3px;
-  padding: 4px 10px;
+  gap: var(--space-1);
+  margin-right: var(--space-1);
+  padding: var(--space-1) var(--space-2);
   white-space: nowrap;
   border: 0;
   border-radius: var(--radius-pill);
   color: var(--text-muted);
-  background: var(--surface-muted);
-  font-size: 0.76rem;
-  font-weight: 650;
+  background: transparent;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.search-scope svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  transition: transform 120ms ease;
 }
 
 .search-scope:hover,
-.search-scope[aria-pressed="true"] {
+.search-scope[aria-expanded="true"] {
   color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
+.search-scope[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-scope svg {
+    transition: none;
+  }
+}
+
 @media (forced-colors: active) {
-  .search-scope[aria-pressed="true"] {
+  .search-scope[aria-expanded="true"] {
     border: 2px solid Highlight;
   }
 }
@@ -174,14 +214,14 @@
 .update-ready-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--update-badge-gap);
   min-height: var(--target-size);
-  padding: 6px 16px;
+  padding: var(--update-badge-pad);
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent-ink);
-  font-size: 0.92rem;
+  font-size: var(--fs-ui);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -189,10 +229,6 @@
     background-color 0.15s ease,
     color 0.15s ease,
     transform 0.1s ease;
-}
-
-.update-ready-badge {
-  white-space: nowrap;
 }
 
 .update-ready-badge :is(.badge-label-short, .badge-label-tiny) {
@@ -215,7 +251,7 @@
 }
 
 .app-toolbar[data-fit3] .update-ready-badge {
-  padding-inline: 14px;
+  padding-inline: var(--update-badge-pad-fit3-inline);
 }
 
 .app-toolbar[data-fit4] .get-mail-button > span,
@@ -224,31 +260,27 @@
 }
 
 .update-ready-badge:hover {
-  background: var(--accent);
+  background: var(--accent-fill-hover);
   color: var(--accent-contrast);
 }
 
 .update-ready-badge .badge-dot {
-  width: 9px;
-  height: 9px;
+  width: 0.5625rem;
+  height: 0.5625rem;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent);
-  animation: pulse-badge 2.5s infinite;
+  box-shadow: 0 0 0 0.125rem color-mix(in srgb, var(--success) 25%, transparent);
+  /* Opacity only, and it stops after two passes. */
+  animation: pulse-badge 2.5s ease-in-out 2;
 }
 
 @keyframes pulse-badge {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 50%, transparent);
-  }
-  70% {
-    transform: scale(1.05);
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--success) 0%, transparent);
-  }
+  0%,
   100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 0%, transparent);
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -259,7 +291,6 @@
   min-height: 0;
 }
 
-.folder-pane,
 .message-pane,
 .reader-pane {
   overflow: auto;
@@ -269,11 +300,6 @@
 .message-list,
 .local-mail-list {
   scrollbar-gutter: stable;
-}
-
-.outbox-retry-all {
-  display: flex;
-  padding: var(--space-3) var(--list-text-inset);
 }
 
 .message-pane,

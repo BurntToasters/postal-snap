@@ -4,9 +4,11 @@ import { accountCannotSend } from "../accountStatus";
 import { holdBackgroundUpdate } from "../update";
 import { useAppStore } from "../store";
 import type { OutboxSummary, SyncState } from "../types";
+import { errorText } from "../errors";
 
 // Browsers overflow setTimeout delays above ~24.8 days, so re-check hourly.
 const MAX_TIMER_MS = 60 * 60 * 1000;
+const SCHEDULED_RETRY_COOLDOWN_MS = 30_000;
 
 export function useScheduledOutbox(
   activeAccountId: string | undefined,
@@ -16,6 +18,7 @@ export function useScheduledOutbox(
   setError: (error: string) => void,
 ) {
   const scheduledOutboxInFlight = useRef(new Set<string>());
+  const retryCooldownUntil = useRef(new Map<string, number>());
   // Bumped to re-arm a clamped timer without an IPC reload.
   const [scheduleTick, setScheduleTick] = useState(0);
   const [scheduledSendInFlight, setScheduledSendInFlight] = useState<
@@ -29,21 +32,46 @@ export function useScheduledOutbox(
     setScheduledSendInFlight((previous) => new Set(previous).add(key));
     // An update restart mid-send would leave the SMTP outcome uncertain.
     const releaseUpdateHold = holdBackgroundUpdate();
-    return api.sendScheduledOutbox(id, accountId).finally(() => {
-      releaseUpdateHold();
-      scheduledOutboxInFlight.current.delete(key);
-      setScheduledSendInFlight((previous) => {
-        if (!previous.has(key)) return previous;
-        const next = new Set(previous);
-        next.delete(key);
-        return next;
+    return api
+      .sendScheduledOutbox(id, accountId)
+      .then(
+        (outcome) => {
+          if (outcome.state === "scheduled") {
+            retryCooldownUntil.current.set(
+              key,
+              Date.now() + SCHEDULED_RETRY_COOLDOWN_MS,
+            );
+            setScheduleTick((tick) => tick + 1);
+          } else {
+            retryCooldownUntil.current.delete(key);
+          }
+          return outcome;
+        },
+        (cause) => {
+          retryCooldownUntil.current.set(
+            key,
+            Date.now() + SCHEDULED_RETRY_COOLDOWN_MS,
+          );
+          setScheduleTick((tick) => tick + 1);
+          throw cause;
+        },
+      )
+      .finally(() => {
+        releaseUpdateHold();
+        scheduledOutboxInFlight.current.delete(key);
+        setScheduledSendInFlight((previous) => {
+          if (!previous.has(key)) return previous;
+          const next = new Set(previous);
+          next.delete(key);
+          return next;
+        });
       });
-    });
   }, []);
 
   const sendScheduledNow = useCallback(
     async (id: string) => {
       if (!activeAccountId) return;
+      retryCooldownUntil.current.delete(`${activeAccountId}:${id}`);
       try {
         const request = beginScheduledSend(id, activeAccountId);
         if (!request) return;
@@ -53,7 +81,7 @@ export function useScheduledOutbox(
         }
         await loadAccountData();
       } catch (cause) {
-        setError(String(cause));
+        setError(errorText(cause));
         await loadAccountData();
       }
     },
@@ -66,6 +94,27 @@ export function useScheduledOutbox(
       (item) => item.id === activeAccountId,
     );
     if (accountCannotSend(account, sync)) return;
+    const now = Date.now();
+    const activeScheduledKeys = new Set(
+      outbox
+        .filter(
+          (item) =>
+            item.accountId === activeAccountId &&
+            item.state === "scheduled" &&
+            item.sendAt,
+        )
+        .map((item) => `${item.accountId}:${item.id}`),
+    );
+    for (const [key, until] of retryCooldownUntil.current) {
+      if (
+        until <= now ||
+        (activeAccountId &&
+          key.startsWith(`${activeAccountId}:`) &&
+          !activeScheduledKeys.has(key))
+      ) {
+        retryCooldownUntil.current.delete(key);
+      }
+    }
     const due = outbox
       .filter(
         (item) =>
@@ -73,7 +122,13 @@ export function useScheduledOutbox(
           item.state === "scheduled" &&
           item.sendAt,
       )
-      .map((item) => new Date(item.sendAt as string).getTime() - Date.now())
+      .map((item) => {
+        const sendMs = new Date(item.sendAt as string).getTime();
+        if (!Number.isFinite(sendMs)) return Number.NaN;
+        const cooldown =
+          retryCooldownUntil.current.get(`${item.accountId}:${item.id}`) ?? 0;
+        return Math.max(sendMs, cooldown) - now;
+      })
       .filter((ms) => Number.isFinite(ms));
     if (due.length === 0 || !activeAccountId) return;
     const wait = Math.min(...due);
@@ -83,7 +138,9 @@ export function useScheduledOutbox(
           item.accountId === activeAccountId &&
           item.state === "scheduled" &&
           item.sendAt &&
-          new Date(item.sendAt).getTime() <= Date.now(),
+          new Date(item.sendAt).getTime() <= now &&
+          (retryCooldownUntil.current.get(`${item.accountId}:${item.id}`) ??
+            0) <= now,
       );
       if (overdue && activeAccountId) {
         const id = overdue.id;
@@ -91,7 +148,7 @@ export function useScheduledOutbox(
         const request = beginScheduledSend(id, account);
         if (request)
           void request
-            .catch((cause) => setError(String(cause)))
+            .catch((cause) => setError(errorText(cause)))
             .finally(() => void loadAccountData());
       }
       return;
@@ -99,12 +156,15 @@ export function useScheduledOutbox(
     const timer = window.setTimeout(
       () => {
         const current = useAppStore.getState();
+        const firedAt = Date.now();
         const ready = current.outbox.find(
           (item) =>
             item.state === "scheduled" &&
             item.accountId === current.activeAccountId &&
             item.sendAt &&
-            new Date(item.sendAt).getTime() <= Date.now(),
+            new Date(item.sendAt).getTime() <= firedAt &&
+            (retryCooldownUntil.current.get(`${item.accountId}:${item.id}`) ??
+              0) <= firedAt,
         );
         const currentAccount = current.accounts.find(
           (item) => item.id === current.activeAccountId,
@@ -120,7 +180,7 @@ export function useScheduledOutbox(
           const request = beginScheduledSend(ready.id, current.activeAccountId);
           if (request)
             void request
-              .catch((cause) => setError(String(cause)))
+              .catch((cause) => setError(errorText(cause)))
               .finally(() => void loadAccountData());
         } else {
           const stillScheduled = current.outbox.some(
@@ -128,9 +188,9 @@ export function useScheduledOutbox(
               item.state === "scheduled" &&
               item.accountId === current.activeAccountId &&
               item.sendAt &&
-              new Date(item.sendAt).getTime() > Date.now(),
+              Number.isFinite(new Date(item.sendAt).getTime()),
           );
-          // The clamp period ended before the send time: re-arm only.
+          // The clamp or cooldown ended before send readiness: re-arm only.
           if (stillScheduled) setScheduleTick((tick) => tick + 1);
           else void loadAccountData();
         }
@@ -148,8 +208,15 @@ export function useScheduledOutbox(
     setError,
   ]);
 
+  const isScheduledSendInFlight = useCallback(
+    (id: string, accountId: string) =>
+      scheduledOutboxInFlight.current.has(`${accountId}:${id}`),
+    [],
+  );
+
   return {
     scheduledSendInFlight,
+    isScheduledSendInFlight,
     beginScheduledSend,
     sendScheduledNow,
   };

@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A chosen folder stays behind the other folders.
@@ -19,6 +22,7 @@ test("the last folder used for a move stays at the top", async ({ page }) => {
   await page.goto("/?manyFolders=1&threadGap=1");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
   const moveGroup = () => page.getByRole("group", { name: "Move to" });
   await expect(moveGroup().getByRole("menuitem").first()).toHaveAccessibleName(
     "Move to Receipts",
@@ -30,6 +34,7 @@ test("the last folder used for a move stays at the top", async ({ page }) => {
     page.getByRole("heading", { name: "Older family note" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
   await expect(moveGroup().getByRole("menuitem").first()).toHaveAccessibleName(
     "Move to School",
   );
@@ -50,6 +55,7 @@ test("a folder chosen last time is first in Move to", async ({ page }) => {
   await page.goto("/?manyFolders=1&threadGap=1&recentFolder=12");
   await page.getByRole("treeitem", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
   await expect(
     page.getByRole("group", { name: "Move to" }).getByRole("menuitem").first(),
   ).toHaveAccessibleName("Move to School");

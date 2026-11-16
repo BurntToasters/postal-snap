@@ -69,6 +69,7 @@ export function UpdatesTab({
             <SettingRow
               title={strings.settings.updateCheckInterval}
               help={strings.settings.updateCheckIntervalHelp}
+              helpMore={strings.settings.updateCheckIntervalHelpMore}
             >
               <select
                 aria-label={strings.settings.updateCheckInterval}

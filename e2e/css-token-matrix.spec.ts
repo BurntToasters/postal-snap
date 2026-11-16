@@ -1,10 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
-import { emitTauriEvent } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, emitTauriEvent } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, G9/F7):
 // 1. Avatar, provider, setup-preview, or composer controls overlap or clip.
@@ -15,6 +14,8 @@ import { installMockIpc } from "./mock-ipc";
 const combos = [
   { name: "comfortable-1x", density: "comfortable", scale: 1 },
   { name: "comfortable-2x", density: "comfortable", scale: 2 },
+  { name: "normal-1x", density: "normal", scale: 1 },
+  { name: "normal-2x", density: "normal", scale: 2 },
   { name: "compact-1x", density: "compact", scale: 1 },
   { name: "compact-2x", density: "compact", scale: 2 },
 ] as const;
@@ -271,21 +272,29 @@ test.describe("CSS density token matrix", () => {
         preview: { firstColumn: number };
         composer: { editorMinHeight: number };
       };
+      const normal = metrics[`normal-${scale}x`] as typeof comfortable;
       const compact = metrics[`compact-${scale}x`] as typeof comfortable;
-      expect(compact.avatars.account.width).toBeLessThan(
-        comfortable.avatars.account.width,
-      );
-      expect(compact.avatars.sender.width).toBeLessThan(
-        comfortable.avatars.sender.width,
-      );
-      expect(compact.provider.symbol).toBeLessThan(comfortable.provider.symbol);
-      expect(compact.provider.arrow).toBeLessThan(comfortable.provider.arrow);
-      expect(compact.preview.firstColumn).toBeLessThan(
-        comfortable.preview.firstColumn,
-      );
-      expect(compact.composer.editorMinHeight).toBeLessThan(
-        comfortable.composer.editorMinHeight,
-      );
+      // Ordering: normal <= comfortable at every scale; compact <= normal at 100% text only.
+      const chain = [
+        ["avatar account", (m: typeof comfortable) => m.avatars.account.width],
+        ["avatar sender", (m: typeof comfortable) => m.avatars.sender.width],
+        ["provider symbol", (m: typeof comfortable) => m.provider.symbol],
+        ["provider arrow", (m: typeof comfortable) => m.provider.arrow],
+        [
+          "preview first column",
+          (m: typeof comfortable) => m.preview.firstColumn,
+        ],
+        [
+          "composer editor min height",
+          (m: typeof comfortable) => m.composer.editorMinHeight,
+        ],
+      ] as const;
+      for (const [label, pick] of chain) {
+        if (scale === 1)
+          expect(pick(compact), label).toBeLessThanOrEqual(pick(normal));
+        expect(pick(normal), label).toBeLessThanOrEqual(pick(comfortable));
+        expect(pick(compact), label).toBeLessThan(pick(comfortable));
+      }
     }
 
     await writeFile(
@@ -745,5 +754,251 @@ test.describe("CSS density token matrix", () => {
       contentType: "image/png",
     });
     await attachArtifacts(page, testInfo, "avatar-forced-colors");
+  });
+  // Computed-style guards: contrast and token values, read from the browser.
+  for (const density of ["normal", "comfortable", "compact"] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      test(`computed guards: surfaces, pressed format toggle, popup rows (${density} ${theme})`, async ({
+        page,
+      }) => {
+        await installMockIpc(page);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto(`/?density=${density}&scale=1&theme=${theme}`);
+        await expect(page.locator(".message-row").first()).toBeVisible();
+        await page
+          .getByRole("button", { name: "Compose", exact: true })
+          .click();
+        const formatToggle = page
+          .locator(".composer-window footer .format-toggle")
+          .first();
+        await formatToggle.click();
+        await expect(
+          page.locator(
+            '.composer-window footer .format-toggle[aria-pressed="true"]',
+          ),
+        ).toBeVisible();
+
+        const snap = await page.evaluate(() => {
+          const probe = (value: string) => {
+            const el = document.createElement("div");
+            el.style.cssText = "position:absolute;visibility:hidden;height:0;";
+            el.style.width = value;
+            el.style.backgroundColor = value;
+            document.body.append(el);
+            const style = getComputedStyle(el);
+            const result = {
+              width: el.getBoundingClientRect().width,
+              color: style.backgroundColor,
+            };
+            el.remove();
+            return result;
+          };
+          const toggle = document.querySelector<HTMLElement>(
+            '.composer-window footer .format-toggle[aria-pressed="true"]',
+          );
+          const layers: string[] = [];
+          for (let node = toggle; node; node = node.parentElement) {
+            layers.push(getComputedStyle(node).backgroundColor);
+          }
+          return {
+            theme: document.documentElement.dataset.theme ?? "",
+            surfaceHover: probe("var(--surface-hover)").color,
+            surfaceRaised: probe("var(--surface-raised)").color,
+            menuRaw: getComputedStyle(document.documentElement)
+              .getPropertyValue("--menu-row-height")
+              .trim(),
+            menuPx: probe("var(--menu-row-height)").width,
+            rem: Number.parseFloat(
+              getComputedStyle(document.documentElement).fontSize,
+            ),
+            toggleText: toggle ? getComputedStyle(toggle).color : null,
+            toggleLayers: layers,
+          };
+        });
+
+        expect(snap.theme, "theme applied").toBe(theme);
+        expect(snap.toggleText, "pressed format toggle exists").not.toBeNull();
+        expect(snap.menuRaw, "menu row token").toBe("2.25rem");
+        expect(snap.menuPx).toBeCloseTo(2.25 * snap.rem, 0);
+
+        if (theme === "dark") {
+          const ratio = contrastRatio(
+            parseCssColor(snap.surfaceHover),
+            parseCssColor(snap.surfaceRaised),
+          );
+          expect(ratio, "dark hover vs raised surface").toBeGreaterThanOrEqual(
+            1.25,
+          );
+        }
+
+        // Translucent layers composite over the theme's opaque base, root first.
+        let background: Rgba =
+          theme === "dark" ? [22, 22, 24, 1] : [255, 255, 255, 1];
+        for (const layer of [...snap.toggleLayers].reverse()) {
+          const color = parseCssColor(layer);
+          if (color[3] > 0) background = over(color, background);
+        }
+        const text = over(
+          parseCssColor(snap.toggleText ?? "rgb(0, 0, 0)"),
+          background,
+        );
+        expect(
+          contrastRatio(text, background),
+          "pressed format toggle text on its background",
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+
+  test("target-size token: Comfortable 44px, Normal 36px, and Normal grows at 200%", async ({
+    page,
+  }) => {
+    await installMockIpc(page);
+    const sizes: Record<string, number> = {};
+    for (const [key, density, scale] of [
+      ["comfortable-1x", "comfortable", 1],
+      ["normal-1x", "normal", 1],
+      ["normal-2x", "normal", 2],
+    ] as const) {
+      await page.goto(`/?density=${density}&scale=${scale}`);
+      await expect(page.locator(".message-row").first()).toBeVisible();
+      sizes[key] = await page.evaluate(() => {
+        const el = document.createElement("div");
+        el.style.cssText = "position:absolute;visibility:hidden;height:0;";
+        el.style.width = "var(--target-size)";
+        document.body.append(el);
+        const width = el.getBoundingClientRect().width;
+        el.remove();
+        return width;
+      });
+    }
+    expect(
+      sizes["comfortable-1x"],
+      "Comfortable target",
+    ).toBeGreaterThanOrEqual(44);
+    expect(sizes["normal-1x"], "Normal target").toBeGreaterThanOrEqual(36);
+    expect(sizes["normal-2x"], "Normal target at 200%").toBeGreaterThan(
+      sizes["normal-1x"] ?? Infinity,
+    );
+  });
+});
+
+type Rgba = [number, number, number, number];
+
+// Accepts the rgb()/rgba() strings that getComputedStyle returns.
+function parseCssColor(value: string): Rgba {
+  const match = /^rgba?\((.+)\)$/.exec(value.trim());
+  if (!match) throw new Error(`unsupported computed color: ${value}`);
+  const [r = 0, g = 0, b = 0, a = 1] = (match[1] ?? "")
+    .replace("/", " ")
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map(Number);
+  return [r, g, b, a];
+}
+
+function over(top: Rgba, below: Rgba): Rgba {
+  const [r, g, b, a] = top;
+  const [br, bg, bb] = below;
+  return [r * a + br * (1 - a), g * a + bg * (1 - a), b * a + bb * (1 - a), 1];
+}
+
+function luminance([r, g, b]: Rgba) {
+  const lin = (channel: number) => {
+    const v = channel / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+function contrastRatio(a: Rgba, b: Rgba) {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+// Static guard (F-08): component CSS takes sizes from variables.css tokens.
+// Two-digit px always counts. Single-digit px counts only in layout
+// properties and custom size tokens; 0-2px stays for borders and hairlines.
+const STYLE_ROOT = join(process.cwd(), "src");
+const LAYOUT_PROPERTY =
+  /^(?:padding|margin|gap|row-gap|column-gap|width|height|min-width|min-height|max-width|max-height|top|right|bottom|left|inset|grid-template-columns|grid-template-rows|flex-basis|transform|grid-column|grid-row)(?:-|$)/;
+const SIZE_TOKEN =
+  /^--.*(?:gap|width|height|pad|margin|icon|size|min|max|inset|track|folder|local)/;
+const PX = /(?<![\w.])-?(\d+(?:\.\d+)?)px\b/g;
+// Exceptions need a file, property, value, and reason. Media and container
+// breakpoints are skipped by the scanner: custom properties cannot be used there.
+const ALLOWED_PX: Array<{
+  file: string;
+  property: string;
+  value: string;
+  reason: string;
+}> = [];
+
+async function componentStyleFiles() {
+  const dir = join(STYLE_ROOT, "styles");
+  const names = (await readdir(dir)).filter(
+    (name) => name.endsWith(".css") && name !== "variables.css",
+  );
+  return [
+    ...names.map((name) => join(dir, name)),
+    join(STYLE_ROOT, "root.css"),
+  ];
+}
+
+function stripNonDeclarations(css: string) {
+  const blank = (match: string) => match.replace(/[^\n]/g, " ");
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/@(?:media|container|import)[^{;]*[{;]/g, blank);
+}
+
+test.describe("component CSS keeps px sizes in tokens", () => {
+  test("no hard-coded px sizes outside variables.css", async () => {
+    const violations: string[] = [];
+    const scanned: string[] = [];
+    for (const file of await componentStyleFiles()) {
+      const source = stripNonDeclarations(await readFile(file, "utf8"));
+      const name = file.slice(file.lastIndexOf("/") + 1);
+      scanned.push(name);
+      for (const decl of source.matchAll(
+        /(--[\w-]+|[a-zA-Z-]+)\s*:\s*([^;{}]+)[;}]/g,
+      )) {
+        const [, property, value] = decl;
+        for (const hit of value.matchAll(PX)) {
+          const amount = Math.abs(Number(hit[1]));
+          const flagged =
+            amount >= 10 ||
+            (amount >= 3 &&
+              (LAYOUT_PROPERTY.test(property) || SIZE_TOKEN.test(property)));
+          if (!flagged) continue;
+          const allowed = ALLOWED_PX.some(
+            (entry) =>
+              entry.file === name &&
+              entry.property === property &&
+              entry.value === value.trim(),
+          );
+          if (allowed) continue;
+          const line = source.slice(0, decl.index).split("\n").length;
+          violations.push(
+            `${name}:${line} ${property}: ${value.trim().replace(/\s+/g, " ")}`,
+          );
+          break;
+        }
+      }
+    }
+    const artifactPath = join(
+      process.cwd(),
+      "artifacts",
+      "0.5.2",
+      "css-token-matrix",
+      "px-guard.json",
+    );
+    await mkdir(join(artifactPath, ".."), { recursive: true });
+    await writeFile(
+      artifactPath,
+      JSON.stringify({ scanned: scanned.sort(), violations }, null, 2),
+    );
+    expect(violations).toEqual([]);
   });
 });

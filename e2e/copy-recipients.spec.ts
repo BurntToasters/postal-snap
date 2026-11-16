@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Copy recipients writes the message body.
@@ -28,6 +32,7 @@ test("the open message can copy its recipients", async ({ page, context }) => {
   await page.goto("/?fromSelf=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Copy recipients");
   await page
     .getByRole("menuitem", { name: "Copy recipients", exact: true })
     .click();

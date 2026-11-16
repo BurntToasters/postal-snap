@@ -9,6 +9,7 @@ function differentLinkNote(differentAddress?: string): string {
 
 export const reader = {
   backToList: "Back to message list",
+  emptyTitle: "No message selected",
   closeMessage: "Close message",
   actions: "Message actions",
   previousMessage: "Previous message",
@@ -45,15 +46,15 @@ export const reader = {
   markRead: "Mark read",
   markConversationRead: "Mark conversation read",
   markConversationUnread: "Mark conversation unread",
-  removeStar: "Remove star",
-  addStar: "Add star",
+  removeStar: "Unflag",
+  addStar: "Flag",
   pin: "Pin",
   unpin: "Unpin",
   pinConversation: "Pin conversation",
   unpinConversation: "Unpin conversation",
   pinFailed: "That message could not be pinned.",
-  starConversation: "Star conversation",
-  unstarConversation: "Remove stars",
+  starConversation: "Flag conversation",
+  unstarConversation: "Unflag conversation",
   selectConversation: "Select conversation",
   selectFromSender: "Select messages from this sender",
   openEarlier: "Open earlier message",
@@ -61,8 +62,6 @@ export const reader = {
   newerInConversation: "Newer in conversation",
   unreadInConversation: "Unread in conversation",
   conversationMessages: "In this conversation",
-  conversationMessage: (subject: string, sender: string, when: string) =>
-    `${subject} from ${sender}, ${when}`,
   earlierMessageMissing: "That earlier message is not on this computer.",
   archive: "Archive",
   archiveConversation: "Archive conversation",
@@ -175,6 +174,18 @@ export const reader = {
   zoomIn: "Zoom in",
   zoomOut: "Zoom out",
   previewTitle: (filename: string) => `Preview of ${filename}`,
+  pdfPageAlt: (page: number, total: number) => `Page ${page} of ${total}`,
+  pagesTruncated:
+    "Only the first pages are shown. Save the file to see the rest.",
+  openEmlFile: "Open email file…",
+  openedFromFile: "Opened from a file. It is not in your mailbox.",
+  closeOpenedFile: "Close file",
+  openEmlFailed: "The email file could not be opened.",
+  openedMailtoNeedsAccount: "Add a mail account to write to this address.",
+  saveFile: "Save",
+  saveNamedFile: (name: string) => `Save ${name}`,
+  viewMessage: "View",
+  viewNamedMessage: (name: string) => `View ${name}`,
   downloadFile: "Download file",
   saveAllFiles: "Save all files",
   saveChosenFiles: (count: number) =>
@@ -252,7 +263,7 @@ export const reader = {
   inviteNoRsvp:
     "Postal Snap shows invitations but does not send replies. Answer from your calendar or by email.",
   blockedImages: (count: number) =>
-    `${count} remote image${count === 1 ? "" : "s"} blocked for privacy.`,
+    `${count} remote image${count === 1 ? "" : "s"} blocked`,
   blockedImagesDetail:
     "Known trackers stay blocked if you load them, but other pictures may tell the sender you opened this message.",
 } as const;

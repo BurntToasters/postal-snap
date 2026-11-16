@@ -14,8 +14,6 @@ import {
   collapseQuotedMail,
   countTextMatches,
   scrollRoom,
-  escapePrint,
-  htmlToPlainText,
   hydrateInlineImages,
   readableMessageText,
   recipientLines,
@@ -23,7 +21,7 @@ import {
   normalizeContentId,
   readReceiptState,
 } from "../components/reader/readerUtils";
-import { sanitizeReceivedHtml } from "../security";
+import { escapeHtml, htmlToPlainText, sanitizeReceivedHtml } from "../security";
 import { makeMailbox, makeMessage, messageDetail } from "./helpers/fixtures";
 
 afterEach(() => vi.restoreAllMocks());
@@ -409,7 +407,7 @@ describe("reader utilities", () => {
   });
 
   it("escapes headers, normalizes CIDs, and builds both print bodies", () => {
-    expect(escapePrint('<&">')).toBe("&lt;&amp;&quot;&gt;");
+    expect(escapeHtml('<&">')).toBe("&lt;&amp;&quot;&gt;");
     expect(normalizeContentId(" CID:<One> ")).toBe("One");
     const named = messageDetail(makeMessage(), {
       senderName: "Jane & Co",

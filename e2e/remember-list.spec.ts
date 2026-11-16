@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A saved oldest-first unread mailbox opens that way.
@@ -57,7 +61,9 @@ test("a saved mailbox order and filter open again and a change is stored", async
     })
     .toBe(true);
 
+  await revealMenuItem(page, "Date", "menuitemradio");
   await page.getByRole("button", { name: "More mailbox actions" }).click();
+  await revealMenuItem(page, "Date", "menuitemradio");
   await page.getByRole("menuitemradio", { name: "Date", exact: true }).click();
   await expect
     .poll(async () => {

@@ -3,7 +3,7 @@ export const palette = {
   openPalette: "Command palette",
   paletteTitle: "Command palette",
   inputLabel: "Search commands, folders, and accounts",
-  placeholder: "Type to search",
+  placeholder: "Search actions and mailboxes",
   keysHint: "Arrow keys move. Enter runs. Escape closes.",
   resultsLabel: "Results",
   actionsGroup: "Actions",

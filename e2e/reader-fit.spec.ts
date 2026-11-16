@@ -2,6 +2,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A fixed-width email wider than the reading pane scrolls sideways.
@@ -55,7 +58,7 @@ test("fits a fixed-width email to a narrow reading pane", async ({ page }) => {
   const fitted = await frameMetrics(page);
   results.narrowPane = fitted;
   expect(fitted.zoom).toBeLessThan(1);
-  expect(fitted.zoom).toBeGreaterThanOrEqual(0.6);
+  expect(fitted.zoom).toBeGreaterThanOrEqual(0.8);
   await page.screenshot({ path: "test-results/reader-fit.png" });
 
   // A wider window lets the email return to full size.
@@ -75,6 +78,6 @@ test("leaves an email that fits at full size", async ({ page }) => {
 test("stops shrinking at a readable size", async ({ page }) => {
   await page.setViewportSize({ width: 1242, height: 822 });
   await openMessage(page, "?wideHtml=3000");
-  await expect.poll(async () => (await frameMetrics(page)).zoom).toBe(0.6);
+  await expect.poll(async () => (await frameMetrics(page)).zoom).toBe(0.8);
   results.veryWide = await frameMetrics(page);
 });

@@ -52,6 +52,7 @@ export const setup = {
     "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
   providerPasswordWarning: (name: string) =>
     `${name} needs an app-specific password when a mail app connects.`,
+  unnamedProvider: "This provider",
   createAppPassword: "Create app-specific password",
   helpLinkDeclined: "Help page not opened.",
   helpLinkFailed:
@@ -126,18 +127,18 @@ export const setup = {
   welcomeIntro:
     "A calm email app with no tracking and no cloud. First choose how Postal Snap looks and feels, then add your email.",
   welcomeComfort:
-    "Comfortable is larger and easier to scan. You can change this later in Settings.",
+    "Normal is the default. Comfortable is larger and easier to read. You can change this later in Settings.",
   steps: "Setup steps",
   stepWelcome: "Welcome",
   stepAppearance: "Appearance",
-  stepComfort: "Comfort",
+  stepComfort: "Options",
   stepAccount: "Account",
   continue: "Continue",
   backToSetup: "Back to setup",
   appearanceTitle: "Choose how mail looks",
   appearanceIntro:
-    "Pick Auto to follow your system, or lock Light or Dark. Pick Comfortable for larger rows or Compact for a denser list. The whole window and the preview below update right away.",
-  comfortTitle: "Make it comfortable",
+    "Pick Auto to follow your system, or lock Light or Dark. Pick Normal for most screens, Comfortable for larger controls, or Compact for a denser list. The whole window and the preview below update right away.",
+  comfortTitle: "Choose your options",
   comfortIntro:
     "These stay in Settings too. Reported-threat checks stay on for safety and are changed only in Advanced.",
   accountTitle: "Add your email",
@@ -146,7 +147,7 @@ export const setup = {
   settingsRestored:
     "Damaged settings were restored to safe defaults. Review the choices below, then continue.",
   previewInbox: "Inbox preview",
-  previewSubject: "Subject line stays readable",
+  previewSubject: "Lunch on Friday?",
   previewSender: "Sam Rivera",
   previewLive:
     "Live preview. It follows your theme, spacing, text size, and reading pane.",

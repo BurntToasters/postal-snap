@@ -2,8 +2,14 @@ import { PostalError } from "../../errors";
 import type { MessageSummary } from "../../types";
 
 export function isOversizeError(cause: unknown): boolean {
-  if (cause instanceof PostalError) return cause.code === "limitExceeded";
-  return /too large|exceeds.*safety limit/i.test(String(cause));
+  if (cause instanceof PostalError) {
+    return (
+      cause.code === "limitExceeded" ||
+      /too large|exceeds.*safety limit/i.test(cause.message)
+    );
+  }
+  const raw = cause instanceof Error ? cause.message : "";
+  return /too large|exceeds.*safety limit/i.test(raw);
 }
 
 export function mergeSearchResults(

@@ -1,5 +1,6 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import { api } from "../../api";
 import {
   folderMoveDestinations,
@@ -7,89 +8,79 @@ import {
 } from "../../folderMove";
 import { folderPathLabel } from "../../i18n/mail";
 import { strings } from "../../i18n";
-import { useAppStore } from "../../store";
+import { DEFAULT_NOTICE_TIMEOUT_MS, type NoticeAction } from "../../notices";
+import { useAppStore, type SentNotice } from "../../store";
 import type { ComposeDraft, MailboxSummary } from "../../types";
 import { SetupWizard } from "../SetupWizard";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
+const SENT_NOTICE_ID = "sent-notice";
+
+/** Mirrors `lastSent` into the notice queue; the sent notice shares the stack with Undo. */
 export function SentNoticeToast() {
   const lastSent = useAppStore((state) => state.lastSent);
-  const setLastSent = useAppStore((state) => state.setLastSent);
-  const openComposer = useAppStore((state) => state.openComposer);
-  const selectAccount = useAppStore((state) => state.selectAccount);
-  const selectLocalView = useAppStore((state) => state.selectLocalView);
-  const setError = useAppStore((state) => state.setError);
-  const [expiredNoticeId, setExpiredNoticeId] = useState<string>();
 
   useEffect(() => {
     if (!lastSent) return;
+    const notice = lastSent;
     const holdMs =
-      !lastSent.scheduled && lastSent.undoSeconds !== undefined
-        ? lastSent.undoSeconds * 1000
+      !notice.scheduled && notice.undoSeconds !== undefined
+        ? notice.undoSeconds * 1000
         : undefined;
-    const undoTimer =
-      holdMs === undefined
-        ? undefined
-        : window.setTimeout(
-            () => setExpiredNoticeId(lastSent.outboxId),
-            holdMs,
-          );
-    const timer = window.setTimeout(
-      () => setLastSent(undefined),
-      (holdMs ?? 15_000) + 2_000,
-    );
-    return () => {
-      window.clearTimeout(timer);
-      if (undoTimer !== undefined) window.clearTimeout(undoTimer);
-    };
-  }, [lastSent, setLastSent]);
+    const undo = holdMs === undefined ? [] : [undoAction(notice)];
+    useAppStore.getState().pushNotice({
+      id: SENT_NOTICE_ID,
+      severity: "success",
+      className: "sent-toast",
+      message: notice.scheduled
+        ? strings.mail.messageScheduled
+        : strings.composer.messageHeld,
+      timeoutMs: holdMs ?? DEFAULT_NOTICE_TIMEOUT_MS,
+      // The Undo window is the longest this notice may stay visible.
+      maxVisibleMs: holdMs,
+      actions: [
+        ...undo,
+        {
+          id: "view-outbox",
+          label: strings.mail.viewOutbox,
+          run: () => {
+            const store = useAppStore.getState();
+            store.selectAccount(notice.accountId);
+            store.selectLocalView("outbox");
+          },
+        },
+      ],
+      onEnd: () => {
+        const store = useAppStore.getState();
+        if (store.lastSent === notice) store.setLastSent(undefined);
+      },
+    });
+  }, [lastSent]);
 
-  if (!lastSent) return null;
-  const notice = lastSent;
+  return null;
+}
 
-  async function undoLastSent() {
-    try {
-      // Restoring also cancels a queued Send and archive in Rust.
-      const draft = await api.restoreOutbox(notice.outboxId, notice.accountId);
-      setLastSent(undefined);
-      openComposer({ draft });
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  return (
-    <div className="toast sent-toast" role="status">
-      <span>
-        {notice.scheduled
-          ? strings.mail.messageScheduled
-          : strings.composer.messageHeld}
-      </span>
-      {notice.outboxId !== expiredNoticeId ? (
-        <button type="button" onClick={() => void undoLastSent()}>
-          {strings.mail.undoSend}
-        </button>
-      ) : null}
-      <button
-        type="button"
-        onClick={() => {
-          setLastSent(undefined);
-          selectAccount(notice.accountId);
-          selectLocalView("outbox");
-        }}
-      >
-        {strings.mail.viewOutbox}
-      </button>
-      <button
-        type="button"
-        onClick={() => setLastSent(undefined)}
-        aria-label={strings.mail.dismissNotice}
-      >
-        ×
-      </button>
-    </div>
-  );
+function undoAction(notice: SentNotice): NoticeAction {
+  return {
+    id: "undo-send",
+    label: strings.mail.undoSend,
+    run: async () => {
+      const store = useAppStore.getState();
+      try {
+        // Restoring also cancels a queued Send and archive in Rust.
+        const draft = await api.restoreOutbox(
+          notice.outboxId,
+          notice.accountId,
+        );
+        store.setLastSent(undefined);
+        store.openComposer({ draft });
+      } catch (cause) {
+        store.setError(errorText(cause));
+      }
+    },
+  };
 }
 
 export function MoveFolderDialog({
@@ -105,8 +96,9 @@ export function MoveFolderDialog({
   onMove: (parentId: number | null) => void;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const titleId = useId();
   const destinations: FolderMoveDestination[] = folderMoveDestinations(
     mailbox,
@@ -174,8 +166,9 @@ export function OutboxPreviewDialog({
   draft: ComposeDraft;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const title = draft.subject.trim() || strings.common.noSubject;
   const body = outboxPlainText(draft);
   const lines = [
@@ -209,7 +202,7 @@ export function OutboxPreviewDialog({
             aria-label={strings.common.close}
             title={strings.common.close}
           >
-            {strings.common.close}
+            <X aria-hidden="true" />
           </button>
         </header>
         <div className="original-body">
@@ -238,8 +231,9 @@ export function AddAccountDialog({
   onClose: () => void;
   onComplete: () => Promise<void>;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   return createPortal(
     <div className="modal-layer setup-modal">
       <button

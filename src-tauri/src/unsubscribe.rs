@@ -51,7 +51,7 @@ where
         .filter(|host| !host.is_empty())
         .ok_or_else(|| REFUSED.to_string())?
         .to_string();
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+    if crate::security::is_localhost_host(&host) {
         return Err(REFUSED.into());
     }
     if url.port_or_known_default() != Some(443) {
@@ -305,5 +305,16 @@ mod tests {
         server.await.unwrap();
         assert!(!error.contains("127.0.0.1") && !error.contains("unsub.example"));
         let _ = Ipv4Addr::LOCALHOST;
+    }
+
+    #[tokio::test]
+    async fn trailing_dot_localhost_is_blocked_before_dns() {
+        for raw in ["https://localhost./u", "https://sub.localhost./u"] {
+            assert!(validate_target_with_resolver(raw, false, |_, _| async {
+                panic!("Trailing-dot localhost must never resolve DNS")
+            })
+            .await
+            .is_err());
+        }
     }
 }

@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A single message has no conversation move into a chosen folder.
@@ -36,6 +40,7 @@ test("move conversation files the loaded thread and opens the next message", asy
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Move conversation to Projects");
   await page
     .getByRole("menuitem", {
       name: "Move conversation to Projects",

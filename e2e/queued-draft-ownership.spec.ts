@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // The native SQLite regressions prove ownership. This browser flow proves the
 // scheduled-send and Undo/Edit path still uses the restored draft returned by IPC.

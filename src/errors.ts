@@ -51,12 +51,17 @@ export class PostalError extends Error {
 
 export function normalizeIpcError(cause: unknown): PostalError {
   if (isPayload(cause)) return new PostalError(cause);
-  const message = typeof cause === "string" ? cause : "";
+  // Plain Errors and strings may carry paths or raw server text; never show them.
   return new PostalError({
     code: "operationFailed",
-    message: message || strings.errors.operationFailed,
+    message: "",
     retryable: true,
   });
+}
+
+/** The only text a UI error display may show for a thrown value. */
+export function errorText(cause: unknown): string {
+  return normalizeIpcError(cause).message;
 }
 
 export function describeSetupError(

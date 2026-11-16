@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A collapsed conversation hides marks that belong only to an older message.
@@ -19,7 +22,7 @@ test("a collapsed conversation shows marks from any loaded message", async ({
 }) => {
   await page.goto("/?threadGap=1&threadMarks=1");
   const header = page.getByRole("treeitem", {
-    name: /Conversation, Jane, jane@example\.com, Weekend plans/i,
+    name: /Conversation, Jane, .*Weekend plans/i,
   });
   await expect(header).toBeVisible();
   await expect(header).toHaveAttribute(

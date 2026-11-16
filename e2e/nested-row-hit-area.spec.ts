@@ -1,13 +1,18 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
 for (const [label, query] of [
-  ["comfortable 100%", ""],
+  ["comfortable 100%", "&density=comfortable"],
+  ["normal 100%", "&density=normal"],
   ["compact 100%", "&density=compact"],
-  ["comfortable 200%", "&scale=2"],
+  ["comfortable 200%", "&density=comfortable&scale=2"],
+  ["normal 200%", "&density=normal&scale=2"],
   ["compact 200%", "&density=compact&scale=2"],
 ] as const) {
   test(`a nested row opens from its center with hover actions visible (${label})`, async ({

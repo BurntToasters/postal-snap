@@ -81,8 +81,21 @@ compile_error!("one of 'runtime-async-std' or 'runtime-tokio' features must be e
 
 #[cfg(all(feature = "runtime-tokio", feature = "runtime-async-std"))]
 compile_error!("only one of 'runtime-async-std' or 'runtime-tokio' features must be enabled");
-#[macro_use]
-extern crate pin_utils;
+
+// Local copy of pin-utils `unsafe_pinned!` (RUSTSEC-2026-0441 drops the crate).
+// Same projection as upstream; the only unsafe code allowed in this crate.
+macro_rules! unsafe_pinned {
+    ($(#[$attrs:meta])* $v:vis $field:ident: $ty:ty) => {
+        $(#[$attrs])*
+        #[allow(unsafe_code)]
+        $v fn $field<'__pin>(
+            self: ::core::pin::Pin<&'__pin mut Self>,
+        ) -> ::core::pin::Pin<&'__pin mut $ty> {
+            // SAFETY: the field is only projected, never moved out of `Self`.
+            unsafe { ::core::pin::Pin::map_unchecked_mut(self, |x| &mut x.$field) }
+        }
+    };
+}
 
 // Reexport imap_proto for easier access.
 pub use imap_proto;

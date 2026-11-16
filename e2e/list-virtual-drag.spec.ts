@@ -1,7 +1,7 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, section F):
 // F4  The dragged row unmounts mid-drag, so the drop is lost.
@@ -62,6 +62,61 @@ test("a row far from the top drops onto a folder", async ({ page }) => {
     messageId: id,
     destinationMailboxId: 2,
   });
+});
+
+test("a drag from the list opens the drawer at the left edge and drops on a folder", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 620, height: 720 });
+  await page.goto("/?threadGap=1");
+  const source = page.getByRole("treeitem", { name: /Weekend plans/i });
+  await expect(source).toBeVisible();
+  const from = await source.boundingBox();
+  if (!from) throw new Error("Drag source geometry is missing.");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 12, from.y + from.height / 2, { steps: 4 });
+  await page.mouse.move(4, from.y + from.height / 2, { steps: 8 });
+  await expect(page.locator(".mail-shell")).toHaveClass(/sidebar-open/);
+  // The drawer slides in over 150 ms; measure only once it has settled.
+  const archive = page
+    .locator(".folder-pane")
+    .getByRole("button", { name: "Archive" });
+  await page
+    .locator(".folder-pane")
+    .evaluate((node) =>
+      Promise.all(node.getAnimations().map((animation) => animation.finished)),
+    );
+  const folder = await archive.boundingBox();
+  if (!folder) throw new Error("Folder geometry is missing.");
+  await page.mouse.move(
+    folder.x + folder.width / 2,
+    folder.y + folder.height / 2,
+    {
+      steps: 8,
+    },
+  );
+  await page.mouse.move(
+    folder.x + folder.width / 2 + 1,
+    folder.y + folder.height / 2,
+  );
+  await expect(archive).toHaveClass(/drop-target/);
+  await page.mouse.up();
+
+  await expect(page.locator(".mail-shell")).not.toHaveClass(/sidebar-open/);
+  await expect
+    .poll(
+      async () =>
+        (
+          await page.evaluate(() =>
+            (window.__POSTAL_SNAP_TEST__?.ipcCalls ?? []).filter(
+              (call) => call.command === "move_messages_to_mailbox",
+            ),
+          )
+        ).length,
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThan(0);
 });
 
 test("the dragged row survives a scroll during the drag", async ({ page }) => {

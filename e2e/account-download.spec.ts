@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Changing how long one account keeps mail snaps back to 90 days.
@@ -21,7 +24,7 @@ test("one account can keep mail for a different length of time", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   const days = page.getByRole("combobox", { name: "Keep mail for" });
   await expect(days).toHaveValue("90");
   await days.selectOption("30");

@@ -7,11 +7,21 @@ import { htmlToPlainText } from "../../security";
 import { useAppStore } from "../../store";
 import { preparePassword } from "../setup/request";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
+import { forgetAccountSessions } from "../../accountSessions";
+import { errorText } from "../../errors";
 
 interface Options {
   onClose: () => void;
   onLastAccountRemoved?: () => void;
+  onAccountRemoved?: (accountId: string) => void;
   update: SettingsSaveUpdate;
+}
+
+function withoutAccount<T>(record: Record<string, T>, accountId: string) {
+  if (!(accountId in record)) return record;
+  const next = { ...record };
+  delete next[accountId];
+  return next;
 }
 
 const aliasMutationQueues = new Map<string, Promise<void>>();
@@ -37,6 +47,7 @@ function serializeAliasMutation<T>(
 export function useSettingsAccountManagement({
   onClose,
   onLastAccountRemoved,
+  onAccountRemoved,
   update,
 }: Options) {
   const accounts = useAppStore((state) => state.accounts);
@@ -128,6 +139,7 @@ export function useSettingsAccountManagement({
       );
       if (!confirmed) return;
       const result = await api.removeAccount(id);
+      forgetAccountSessions(id);
       // Rust prunes these too, but a later full save from this copy would
       // write them back, so drop them here through the same save queue.
       const latest = useAppStore.getState().settings;
@@ -151,6 +163,13 @@ export function useSettingsAccountManagement({
       }
       const remaining = await api.listAccounts();
       setAccounts(remaining);
+      setNameInputs((prev) => withoutAccount(prev, id));
+      setReplyToInputs((prev) => withoutAccount(prev, id));
+      setSignatureInputs((prev) => withoutAccount(prev, id));
+      setSignatureHtmlInputs((prev) => withoutAccount(prev, id));
+      setNewAliasInputs((prev) => withoutAccount(prev, id));
+      setPasswordInputs((prev) => withoutAccount(prev, id));
+      onAccountRemoved?.(id);
       if (result?.cleanupPending) {
         setError(strings.settings.accountCleanupWarning);
       } else if (result?.diskSpacePending) {
@@ -161,7 +180,7 @@ export function useSettingsAccountManagement({
         onClose();
       }
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -173,7 +192,7 @@ export function useSettingsAccountManagement({
       await api.testSavedAccount(id);
       setTestedHealthy(id);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setTestingAccountId(undefined);
     }
@@ -193,7 +212,7 @@ export function useSettingsAccountManagement({
         }));
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDetectingAliasesAccountId(undefined);
     }
@@ -241,7 +260,7 @@ export function useSettingsAccountManagement({
         }));
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -267,7 +286,7 @@ export function useSettingsAccountManagement({
         mergeAccountFields(accountId, { aliases: updated.aliases });
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -293,7 +312,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.passwordUpdated,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setUpdatingPasswordId(undefined);
     }
@@ -322,7 +341,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.accountNameSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingNameId(undefined);
     }
@@ -354,7 +373,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.replyToAddressSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingReplyToId(undefined);
     }
@@ -399,7 +418,7 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.signatureSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setSavingSignatureId(undefined);
     }

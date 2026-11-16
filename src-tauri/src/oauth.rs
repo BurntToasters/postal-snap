@@ -22,7 +22,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::models::{AccountRecord, ProviderKind, TlsMode};
 
@@ -189,22 +189,24 @@ pub fn parse_oauth_provider(value: &str) -> Result<OAuthProvider, String> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
+    #[zeroize(skip)]
     pub expires_in: Option<u64>,
     pub token_type: Option<String>,
     #[serde(default)]
     pub id_token: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct StoredOAuthTokens {
     pub provider: String,
     pub refresh_token: String,
     pub access_token: Option<String>,
     /// Unix seconds when `access_token` expires, if known.
+    #[zeroize(skip)]
     pub access_expires_at: Option<u64>,
 }
 
@@ -347,8 +349,46 @@ pub fn remove_tokens(account_id: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
+fn test_secret_map() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    static SECRETS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    SECRETS.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+pub(crate) struct TestSecretGuard(String);
+
+#[cfg(test)]
+impl TestSecretGuard {
+    pub(crate) fn install(account_id: &str, secret: &str) -> Self {
+        test_secret_map()
+            .lock()
+            .unwrap()
+            .insert(account_id.to_string(), secret.to_string());
+        Self(account_id.to_string())
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestSecretGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = test_secret_map().lock() {
+            map.remove(&self.0);
+        }
+    }
+}
+
 /// Password vault for password accounts, refreshed access token for OAuth.
 pub async fn session_secret(account: &AccountRecord) -> Result<Zeroizing<String>, String> {
+    #[cfg(test)]
+    if let Some(secret) = test_secret_map()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&account.summary.id).cloned())
+    {
+        return Ok(Zeroizing::new(secret));
+    }
     if account.summary.auth_method == "oauth" {
         fresh_access_token(&account.summary.id).await
     } else {
@@ -397,10 +437,14 @@ pub async fn fresh_access_token(account_id: &str) -> Result<Zeroizing<String>, S
     }
     let provider = parse_oauth_provider(&stored.provider)?;
     let client_id = configured_client_id(provider)?;
-    let refreshed = refresh_access_token(provider, &client_id, &stored.refresh_token).await?;
-    let access = Zeroizing::new(refreshed.access_token);
-    if let Some(refresh) = refreshed.refresh_token {
+    let mut refreshed = refresh_access_token(provider, &client_id, &stored.refresh_token).await?;
+    let access = Zeroizing::new(std::mem::take(&mut refreshed.access_token));
+    if let Some(refresh) = refreshed.refresh_token.take() {
+        stored.refresh_token.zeroize();
         stored.refresh_token = refresh;
+    }
+    if let Some(mut old_access) = stored.access_token.take() {
+        old_access.zeroize();
     }
     stored.access_token = Some(access.to_string());
     stored.access_expires_at = expiry_unix(refreshed.expires_in);
@@ -526,10 +570,12 @@ pub async fn finish_sign_in(pending: PendingSignIn) -> Result<SignedInAccount, S
     } = pending;
     let code = accept_authorization_code(listener, &state).await?;
     let mut response = exchange_code(provider, &client_id, &code, &verifier, &redirect_uri).await?;
-    let id_token = response
-        .id_token
-        .take()
-        .ok_or_else(|| "The sign-in service did not share an email address.".to_string())?;
+    let id_token = Zeroizing::new(
+        response
+            .id_token
+            .take()
+            .ok_or_else(|| "The sign-in service did not share an email address.".to_string())?,
+    );
     let (email, display_name) = identity_from_id_token(&id_token)?;
     let (tokens, access_token) = tokens_from_response(provider, response)?;
     Ok(SignedInAccount {
@@ -860,15 +906,11 @@ mod tests {
             access_expires_at: Some(9_999_999_999),
         };
         assert!(fresh.access_valid_now());
-        let stale = StoredOAuthTokens {
-            access_expires_at: Some(1),
-            ..fresh.clone()
-        };
+        let mut stale = fresh.clone();
+        stale.access_expires_at = Some(1);
         assert!(!stale.access_valid_now());
-        let unknown = StoredOAuthTokens {
-            access_expires_at: None,
-            ..fresh
-        };
+        let mut unknown = fresh;
+        unknown.access_expires_at = None;
         assert!(!unknown.access_valid_now());
     }
 
@@ -1038,5 +1080,32 @@ mod tests {
         let token = format!("aaa.{fallback}.sig");
         let (email, _) = identity_from_id_token(&token).unwrap();
         assert_eq!(email, "sam@contoso.com");
+    }
+
+    #[test]
+    fn oauth_token_types_zeroize_secret_fields() {
+        let mut response = TokenResponse {
+            access_token: "access-secret".into(),
+            refresh_token: Some("refresh-secret".into()),
+            expires_in: Some(3600),
+            token_type: Some("Bearer".into()),
+            id_token: Some("id-secret".into()),
+        };
+        response.zeroize();
+        assert!(response.access_token.is_empty());
+        assert!(response.refresh_token.as_deref().is_none_or(str::is_empty));
+        assert!(response.id_token.as_deref().is_none_or(str::is_empty));
+        assert!(std::mem::needs_drop::<TokenResponse>());
+
+        let mut stored = StoredOAuthTokens {
+            provider: "gmail".into(),
+            refresh_token: "refresh-secret".into(),
+            access_token: Some("access-secret".into()),
+            access_expires_at: Some(9_999_999_999),
+        };
+        stored.zeroize();
+        assert!(stored.refresh_token.is_empty());
+        assert!(stored.access_token.as_deref().is_none_or(str::is_empty));
+        assert!(std::mem::needs_drop::<StoredOAuthTokens>());
     }
 }

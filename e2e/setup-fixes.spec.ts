@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Accounts exist but setupCompleted is false: user is sent back into setup.
@@ -107,7 +110,7 @@ test("keeps quiet when only the saved setup step fails", async ({ page }) => {
   ).toBeVisible();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Make it comfortable" }),
+    page.getByRole("heading", { name: "Choose your options" }),
   ).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 
@@ -280,7 +283,7 @@ test("claims setup after removing last account before a new connect", async ({
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   page.once("dialog", async (dialog) => dialog.accept());
   await page
     .locator(".account-settings-card")

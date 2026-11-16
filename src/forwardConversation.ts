@@ -5,6 +5,7 @@ import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 /**
  * Opens a forward that quotes every loaded message in this mailbox
@@ -55,7 +56,7 @@ export async function forwardLoadedConversation(
   } catch (cause) {
     const current = useAppStore.getState();
     if (current.activeAccountId !== summary.accountId) return;
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }
 
@@ -122,6 +123,6 @@ export async function forwardSelectedMessages(
   } catch (cause) {
     const current = useAppStore.getState();
     if (current.activeAccountId !== accountId) return;
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }

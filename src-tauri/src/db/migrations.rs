@@ -45,6 +45,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (40, step_v40),
     (41, step_v41),
     (42, step_v42),
+    (43, step_v43),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -979,6 +980,90 @@ fn step_v42(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v43(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    for (table, column, sql) in [
+        (
+            "messages",
+            "flag_color",
+            "ALTER TABLE messages ADD COLUMN flag_color INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "mailboxes",
+            "allows_keywords",
+            "ALTER TABLE mailboxes ADD COLUMN allows_keywords INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "accounts",
+            "notify_new_mail",
+            "ALTER TABLE accounts ADD COLUMN notify_new_mail INTEGER NOT NULL DEFAULT 1",
+        ),
+        (
+            "filter_rules",
+            "match_mode",
+            "ALTER TABLE filter_rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'all'",
+        ),
+        (
+            "filter_rules",
+            "conditions_json",
+            "ALTER TABLE filter_rules ADD COLUMN conditions_json TEXT NOT NULL DEFAULT '[]'",
+        ),
+        (
+            "filter_rules",
+            "actions_json",
+            "ALTER TABLE filter_rules ADD COLUMN actions_json TEXT NOT NULL DEFAULT '[]'",
+        ),
+    ] {
+        ensure_column(transaction, table, column, sql)?;
+    }
+    backfill_filter_rule_json(transaction)?;
+    transaction
+        .pragma_update(None, "user_version", 43)
+        .map_err(db_error)?;
+    Ok(())
+}
+
+/// Rules saved before v43 carry one condition and one action in legacy columns.
+/// The JSON shape matches the camelCase DTOs in `models/dto.rs`.
+fn backfill_filter_rule_json(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id,field,contains,action,target_mailbox FROM filter_rules
+                 WHERE conditions_json='[]' AND actions_json='[]'",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, field, contains, action, target) in rows {
+        let conditions = serde_json::json!([{ "field": field, "value": contains }]);
+        let actions = serde_json::json!([{
+            "kind": action,
+            "targetMailbox": target,
+            "flagColor": null
+        }]);
+        transaction
+            .execute(
+                "UPDATE filter_rules SET conditions_json=?2,actions_json=?3 WHERE id=?1",
+                rusqlite::params![id, conditions.to_string(), actions.to_string()],
+            )
+            .map_err(db_error)?;
+    }
+    Ok(())
+}
+
 /// Schema v23: convert cached IMAP4rev1 mailbox names from modified UTF-7.
 fn migrate_v23_mailbox_names(transaction: &rusqlite::Transaction) -> Result<(), String> {
     let rows = {
@@ -1354,7 +1439,7 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 42);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         assert!(conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pending_snooze_transfers'",
@@ -1409,5 +1494,80 @@ mod tests {
             )
             .unwrap();
         assert_eq!((count, state.as_str()), (1, "queued"));
+    }
+
+    #[test]
+    fn v43_backfills_legacy_rules_into_json_columns_and_defaults_flags() {
+        // Ways this can fail: a legacy rule loses its condition or action, a
+        // mark_read rule gains a target, JSON keys drift from the camelCase
+        // DTO names, or existing rows get non-default flag, keyword, or
+        // notification values.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            // Rebuild the v42 shape: no new columns, two legacy rules.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     ALTER TABLE messages DROP COLUMN flag_color;
+                     ALTER TABLE mailboxes DROP COLUMN allows_keywords;
+                     ALTER TABLE accounts DROP COLUMN notify_new_mail;
+                     ALTER TABLE filter_rules DROP COLUMN match_mode;
+                     ALTER TABLE filter_rules DROP COLUMN conditions_json;
+                     ALTER TABLE filter_rules DROP COLUMN actions_json;
+                     INSERT INTO accounts(id,provider,email,display_name,imap_host,imap_port,imap_tls,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username)
+                       VALUES('a1','manual','a@example.test','A','imap.example.test',993,'tls','a','smtp.example.test',465,'tls','a');
+                     INSERT INTO filter_rules(id,account_id,name,field,contains,action,target_mailbox,enabled,position) VALUES
+                       ('r1','a1','Invoices','subject','invoice','move_mailbox','7',1,0),
+                       ('r2','a1','Read','from','boss@example.test','mark_read',NULL,0,1);
+                     PRAGMA user_version=42;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 43);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 43);
+
+        let rows: Vec<(String, String, String, String)> = conn
+            .prepare("SELECT id,match_mode,conditions_json,actions_json FROM filter_rules ORDER BY position")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap();
+        assert_eq!(rows[0].0, "r1");
+        assert_eq!(rows[0].1, "all");
+        assert_eq!(
+            json(&rows[0].2),
+            serde_json::json!([{"field": "subject", "value": "invoice"}])
+        );
+        assert_eq!(
+            json(&rows[0].3),
+            serde_json::json!([{"kind": "move_mailbox", "targetMailbox": "7", "flagColor": null}])
+        );
+        assert_eq!(
+            json(&rows[1].3),
+            serde_json::json!([{"kind": "mark_read", "targetMailbox": null, "flagColor": null}])
+        );
+
+        let (flag_color, notify): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM messages WHERE flag_color<>0),
+                        (SELECT notify_new_mail FROM accounts WHERE id='a1')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((flag_color, notify), (0, 1));
     }
 }

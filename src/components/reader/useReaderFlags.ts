@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { api } from "../../api";
 import { useAppStore } from "../../store";
+import { errorText } from "../../errors";
 
 type Store = ReturnType<typeof useAppStore.getState>;
 
@@ -28,10 +29,13 @@ export function useReaderFlags({
     const operation = ++starredOperation.current;
     const viewMailboxId = current.activeMailboxId;
     const next = !message.isStarred;
-    selectMessage({ ...message, isStarred: next });
+    const flagColor = 0;
+    selectMessage({ ...message, isStarred: next, flagColor });
     setMessages(
       current.messages.map((summary) =>
-        summary.id === message.id ? { ...summary, isStarred: next } : summary,
+        summary.id === message.id
+          ? { ...summary, isStarred: next, flagColor }
+          : summary,
       ),
       current.messageCursor,
       current.hasMoreMessages,
@@ -50,7 +54,11 @@ export function useReaderFlags({
       setMessages(
         current.messages.map((summary) =>
           summary.id === message.id && summary.isStarred === next
-            ? { ...summary, isStarred: message.isStarred }
+            ? {
+                ...summary,
+                isStarred: message.isStarred,
+                flagColor: message.flagColor,
+              }
             : summary,
         ),
         current.messageCursor,
@@ -63,8 +71,9 @@ export function useReaderFlags({
         selectMessage({
           ...current.selectedMessage,
           isStarred: message.isStarred,
+          flagColor: message.flagColor,
         });
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -132,7 +141,7 @@ export function useReaderFlags({
           ),
         );
       }
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 

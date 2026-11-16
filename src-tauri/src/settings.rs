@@ -332,7 +332,10 @@ fn normalize_legacy(mut settings: AppSettings) -> Result<AppSettings, String> {
     settings.schema_version = 2;
     // Legacy settings predates integrated glass/sidebar preferences.
     settings.window_effects = false;
-    if !matches!(settings.density.as_str(), "comfortable" | "compact") {
+    if !matches!(
+        settings.density.as_str(),
+        "normal" | "comfortable" | "compact"
+    ) {
         settings.density = "comfortable".into();
     }
     // First-run progress did not exist before this version. Existing installs
@@ -349,9 +352,17 @@ fn parse_and_validate(raw: &str) -> Result<AppSettings, String> {
     if settings.schema_version == 1 {
         return normalize_legacy(settings);
     }
-    // Files written before first-run tracking lack the flag. Do not force
-    // existing users through setup again; fresh installs have no file.
-    if !raw.contains("setupCompleted") {
+    // Files written before first-run tracking lack the key. Check parsed JSON
+    // rather than raw substring matching (which fails on escapes and string values).
+    let has_setup_completed = serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .map(|obj| obj.contains_key("setupCompleted"))
+        })
+        .unwrap_or(false);
+    if !has_setup_completed {
         settings.setup_completed = true;
         settings.setup_step = None;
     }
@@ -461,7 +472,10 @@ fn validate(settings: &AppSettings) -> Result<(), String> {
             "right" | "bottom" | "hidden"
         )
         || !matches!(settings.theme.as_str(), "system" | "light" | "dark")
-        || !matches!(settings.density.as_str(), "comfortable" | "compact")
+        || !matches!(
+            settings.density.as_str(),
+            "normal" | "comfortable" | "compact"
+        )
         || !matches!(
             settings.update_check_interval.as_str(),
             "startupAnd6h" | "startupAnd12h" | "startupAnd24h" | "startup" | "manual"
@@ -697,19 +711,23 @@ fn serialize(settings: &AppSettings) -> Result<String, String> {
 }
 
 fn read_bounded(path: &Path) -> Result<Option<String>, String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Could not inspect application settings.".into()),
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("Settings path is not a regular file.".into());
     }
-    if metadata.len() > MAX_SETTINGS_BYTES as u64 {
+    let (file, len) =
+        crate::bounded_file::open_regular_file_sync(path).map_err(|error| match error {
+            crate::bounded_file::BoundedFileError::TooLarge => {
+                "Settings file is too large.".to_string()
+            }
+            crate::bounded_file::BoundedFileError::Unavailable => {
+                "Settings path is not a regular file.".to_string()
+            }
+        })?;
+    if len > MAX_SETTINGS_BYTES as u64 {
         return Err("Settings file is too large.".into());
     }
-    let file =
-        fs::File::open(path).map_err(|_| "Could not open application settings.".to_string())?;
     let mut raw = String::new();
     file.take((MAX_SETTINGS_BYTES + 1) as u64)
         .read_to_string(&mut raw)
@@ -1063,7 +1081,7 @@ mod tests {
             parse_and_validate(&serialize(&defaults).unwrap())
                 .unwrap()
                 .density,
-            "comfortable"
+            "normal"
         );
         let mut value = serde_json::to_value(&defaults).unwrap();
         value.as_object_mut().unwrap().remove("bccSelf");
@@ -1113,6 +1131,11 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(validate(&settings).is_err());
+        assert!(validate(&AppSettings {
+            density: "normal".into(),
+            ..AppSettings::default()
+        })
+        .is_ok());
 
         let undo = AppSettings {
             undo_send_seconds: 31,
@@ -1400,9 +1423,63 @@ mod tests {
 
         let reset = store.reset_preferences().unwrap();
         assert_eq!(reset.theme, "system");
-        assert_eq!(reset.density, "comfortable");
+        assert_eq!(reset.density, "normal");
         assert_eq!(reset.last_account_id, Some(account_id));
         assert_eq!(reset.last_mailbox_id, Some(42));
+    }
+
+    #[test]
+    fn density_defaults_and_legacy_resolution() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.density, "normal");
+        assert_eq!(defaults.folder_pane_width, 240);
+        assert_eq!(defaults.message_pane_width, 380);
+        assert_eq!(defaults.reader_pane_height, 420);
+
+        // A file with no density key resolves to comfortable, not the new default.
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        value.as_object_mut().unwrap().remove("density");
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "comfortable");
+
+        // The word "density" in another value does not count as a density key.
+        value["imageSenders"] = serde_json::json!(["density@example.com"]);
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "comfortable");
+
+        // An explicit "normal" stays normal.
+        value["density"] = serde_json::json!("normal");
+        let raw = serde_json::to_string(&value).unwrap();
+        assert_eq!(parse_and_validate(&raw).unwrap().density, "normal");
+
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            SettingsStore::load(directory.path().join("settings.json"), &Database::memory())
+                .unwrap();
+        let import_path = directory.path().join("export.json");
+        let mut portable = serde_json::to_value(PortableSettingsFile {
+            application: PORTABLE_APPLICATION.into(),
+            format_version: PORTABLE_FORMAT_VERSION,
+            preferences: PortableSettings::from(&defaults),
+        })
+        .unwrap();
+        portable["preferences"]["density"] = serde_json::json!("comfortable");
+        fs::write(&import_path, serde_json::to_vec(&portable).unwrap()).unwrap();
+        assert_eq!(
+            store.import_from(&import_path).unwrap().density,
+            "comfortable"
+        );
+
+        // An export with no density imports as comfortable.
+        portable["preferences"]
+            .as_object_mut()
+            .unwrap()
+            .remove("density");
+        fs::write(&import_path, serde_json::to_vec(&portable).unwrap()).unwrap();
+        assert_eq!(
+            store.import_from(&import_path).unwrap().density,
+            "comfortable"
+        );
     }
 
     #[test]
@@ -1727,5 +1804,46 @@ mod tests {
             })
             .count();
         assert_eq!(remaining, 5);
+    }
+
+    #[test]
+    fn setup_completed_migration_uses_json_key_not_raw_substring() {
+        let escaped_false = "{\"schemaVersion\":2,\"setup\\u0043ompleted\":false}";
+        let parsed = parse_and_validate(escaped_false).unwrap();
+        assert!(!parsed.setup_completed);
+
+        let omitted_with_value_collision =
+            "{\"schemaVersion\":2,\"imageSenders\":[\"setupCompleted@example.test\"]}";
+        let legacy = parse_and_validate(omitted_with_value_collision).unwrap();
+        assert!(legacy.setup_completed);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_bounded_rejects_fifo_and_symlink_without_blocking() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe-settings.json");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let fifo_path = fifo.clone();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || read_bounded(&fifo_path)),
+        )
+        .await
+        .expect("reading a FIFO settings file must not hang")
+        .unwrap();
+        assert!(result.is_err());
+
+        let target = dir.path().join("real.json");
+        let link = dir.path().join("settings-link.json");
+        fs::write(&target, "{}").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(read_bounded(&link).is_err());
     }
 }

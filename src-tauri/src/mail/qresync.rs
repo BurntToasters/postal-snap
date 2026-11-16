@@ -96,6 +96,10 @@ pub(super) fn drain_vanished(session: &mut ImapSession) -> (Vec<RangeInclusive<u
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::single_range_in_vec_init,
+    reason = "fixtures are one-range UID sets, not ranges to expand"
+)]
 mod tests {
     use super::*;
 

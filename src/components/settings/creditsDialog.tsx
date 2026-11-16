@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { strings } from "../../i18n";
 import type {
@@ -74,17 +74,9 @@ export function CreditsDialog({
   credits: LicenseCredits;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
-  useEffect(() => {
-    const settings = document.querySelector<HTMLElement>(".settings-window");
-    if (!settings) return;
-    const alreadyInert = settings.hasAttribute("inert");
-    settings.setAttribute("inert", "");
-    return () => {
-      if (!alreadyInert) settings.removeAttribute("inert");
-    };
-  }, []);
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
 
   return createPortal(
     <div className="modal-layer license-credits-layer">

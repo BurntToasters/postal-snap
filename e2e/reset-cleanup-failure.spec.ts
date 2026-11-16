@@ -1,6 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // An incomplete reset must keep its failure visible instead of restarting
 // into setup and implying local storage cleanup finished.
@@ -8,7 +8,6 @@ test("reset cleanup failure stays visible without restart", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__;
     if (!mock) throw new Error("Mock IPC was not installed");
@@ -28,7 +27,7 @@ test("reset cleanup failure stays visible without restart", async ({
   await expect(
     page.getByText("Reset did not finish. Try again.", { exact: true }),
   ).toBeVisible();
-  expect((await recordedCalls(page)).map((call) => call.command)).not.toContain(
+  expect((await ipcCalls(page)).map((call) => call.command)).not.toContain(
     "relaunch_app",
   );
   await attachIpcLog(page, testInfo);

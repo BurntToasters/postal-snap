@@ -1,6 +1,38 @@
 use super::dto::*;
 use zeroize::{Zeroize, Zeroizing};
 
+/// Most conditions one rule may list. Each is one SQL fragment.
+pub const MAX_RULE_CONDITIONS: usize = 10;
+/// Most actions one rule may run.
+pub const MAX_RULE_ACTIONS: usize = 5;
+/// Longest match text for one condition, in characters.
+pub const MAX_RULE_VALUE_CHARS: usize = 320;
+/// Highest flag color index (0 red through 6 gray).
+pub const MAX_FLAG_COLOR: u8 = 6;
+
+/// The conditions and actions a rule runs. Rules saved before the lists
+/// existed run their legacy single field and action.
+pub(crate) fn rule_lists(rule: &FilterRule) -> (Vec<RuleCondition>, Vec<RuleAction>) {
+    let conditions = if rule.conditions.is_empty() {
+        vec![RuleCondition {
+            field: rule.field.clone(),
+            value: rule.contains.trim().to_string(),
+        }]
+    } else {
+        rule.conditions.clone()
+    };
+    let actions = if rule.actions.is_empty() {
+        vec![RuleAction {
+            kind: rule.action.clone(),
+            target_mailbox: rule.target_mailbox.clone(),
+            flag_color: None,
+        }]
+    } else {
+        rule.actions.clone()
+    };
+    (conditions, actions)
+}
+
 pub fn validate_filter_rule(rule: &FilterRule, account_id: &str) -> Result<(), String> {
     if rule.account_id != account_id {
         return Err("Rule does not belong to this account.".into());
@@ -9,29 +41,74 @@ pub fn validate_filter_rule(rule: &FilterRule, account_id: &str) -> Result<(), S
     if name.is_empty() || name.len() > 80 || name.contains(char::is_control) {
         return Err("Name the rule in up to 80 characters.".into());
     }
-    if !matches!(rule.field.as_str(), "from" | "to" | "subject" | "domain") {
-        return Err("Rules can match sender, recipient, subject, or a sender domain.".into());
+    if !matches!(rule.match_mode.as_str(), "all" | "any") {
+        return Err("Choose whether all or any conditions must match.".into());
     }
-    let needle = rule.contains.trim();
-    if needle.is_empty() || needle.len() > 200 || needle.contains(char::is_control) {
-        return Err("Match text must be 1 to 200 characters.".into());
+    let (conditions, actions) = rule_lists(rule);
+    if conditions.len() > MAX_RULE_CONDITIONS {
+        return Err(format!(
+            "Too many conditions. Use up to {MAX_RULE_CONDITIONS}."
+        ));
     }
-    if rule.field == "domain" && !valid_sender_domain(needle) {
-        return Err("Enter a domain such as example.com.".into());
+    for condition in &conditions {
+        if !matches!(
+            condition.field.as_str(),
+            "from" | "to" | "subject" | "domain"
+        ) {
+            return Err("Rules can match sender, recipient, subject, or a sender domain.".into());
+        }
+        let value = condition.value.trim();
+        if value.is_empty()
+            || value.chars().count() > MAX_RULE_VALUE_CHARS
+            || value.contains(char::is_control)
+        {
+            return Err(format!(
+                "Enter match text of 1 to {MAX_RULE_VALUE_CHARS} characters."
+            ));
+        }
+        if condition.field == "domain" && !valid_sender_domain(value) {
+            return Err("Enter a domain such as example.com.".into());
+        }
     }
-    if !matches!(
-        rule.action.as_str(),
-        "mark_read" | "move_archive" | "move_trash" | "move_junk" | "move_mailbox"
-    ) {
-        return Err("That rule action is not supported.".into());
+    if actions.is_empty() {
+        return Err("Choose 1 to 5 actions for each rule.".into());
     }
-    if rule.action == "move_mailbox"
-        && rule
-            .target_mailbox
-            .as_deref()
-            .is_none_or(|target| target.is_empty())
+    if actions.len() > MAX_RULE_ACTIONS {
+        return Err(format!("Too many actions. Use up to {MAX_RULE_ACTIONS}."));
+    }
+    if actions
+        .iter()
+        .filter(|action| action.kind.starts_with("move_"))
+        .count()
+        > 1
     {
-        return Err("Choose the folder to move matching mail into.".into());
+        return Err("Choose at most one move action for each rule.".into());
+    }
+    for action in &actions {
+        if !matches!(
+            action.kind.as_str(),
+            "mark_read"
+                | "move_archive"
+                | "move_trash"
+                | "move_junk"
+                | "move_mailbox"
+                | "flag"
+                | "pin"
+                | "notify"
+        ) {
+            return Err("Choose a supported rule action.".into());
+        }
+        if action.kind == "move_mailbox"
+            && action
+                .target_mailbox
+                .as_deref()
+                .is_none_or(|target| target.is_empty())
+        {
+            return Err("Choose the folder to move matching mail into.".into());
+        }
+        if action.kind == "flag" && action.flag_color.is_none_or(|color| color > MAX_FLAG_COLOR) {
+            return Err(format!("Choose a flag color from 0 to {MAX_FLAG_COLOR}."));
+        }
     }
     Ok(())
 }

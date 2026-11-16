@@ -2,7 +2,13 @@ import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { DistributionChannel, UpdateChannel } from "../../types";
 import { onUpdateChannelChanged } from "../../update";
-import { SettingRow, SettingsGroup, SettingsPanel } from "./primitives";
+import {
+  HelpMore,
+  HelpText,
+  SettingRow,
+  SettingsGroup,
+  SettingsPanel,
+} from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface AdvancedTabProps {
@@ -32,21 +38,33 @@ export function AdvancedTab({
           <small>{strings.settings.vaultHelp}</small>
         </span>
       </div>
-      <p className="settings-lead">{strings.settings.advancedHelp}</p>
+      <div className="settings-lead">
+        <HelpText
+          label={strings.settings.advanced}
+          short={strings.settings.advancedHelp}
+          more={strings.settings.advancedHelpMore}
+        />
+      </div>
       <SettingsGroup>
-        <label className="switch-row">
-          <span>
-            <strong>{strings.settings.blockAds}</strong>
-            <small>{strings.settings.blockAdsHelp}</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={advertisingOn}
-            onChange={(event) =>
-              void setAdvertisingBlocking(event.target.checked)
-            }
+        <div className="settings-row-stack">
+          <label className="switch-row">
+            <span>
+              <strong>{strings.settings.blockAds}</strong>
+              <small>{strings.settings.blockAdsHelp}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={advertisingOn}
+              onChange={(event) =>
+                void setAdvertisingBlocking(event.target.checked)
+              }
+            />
+          </label>
+          <HelpMore
+            label={strings.settings.blockAds}
+            more={strings.settings.blockAdsHelpMore}
           />
-        </label>
+        </div>
         <label className="switch-row">
           <span>
             <strong>{strings.settings.blockThreats}</strong>
@@ -63,6 +81,7 @@ export function AdvancedTab({
           <SettingRow
             title={strings.settings.updateChannel}
             help={strings.settings.updateChannelHelp}
+            helpMore={strings.settings.updateChannelHelpMore}
           >
             <select
               aria-label={strings.settings.updateChannel}

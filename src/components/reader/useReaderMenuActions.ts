@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/exhaustive-deps -- mount-only listeners; code moved verbatim. */
 import {
   useEffect,
   useRef,
@@ -15,13 +14,17 @@ import {
   type ContextMenuActionDetail,
 } from "../../contextMenu";
 import { forwardLoadedConversation } from "../../forwardConversation";
+import { openFlagMenuForSelection, setFlagColorFor } from "../../flagColor";
+import { FLAG_COLORS } from "../../flagColors";
 import { useAppStore } from "../../store";
+import type { FlagColor } from "../../types";
 import {
   listPostAddress,
   messageSelectionQuote,
   preferredReplyMode,
 } from "../composer/composerSeed";
 import { readableMessageText } from "./readerUtils";
+import { errorText } from "../../errors";
 
 interface Options {
   openComposer: ReturnType<typeof useAppStore.getState>["openComposer"];
@@ -203,6 +206,18 @@ export function useReaderMenuActions({
       if (action === "delete-forever") void h.deleteForever();
       if (action === "toggle-read") void h.setRead();
       if (action === "toggle-star") void h.setStarred();
+      if (action === "flag-color") openFlagMenuForSelection();
+      if (action === "clear-flag")
+        void setFlagColorFor(selected.accountId, [selected.id], null);
+      if (action?.startsWith("flag-color:")) {
+        const color = Number(action.slice("flag-color:".length));
+        if (FLAG_COLORS.includes(color as FlagColor))
+          void setFlagColorFor(
+            selected.accountId,
+            [selected.id],
+            color as FlagColor,
+          );
+      }
       if (action === "junk") void h.move("junk");
       if (action === "block-sender") void h.blockSender();
       if (action === "unblock-sender") void h.unblockSender();
@@ -220,7 +235,7 @@ export function useReaderMenuActions({
         void api
           .saveMessageEml(selected.accountId, selected.id)
           .catch((cause) => {
-            useAppStore.getState().setError(String(cause));
+            useAppStore.getState().setError(errorText(cause));
           });
       }
       if (action === "print" || action === "file-print") {
@@ -370,5 +385,6 @@ export function useReaderMenuActions({
       window.removeEventListener("postal:copy-mailbox", copyMailbox);
       window.removeEventListener(CONTEXT_ACTION_EVENT, contextAction);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and stable setters are not deps.
   }, []);
 }

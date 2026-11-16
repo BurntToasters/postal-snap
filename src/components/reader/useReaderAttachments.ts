@@ -1,7 +1,9 @@
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "../../api";
 import { useAppStore } from "../../store";
-import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
+import type { AttachmentPreview, MessageDetail } from "../../types";
+import { errorText } from "../../errors";
+import { isPreviewableAttachment } from "./attachmentKinds";
 
 interface Options {
   message: MessageDetail | undefined;
@@ -28,16 +30,7 @@ export function useReaderAttachments({
   setDownloadingAttachmentId,
   setError,
 }: Options) {
-  function isPreviewable(attachment: Attachment): boolean {
-    if (attachment.inline || attachment.size > 10 * 1024 * 1024) return false;
-    const contentType = attachment.contentType.toLowerCase();
-    return (
-      contentType === "text/plain" ||
-      ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(
-        contentType,
-      )
-    );
-  }
+  const isPreviewable = isPreviewableAttachment;
 
   async function previewFile(attachmentId: string) {
     if (!message || previewAttachmentId !== undefined) return;
@@ -57,7 +50,7 @@ export function useReaderAttachments({
         preview: loaded,
       });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setPreviewAttachmentId(undefined);
     }
@@ -74,7 +67,7 @@ export function useReaderAttachments({
         attachmentIds,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }
@@ -86,7 +79,7 @@ export function useReaderAttachments({
     try {
       await api.saveAllAttachments(message.accountId, message.id);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }
@@ -103,7 +96,7 @@ export function useReaderAttachments({
         filename,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDownloadingAttachmentId(undefined);
     }

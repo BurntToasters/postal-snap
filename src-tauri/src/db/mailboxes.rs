@@ -28,6 +28,79 @@ impl Database {
         Ok(())
     }
 
+    pub fn prepare_mailbox_for_sync(
+        &self,
+        account_id: &str,
+        name: &str,
+        role: &MailboxRole,
+        role_source: &str,
+        uid_validity: Option<u32>,
+    ) -> Result<i64, String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let previous_validity: Option<Option<u32>> = transaction
+            .query_row(
+                "SELECT uid_validity FROM mailboxes WHERE account_id = ?1 AND name = ?2",
+                params![account_id, name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let validity_changed =
+            previous_validity.is_some() && previous_validity != Some(uid_validity);
+        let existing: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
+                params![account_id, name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let stable_id = match existing {
+            Some(id) => id,
+            None => transaction.query_row("UPDATE mailbox_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get::<_, i64>(0)).map_err(db_error)?,
+        };
+        if existing.is_none() {
+            transaction
+                .execute(
+                    "INSERT INTO mailboxes (id, account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total)
+                     VALUES (?5, ?1, ?2, ?2, ?3, ?4, ?6, NULL, NULL, 0)",
+                    params![account_id, name, role.as_str(), role_source, stable_id, uid_validity],
+                )
+                .map_err(db_error)?;
+        } else if validity_changed {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET role=?1, role_source=?2, uid_validity=?3, uid_next=NULL,
+                     server_unread=NULL, server_total=0, local_total_delta=0, local_unread_delta=0,
+                     counts_generation=counts_generation+1, server_available=1,
+                     backfill_uid=NULL, backfill_state='active', highest_modseq=NULL, last_flag_scan_at=NULL
+                     WHERE id=?4",
+                    params![role.as_str(), role_source, uid_validity, stable_id],
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute("DELETE FROM messages WHERE mailbox_id = ?1", [stable_id])
+                .map_err(db_error)?;
+            // UIDs from the old generation cannot target recycled server UIDs.
+            transaction
+                .execute(
+                    "DELETE FROM offline_ops WHERE account_id=?1 AND ((kind='flags' AND json_extract(payload,'$.mailbox')=?2) OR (kind='move' AND json_extract(payload,'$.source')=?2))",
+                    params![account_id, name],
+                )
+                .map_err(db_error)?;
+        } else {
+            transaction
+                .execute(
+                    "UPDATE mailboxes SET role=?1, role_source=?2, uid_validity=COALESCE(uid_validity,?3), server_available=1 WHERE id=?4",
+                    params![role.as_str(), role_source, uid_validity, stable_id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(stable_id)
+    }
+
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn upsert_mailbox(
         &self,
@@ -134,7 +207,7 @@ impl Database {
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
-                    f.delimiter
+                    f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              WHERE f.account_id = ?1 GROUP BY f.id
              ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
@@ -151,6 +224,7 @@ impl Database {
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
                     delimiter: row.get(7)?,
+                    allows_keywords: row.get::<_, i64>(8)? != 0,
                 })
             })
             .map_err(db_error)?;
@@ -165,7 +239,7 @@ impl Database {
                     COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
-                    f.delimiter
+                    f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              GROUP BY f.id
              ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
@@ -182,6 +256,7 @@ impl Database {
                     unread_count: row.get::<_, u32>(5)?,
                     total_count: row.get::<_, u32>(6)?,
                     delimiter: row.get(7)?,
+                    allows_keywords: row.get::<_, i64>(8)? != 0,
                 })
             })
             .map_err(db_error)?;
@@ -221,12 +296,30 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 
+    /// Role as the mailbox list shows it: an explicit assignment, else the
+    /// folder's own role, else `other` when another folder took that role.
+    pub fn mailbox_effective_role(&self, account_id: &str, mailbox: &str) -> Result<String, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT COALESCE(
+                   (SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
+                   CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role)
+                        THEN 'other' ELSE f.role END)
+                 FROM mailboxes f WHERE f.account_id=?1 AND f.name=?2",
+                params![account_id, mailbox],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or_else(|| "Mailbox not found.".to_string())
+    }
+
     pub fn mailbox_for_role(
         &self,
         account_id: &str,
         role: &str,
     ) -> Result<Option<(i64, String)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let explicit: Option<i64> = conn
             .query_row(
                 "SELECT mailbox_id FROM folder_assignments WHERE account_id=?1 AND role=?2",
@@ -511,7 +604,7 @@ impl Database {
     }
 
     pub fn mailbox(&self, id: i64) -> Result<(String, String), String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT account_id,name FROM mailboxes WHERE id=?1",
                 [id],
@@ -523,7 +616,7 @@ impl Database {
     }
 
     pub fn mailbox_delimiter(&self, id: i64) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT delimiter FROM mailboxes WHERE id=?1", [id], |row| {
                 row.get(0)
             })
@@ -744,7 +837,7 @@ impl Database {
         policy: &crate::models::CachePolicy,
     ) -> Result<crate::models::SyncProgress, String> {
         let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let (server_total, backfilling): (i64, i64) = conn
             .query_row(
                 "SELECT COALESCE(SUM(server_total),0),
@@ -791,6 +884,7 @@ mod tests {
     fn account_with(id: &str, email: &str) -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: crate::models::BodyFormat::Html,
                 id: id.into(),
                 provider: ProviderKind::Manual,

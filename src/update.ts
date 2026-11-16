@@ -41,6 +41,8 @@ let applyInFlight: Promise<void> | undefined;
 let installingPackage: DownloadedUpdate | undefined;
 let recheckAfterApply = false;
 const updateFoundListeners = new Set<UpdateFoundListener>();
+const transientUpdateFoundListeners = new Set<UpdateFoundListener>();
+const updateSettledListeners = new Set<() => void>();
 let updateFound = false;
 let updateVersion: string | undefined;
 let updateReadyVersion: string | undefined;
@@ -52,7 +54,7 @@ const updateReadyListeners = new Set<() => void>();
 
 export function addUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.add(listener);
-  if (updateInFlight && updateFound) {
+  if ((updateInFlight || interactiveInFlight) && updateFound) {
     try {
       listener(updateVersion);
     } catch {
@@ -63,6 +65,15 @@ export function addUpdateFoundListener(listener: UpdateFoundListener): void {
 
 export function removeUpdateFoundListener(listener: UpdateFoundListener): void {
   updateFoundListeners.delete(listener);
+  transientUpdateFoundListeners.delete(listener);
+}
+
+export function addUpdateSettledListener(listener: () => void): void {
+  updateSettledListeners.add(listener);
+}
+
+export function removeUpdateSettledListener(listener: () => void): void {
+  updateSettledListeners.delete(listener);
 }
 
 export function resetUpdateStateForTesting(): void {
@@ -72,6 +83,8 @@ export function resetUpdateStateForTesting(): void {
   installingPackage = undefined;
   recheckAfterApply = false;
   updateFoundListeners.clear();
+  transientUpdateFoundListeners.clear();
+  updateSettledListeners.clear();
   updateFound = false;
   updateVersion = undefined;
   updateReadyVersion = undefined;
@@ -156,7 +169,10 @@ async function checkForChannel(channel: UpdateChannel) {
 function notifyUpdateFound(version: string): void {
   updateFound = true;
   updateVersion = version;
-  for (const listener of updateFoundListeners) {
+  for (const listener of new Set([
+    ...updateFoundListeners,
+    ...transientUpdateFoundListeners,
+  ])) {
     try {
       listener(version);
     } catch {
@@ -173,7 +189,16 @@ export function runUpdateSingleFlight(
     return Promise.resolve({ available: true, version: alreadyReady });
   }
 
-  if (onUpdateFound) addUpdateFoundListener(onUpdateFound);
+  if (onUpdateFound) {
+    transientUpdateFoundListeners.add(onUpdateFound);
+    if (updateInFlight && updateFound) {
+      try {
+        onUpdateFound(updateVersion);
+      } catch {
+        // A status listener must not interrupt the update transaction.
+      }
+    }
+  }
   if (updateInFlight) return updateInFlight;
   const task = (async (): Promise<UpdateCheckResult> => {
     if (!(await updatesManagedByPostalSnap())) {
@@ -215,7 +240,14 @@ export function runUpdateSingleFlight(
       updateInFlight = undefined;
       updateFound = false;
       updateVersion = undefined;
-      updateFoundListeners.clear();
+      transientUpdateFoundListeners.clear();
+      for (const listener of updateSettledListeners) {
+        try {
+          listener();
+        } catch {
+          // A status listener must never interrupt the update transaction.
+        }
+      }
     }
   };
   void task.then(cleanup, cleanup);
@@ -427,7 +459,13 @@ export async function checkUpdateInteractive(): Promise<void> {
   try {
     await task;
   } finally {
-    if (interactiveInFlight === task) interactiveInFlight = undefined;
+    if (interactiveInFlight === task) {
+      interactiveInFlight = undefined;
+      if (!updateInFlight) {
+        updateFound = false;
+        updateVersion = undefined;
+      }
+    }
   }
 }
 

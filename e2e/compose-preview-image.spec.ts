@@ -1,8 +1,10 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
 import { receivesPointerHit } from "./pointer-hit";
+import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. An attached picture can be previewed and stays attached after closing.
@@ -21,7 +23,6 @@ const DRAFT_WRITES = new Set([
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 test.afterEach(async ({ page }, testInfo: TestInfo) => {
@@ -79,7 +80,7 @@ async function savedPhotoDraft(page: Page) {
 
 /** Attachments, draft text, save status, and draft writes so far. */
 async function draftState(page: Page) {
-  const writes = (await recordedCalls(page)).filter((call) =>
+  const writes = (await ipcCalls(page)).filter((call) =>
     DRAFT_WRITES.has(call.command),
   ).length;
   return {
@@ -148,7 +149,7 @@ test("Close returns focus to Preview without changing the draft", async ({
 });
 
 // The preview is body-level now, so check its card and Close at 620x540 and 200%.
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   test(`the picture preview fits a 620x540 window at 200%: ${density}`, async ({
     page,
   }, testInfo) => {

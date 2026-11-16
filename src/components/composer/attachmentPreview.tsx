@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { strings } from "../../i18n";
+import { useInertBackground } from "../useInertBackground";
 
 export interface AttachmentPreviewProps {
   preview: { filename: string; src: string };
@@ -15,6 +16,8 @@ export function AttachmentPreview({
   onClose,
   triggerRef,
 }: AttachmentPreviewProps) {
+  const layerRef = useRef<HTMLDivElement>(null);
+  useInertBackground(layerRef);
   const closeRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
 
@@ -49,6 +52,7 @@ export function AttachmentPreview({
   // Body-level, so the composer's inert layer cannot cover or disable it.
   return createPortal(
     <div
+      ref={layerRef}
       className="compose-preview-layer"
       role="presentation"
       onMouseDown={() => onClose()}

@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A single message has no conversation copy.
@@ -45,6 +49,7 @@ test("copy conversation text copies every loaded letter oldest first", async ({
     page.getByRole("heading", { name: "Weekend plans" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Copy conversation text");
   await page
     .getByRole("menuitem", { name: "Copy conversation text", exact: true })
     .click();

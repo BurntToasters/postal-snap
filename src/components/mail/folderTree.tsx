@@ -34,7 +34,10 @@ interface FolderTreeProps {
   onFolderDialogClose: () => void;
   onDropMessages?: (mailboxId: number, payload: string) => void;
   collapsedMailboxIds?: number[];
-  onToggleCollapsed?: (mailboxId: number, collapsed: boolean) => void;
+  onToggleCollapsed?: (
+    mailboxId: number,
+    collapsed: boolean,
+  ) => Promise<boolean> | void;
 }
 
 export function FolderTree({
@@ -230,7 +233,15 @@ function FolderTreeNode({
             onClick={() => {
               const nextCollapsed = !collapsed;
               setPendingCollapsed(nextCollapsed);
-              onToggleCollapsed?.(mailbox.id, nextCollapsed);
+              void Promise.resolve(
+                onToggleCollapsed?.(mailbox.id, nextCollapsed),
+              ).then((saved) => {
+                if (saved === false) {
+                  setPendingCollapsed((current) =>
+                    current === nextCollapsed ? null : current,
+                  );
+                }
+              });
             }}
             aria-label={
               open

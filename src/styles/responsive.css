@@ -1,17 +1,21 @@
-@media (max-width: 1049px) {
+@media (max-width: 899.98px) {
   .mail-shell {
     --rendered-folder-width: 0px;
   }
 
   .mail-shell.pane-right {
-    grid-template-columns: var(--rendered-message-width) 5px minmax(0, 1fr);
+    grid-template-columns:
+      var(--rendered-message-width) var(--splitter-size)
+      minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "toolbar toolbar toolbar" "messages reader-splitter reader";
   }
 
   .mail-shell.pane-bottom {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) 5px var(--rendered-reader-height);
+    grid-template-rows: auto minmax(0, 1fr) var(--splitter-size) var(
+        --rendered-reader-height
+      );
     grid-template-areas: "toolbar" "messages" "reader-bottom-splitter" "reader";
   }
 
@@ -34,7 +38,7 @@
     position: fixed;
     z-index: 22;
     inset: 0 auto 0 0;
-    width: min(290px, 88vw);
+    width: min(var(--drawer-width), 88vw);
     transform: translateX(-105%);
     visibility: hidden;
     box-shadow: var(--shadow);
@@ -68,15 +72,7 @@
     min-height: var(--bar-height-sm);
     align-items: center;
     justify-content: space-between;
-    padding: 0 4px 8px 9px;
-  }
-}
-
-@media (max-height: 640px) {
-  .pane-heading,
-  .reader-actions {
-    min-height: var(--bar-height-md);
-    padding-block: var(--bar-pad-block);
+    padding: 0 var(--space-1) var(--space-2) var(--space-2);
   }
 }
 
@@ -86,13 +82,13 @@
   }
 
   html[data-text-scale="large"] .setup-progress:not(.compact) {
-    margin-block: 22px;
+    margin-block: var(--setup-progress-narrow-margin-block);
   }
 
   html[data-text-scale="large"] .setup-form-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
+    gap: var(--setup-form-header-gap);
   }
 
   html[data-text-scale="large"] .setup-form-header .setup-settings-button {
@@ -118,8 +114,8 @@
     grid-template-columns: var(--target-size) minmax(0, 1fr) auto var(
         --target-size
       );
-    gap: 6px;
-    padding-inline: 10px;
+    gap: var(--space-2);
+    padding-inline: var(--toolbar-pad-inline);
   }
 
   .toolbar-cluster,
@@ -183,17 +179,18 @@
     display: none;
   }
 
-  .mobile-reader-back {
-    display: inline-flex !important;
+  /* Two classes: beats the shared `.reader-actions button` display rule. */
+  .reader-actions .mobile-reader-back {
+    display: inline-flex;
   }
 
-  .desktop-reader-close {
-    display: none !important;
+  .reader-actions .desktop-reader-close {
+    display: none;
   }
 
   .message-header {
     grid-template-columns: var(--sender-avatar-narrow-size) minmax(0, 1fr) auto;
-    padding: 14px;
+    padding: var(--reader-head-pad-block) var(--reader-pad-inline);
   }
 
   .message-header .sender-details {
@@ -204,17 +201,18 @@
   .message-header .message-stamp {
     grid-column: 2 / -1;
     grid-row: 3;
+    justify-items: start;
     text-align: left;
   }
 
   .reader-actions {
     flex-wrap: wrap;
-    gap: 4px;
-    padding-inline: 8px;
+    gap: var(--space-1);
+    padding-inline: var(--space-2);
   }
 
   .reader-more-menu {
-    right: 8px;
+    right: var(--space-2);
     left: auto;
   }
 
@@ -291,8 +289,9 @@
     grid-template-columns: 1fr;
   }
 
-  .server-grid label {
-    grid-column: 1 !important;
+  .server-grid label:nth-child(3),
+  .server-grid label:nth-child(4) {
+    grid-column: 1;
   }
 
   .setup-page {
@@ -303,14 +302,14 @@
   .setup-card,
   .setup-card.account-form {
     min-height: 100%;
-    padding: 22px 18px;
+    padding: var(--setup-card-narrow-pad);
     border: 0;
     border-radius: 0;
     box-shadow: none;
   }
 
   .setup-progress small {
-    font-size: 0.7rem;
+    font-size: var(--fs-xs);
   }
 
   .settings-row,
@@ -349,12 +348,6 @@
       );
   }
 
-  .address-fields .to-field {
-    grid-template-columns:
-      calc(var(--address-label-width) - 0.75rem) minmax(0, 1fr)
-      auto;
-  }
-
   .aliases-header {
     flex-direction: column;
     align-items: stretch;
@@ -378,10 +371,11 @@
   }
 
   .toolbar-button {
-    padding-inline: 10px;
+    padding-inline: var(--toolbar-button-narrow-pad-inline);
   }
 }
 
+/* Print keeps !important: paper rules must beat screen rules in every file. */
 @media print {
   /* Force paper: print stays black on white regardless of app theme. */
   html,
@@ -432,8 +426,8 @@
 
   .message-header {
     border-bottom: 2px solid #000000 !important;
-    padding-bottom: 16px !important;
-    margin-bottom: 24px !important;
+    padding-bottom: var(--print-header-pad-bottom) !important;
+    margin-bottom: var(--print-header-margin-bottom) !important;
   }
 
   .message-body {
@@ -442,7 +436,7 @@
 
   .message-body iframe {
     height: auto !important;
-    min-height: 500px !important;
+    min-height: var(--print-frame-min-height) !important;
     border: 0 !important;
   }
 
@@ -468,8 +462,8 @@
 .print-host {
   position: fixed;
   top: 0;
-  left: -10000px;
-  width: 720px;
+  left: var(--offscreen-frame-left);
+  width: var(--print-frame-width);
   visibility: hidden;
   pointer-events: none;
 }
@@ -510,11 +504,14 @@ html[data-text-scale="large"] .reader-action-group {
 
 /* 200% text: the fixed sidebar wraps "Add account". Grow the folder
    column only; the reader is the flexible column that gives up the space. */
-@media (min-width: 1050px) {
+@media (min-width: 900px) {
   html[data-text-scale="large"] .mail-shell:not(.sidebar-collapsed) {
     --rendered-folder-width: clamp(
-      210px,
-      max(var(--folder-pane-width, 248px), 300px),
+      var(--folder-track-min),
+      max(
+        var(--folder-pane-width, var(--folder-pane-default-width)),
+        var(--folder-track-wide)
+      ),
       26vw
     );
   }

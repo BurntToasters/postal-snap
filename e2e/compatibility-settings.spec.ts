@@ -1,5 +1,8 @@
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -12,7 +15,7 @@ async function openAccount(
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   await page
-    .getByRole("button", { name: `Manage ${name}`, exact: true })
+    .getByRole("button", { name: new RegExp(`^Manage ${name}\\b`) })
     .click();
 }
 
@@ -344,7 +347,7 @@ test("unsaved connection changes require confirmation before leaving", async ({
   ).toBeVisible();
 });
 
-for (const density of ["comfortable", "compact"]) {
+for (const density of ["comfortable", "normal", "compact"]) {
   for (const scale of [100, 200]) {
     for (const theme of ["light", "dark"]) {
       for (const width of [720, 1400]) {
@@ -525,7 +528,7 @@ test("account list explains connection status in plain language", async ({
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Manage Sam", exact: true }),
+    page.getByRole("button", { name: /^Manage Sam\b/ }),
   ).toContainText("Mail is up to date");
 });
 

@@ -5,6 +5,7 @@ import { sanitizeComposeHtml } from "../../security";
 import { strings } from "../../i18n";
 import type { BodyFormat, ComposeAttachment } from "../../types";
 import { readPastedImage, PASTED_IMAGE_UNREADABLE } from "./pasteImage";
+import { errorText } from "../../errors";
 
 type SaveState = "unsaved" | "saving" | "saved";
 
@@ -142,7 +143,7 @@ export function useComposerAttachments({
             setDropNote(strings.composer.dropAttached(dropped.length));
             markUnsaved();
           })
-          .catch((cause) => setError(String(cause)));
+          .catch((cause) => setError(errorText(cause)));
       })
       .then((stop) => {
         if (active) unlisten = stop;
@@ -161,7 +162,7 @@ export function useComposerAttachments({
       setAttachments((items) => [...items, ...selected]);
       if (selected.length) markUnsaved();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -202,13 +203,14 @@ export function useComposerAttachments({
         setError(
           cause === PASTED_IMAGE_UNREADABLE
             ? strings.composer.pastedImageUnreadable
-            : String(cause),
+            : errorText(cause),
         );
       }
     }
   };
 
   async function addInlineImage() {
+    if (bodyFormatRef.current === "plain") return;
     let selectedToken: string | undefined;
     try {
       const [selected] = await api.chooseAttachments(accountId, true);
@@ -234,7 +236,7 @@ export function useComposerAttachments({
         void api
           .releaseComposeAttachments(accountId, [selectedToken])
           .catch(() => undefined);
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -271,7 +273,7 @@ export function useComposerAttachments({
         accountId,
         current.map((item) => item.token),
       )
-      .catch((cause) => setError(String(cause)));
+      .catch((cause) => setError(errorText(cause)));
   }
 
   async function previewComposeImage(item: ComposeAttachment) {
@@ -279,7 +281,7 @@ export function useComposerAttachments({
       const src = await api.readComposeImage(accountId, item.token);
       setAttachmentPreview({ filename: item.filename, src });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -287,12 +289,17 @@ export function useComposerAttachments({
     const item = attachments[index];
     const inline = item ? inlineImages.get(item.token) : undefined;
     if (inline && editor) {
-      const transaction = editor.state.tr;
+      const ranges: Array<{ from: number; to: number }> = [];
       editor.state.doc.descendants((node, position) => {
         if (node.type.name === "image" && node.attrs.src === inline.dataUrl)
-          transaction.delete(position, position + node.nodeSize);
+          ranges.push({ from: position, to: position + node.nodeSize });
       });
-      if (transaction.docChanged) editor.view.dispatch(transaction);
+      if (ranges.length > 0) {
+        const transaction = editor.state.tr;
+        for (const range of ranges.reverse())
+          transaction.delete(range.from, range.to);
+        if (transaction.docChanged) editor.view.dispatch(transaction);
+      }
       setInlineImages((items) => {
         const next = new Map(items);
         next.delete(item.token);
@@ -304,7 +311,7 @@ export function useComposerAttachments({
     if (item)
       void api
         .releaseComposeAttachments(accountId, [item.token])
-        .catch((cause) => setError(String(cause)));
+        .catch((cause) => setError(errorText(cause)));
   }
 
   /** Turns inline pictures into file attachments for a plain-text body. */

@@ -21,7 +21,7 @@ import {
   Send,
   Sunrise,
 } from "lucide-react";
-import { formatMessageDate, shortcutChord } from "../../format";
+import { formatChord, withChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
 import { placeSendMenu } from "./sendMenuPlacement";
@@ -41,9 +41,13 @@ export interface SendBarProps {
   setScheduleValue: Dispatch<SetStateAction<string>>;
   saveDraft: (showStatus?: boolean) => void | Promise<void>;
   saveState: "unsaved" | "saving" | "saved";
-  savedAt?: string;
+  /** Formatting toggle; omitted for plain-text bodies. */
+  formattingOpen?: boolean;
+  onToggleFormatting?: () => void;
   addAttachments: () => void | Promise<void>;
   addInlineImage: () => void | Promise<void>;
+  canInsertInlineImages?: boolean;
+  onScheduleError?: (error: string) => void;
   discardDraft: () => void | Promise<void>;
   showAttachments?: boolean;
   /** Resize grip for the floating composer. */
@@ -64,9 +68,12 @@ export function SendBar({
   setScheduleValue,
   saveDraft,
   saveState,
-  savedAt,
+  formattingOpen = false,
+  onToggleFormatting,
   addAttachments,
   addInlineImage,
+  canInsertInlineImages = true,
+  onScheduleError,
   discardDraft,
   showAttachments = true,
   children,
@@ -128,13 +135,15 @@ export function SendBar({
           aria-label={
             sending ? strings.composer.sending : strings.composer.send
           }
-          title={`${sending ? strings.composer.sending : strings.composer.send} (${shortcutChord("↵")})`}
+          title={withChord(
+            sending ? strings.composer.sending : strings.composer.send,
+            formatChord("↵"),
+          )}
         >
-          <Send />
+          <Send aria-hidden="true" />
           <span>
             {sending ? strings.composer.sending : strings.composer.send}
           </span>
-          <kbd className="send-kbd-hint">{shortcutChord("↵")}</kbd>
         </button>
         <button
           className="primary-button send-chevron"
@@ -253,10 +262,17 @@ export function SendBar({
                     className="schedule-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      const iso = new Date(scheduleValue).toISOString();
+                      const when = new Date(scheduleValue);
+                      const ms = when.getTime();
+                      const now = Date.now();
+                      const maxMs = now + 366 * 24 * 60 * 60 * 1000;
+                      if (!Number.isFinite(ms) || ms <= now || ms > maxMs) {
+                        onScheduleError?.(strings.composer.invalidSchedule);
+                        return;
+                      }
                       setSendMenuOpen(false);
                       setScheduleOpen(false);
-                      void sendMessage(iso);
+                      void sendMessage(when.toISOString());
                     }}
                   >
                     <label>
@@ -286,42 +302,55 @@ export function SendBar({
           : null}
       </div>
       <button
-        className="toolbar-button"
+        className="toolbar-button footer-action"
         type="button"
         onClick={() => void saveDraft(false)}
         disabled={sending || saveState === "saving"}
         aria-keyshortcuts="Meta+S Control+S"
-        title={`${strings.composer.saveDraft} (${shortcutChord("S")})`}
+        title={withChord(strings.composer.saveDraft, formatChord("S"))}
       >
         <Save aria-hidden="true" />
-        {saveState === "saving"
-          ? strings.common.saving
-          : saveState === "saved"
-            ? savedAt
-              ? strings.composer.draftSavedAt(formatMessageDate(savedAt))
-              : strings.composer.draftSaved
-            : strings.composer.saveDraft}
+        <span className="action-label">{strings.composer.saveDraft}</span>
       </button>
-      {showAttachments ? (
+      {onToggleFormatting ? (
         <button
-          className="toolbar-button"
+          className="toolbar-button format-toggle footer-action"
           type="button"
-          onClick={() => void addAttachments()}
-          disabled={sending}
+          aria-pressed={formattingOpen}
+          aria-controls="composer-formatting"
+          title={strings.composer.showFormatting}
+          onClick={onToggleFormatting}
         >
-          <Paperclip />
-          {strings.composer.attach}
+          <span className="format-aa" aria-hidden="true">
+            Aa
+          </span>
+          <span className="action-label">
+            {strings.composer.showFormatting}
+          </span>
         </button>
       ) : null}
       {showAttachments ? (
         <button
-          className="toolbar-button"
+          className="toolbar-button footer-action"
+          type="button"
+          onClick={() => void addAttachments()}
+          disabled={sending}
+          title={strings.composer.attach}
+        >
+          <Paperclip aria-hidden="true" />
+          <span className="action-label">{strings.composer.attach}</span>
+        </button>
+      ) : null}
+      {showAttachments ? (
+        <button
+          className="toolbar-button footer-action"
           type="button"
           onClick={() => void addInlineImage()}
-          disabled={sending}
+          disabled={sending || !canInsertInlineImages}
+          title={strings.composer.picture}
         >
-          <ImagePlus />
-          {strings.composer.picture}
+          <ImagePlus aria-hidden="true" />
+          <span className="action-label">{strings.composer.picture}</span>
         </button>
       ) : null}
       <button

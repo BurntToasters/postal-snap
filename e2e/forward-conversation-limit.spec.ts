@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Bodies far over the forward limit still open a composer.
@@ -26,6 +30,7 @@ test("an oversized conversation reports too large and opens no composer", async 
   ).toBeVisible();
   await page.getByRole("button", { name: "More actions" }).click();
   const started = Date.now();
+  await revealMenuItem(page, "Forward conversation");
   await page
     .getByRole("menuitem", { name: "Forward conversation", exact: true })
     .click();

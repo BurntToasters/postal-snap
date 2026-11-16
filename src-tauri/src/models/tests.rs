@@ -474,6 +474,9 @@ fn folder_names_reject_blanks_reserved_and_control_chars() {
 
 fn valid_rule() -> FilterRule {
     FilterRule {
+        match_mode: "all".into(),
+        conditions: Vec::new(),
+        actions: Vec::new(),
         id: String::new(),
         account_id: "account-1".into(),
         name: "Bills".into(),

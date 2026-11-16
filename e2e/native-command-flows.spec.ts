@@ -1,13 +1,13 @@
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Missing command mocks must not turn user actions into silent errors.
 // These flows verify the IPC boundary; native TLS, dialogs, and file writes
 // remain covered by Rust/fixture tests and packaged-app manual checks.
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 test.afterEach(async ({ page }, testInfo) => {
   await attachIpcLog(page, testInfo);
@@ -20,12 +20,11 @@ async function commandArgs(
   await expect
     .poll(
       async () =>
-        (await recordedCalls(page)).filter((call) => call.command === command)
+        (await ipcCalls(page)).filter((call) => call.command === command)
           .length,
     )
     .toBeGreaterThan(0);
-  return (await recordedCalls(page)).find((call) => call.command === command)
-    ?.args;
+  return (await ipcCalls(page)).find((call) => call.command === command)?.args;
 }
 
 for (const all of [false, true]) {
@@ -35,8 +34,8 @@ for (const all of [false, true]) {
       await page.goto("/?previewable=1&filePair=1");
       await page.getByRole("option", { name: /Weekend plans/i }).click();
       const button = page.getByRole("button", {
-        name: all ? "Save all files" : "Download file: family.png",
-        exact: true,
+        name: all ? "Save all files" : /^Download file: family\.png/,
+        exact: all,
       });
       await button.click();
       const args = await commandArgs(
@@ -58,7 +57,9 @@ for (const all of [false, true]) {
 test("forwards the open message as an attached MIME copy", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Forward as attachment");
   await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await revealMenuItem(page, "Forward as attachment");
   await page
     .getByRole("menuitem", { name: "Forward as attachment", exact: true })
     .click();
@@ -75,7 +76,9 @@ test("forwards the open message as an attached MIME copy", async ({ page }) => {
 test("copies one message without removing its source", async ({ page }) => {
   await page.goto("/?manyFolders=1");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Copy to Receipts");
   await page.getByRole("button", { name: "More actions", exact: true }).click();
+  await revealMenuItem(page, "Copy to Receipts");
   await page
     .getByRole("menuitem", { name: "Copy to Receipts", exact: true })
     .click();
@@ -97,7 +100,7 @@ test("tests a saved account through the native boundary", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  const manage = page.getByRole("button", { name: "Manage Sam", exact: true });
+  const manage = page.getByRole("button", { name: /^Manage Sam\b/ });
   await manage.click();
   await page
     .getByRole("button", { name: "Test connection", exact: true })
@@ -119,7 +122,7 @@ test("clears downloads only after confirmation", async ({ page }) => {
   page.once("dialog", (dialog) => void dialog.dismiss());
   await clear.click();
   expect(
-    (await recordedCalls(page)).some(
+    (await ipcCalls(page)).some(
       (call) => call.command === "clear_downloaded_mail",
     ),
   ).toBe(false);

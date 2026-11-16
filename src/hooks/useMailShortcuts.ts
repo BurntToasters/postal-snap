@@ -1,5 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
-import { TEXT_SCALES } from "../components/settings/displayChoices";
+import { useEffect, type RefObject } from "react";
 import type { SettingsSaveUpdate } from "../components/settings/useSettingsSave";
 import { useAppStore } from "../store";
 import {
@@ -12,13 +11,19 @@ import { navigationOrder } from "../threads";
 import type { AccountSummary, MessageSummary, ReadingPane } from "../types";
 import { emitAction, onAction } from "../actions/bus";
 import { matchShortcut } from "../actions/match";
+import { stepTextScale } from "../actions/textScale";
 import { unreadMessageStep } from "../actions/registry";
 import type { ActionId } from "../actions/types";
 import { hasUndoableMove, undoLastMove } from "../undoMove";
+import {
+  startMboxExport,
+  startMboxImport,
+} from "../components/mail/mboxOperations";
 
 export interface MailShortcutsOptions {
   accounts: AccountSummary[];
   selectAccount: (id: string) => void;
+  selectMailbox?: (mailboxId: number) => void;
   setAccountSwitcherOpen: (open: boolean) => void;
   openComposer: () => void;
   refresh: () => Promise<void>;
@@ -43,6 +48,7 @@ function archiveShortcutAction(): "archive" | "move-to-inbox" {
 export function useMailShortcuts({
   accounts,
   selectAccount,
+  selectMailbox,
   setAccountSwitcherOpen,
   openComposer,
   refresh,
@@ -55,14 +61,21 @@ export function useMailShortcuts({
   openCommandPalette,
   openShortcutOverlay,
 }: MailShortcutsOptions) {
-  const pendingTextScale = useRef<number | null>(null);
-
   useEffect(() => {
     const menuAction = (action: ActionId) => {
       if (action === "compose") openComposer();
       if (action === "get-mail") void refresh();
       if (action === "get-mail-all") void refreshAll();
       if (action === "settings") onOpenSettings();
+      if (action === "export-mailbox" || action === "import-mbox") {
+        const state = useAppStore.getState();
+        const accountId = state.activeAccountId;
+        const mailboxId = state.activeMailboxId;
+        if (!accountId || mailboxId === undefined || state.activeLocalView)
+          return;
+        if (action === "export-mailbox") startMboxExport(accountId, mailboxId);
+        else startMboxImport(accountId, mailboxId, refresh);
+      }
       if (action === "open-command-palette") openCommandPalette();
       if (action === "show-shortcuts") openShortcutOverlay();
       if (action === "undo") undoLastMove();
@@ -83,7 +96,7 @@ export function useMailShortcuts({
         }
         if (inbox.id === state.activeMailboxId && !state.activeLocalView)
           return;
-        state.selectMailbox(inbox.id);
+        (selectMailbox ?? state.selectMailbox)(inbox.id);
       }
       if (
         action === "next-unread-mailbox" ||
@@ -98,7 +111,7 @@ export function useMailShortcuts({
           state.setError(strings.mail.noOtherUnreadMailbox);
           return;
         }
-        state.selectMailbox(next.id);
+        (selectMailbox ?? state.selectMailbox)(next.id);
       }
       if (
         action === "text-larger" ||
@@ -106,31 +119,10 @@ export function useMailShortcuts({
         action === "text-size-larger" ||
         action === "text-size-smaller"
       ) {
-        const scales = TEXT_SCALES;
-        const requestedScale = pendingTextScale.current;
-        const currentScale =
-          requestedScale ?? useAppStore.getState().settings.textScale;
-        const current = scales.reduce(
-          (closest, value) =>
-            Math.abs(value - currentScale) < Math.abs(closest - currentScale)
-              ? value
-              : closest,
-          1,
+        stepTextScale(
+          action === "text-larger" || action === "text-size-larger" ? 1 : -1,
+          updateSettings,
         );
-        const currentIndex = scales.indexOf(current);
-        const delta =
-          action === "text-larger" || action === "text-size-larger" ? 1 : -1;
-        const nextIndex = Math.max(
-          0,
-          Math.min(scales.length - 1, currentIndex + delta),
-        );
-        const nextScale = scales[nextIndex];
-        pendingTextScale.current = nextScale;
-        void updateSettings({ textScale: nextScale }).finally(() => {
-          if (pendingTextScale.current === nextScale) {
-            pendingTextScale.current = null;
-          }
-        });
       }
       if (
         action === "reading-pane-right" ||
@@ -305,6 +297,7 @@ export function useMailShortcuts({
     relativeMessage,
     searchInput,
     selectAccount,
+    selectMailbox,
     setAccountSwitcherOpen,
     updateSettings,
   ]);

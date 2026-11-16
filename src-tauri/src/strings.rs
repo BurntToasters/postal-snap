@@ -77,3 +77,11 @@ pub mod files {
         )
     }
 }
+
+/// Placeholder error for commands whose behavior lands in a later release.
+pub const NOT_AVAILABLE_YET: &str = "Not available yet.";
+
+/// Shown when a PDF cannot be rendered for preview.
+pub mod preview {
+    pub const PDF_UNAVAILABLE: &str = "This PDF can't be previewed. Save it to open it.";
+}

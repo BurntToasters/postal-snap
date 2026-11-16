@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import type { TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. A received-sender suggestion is absent from the recipient picker.
@@ -13,6 +13,8 @@ import { installMockIpc } from "./mock-ipc";
 
 const variants = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },

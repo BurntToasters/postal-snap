@@ -4,6 +4,7 @@ import { useAppStore } from "./store";
 import { conversationMessages } from "./threads";
 import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 /**
  * Copies every loaded message in this mailbox conversation into another folder.
@@ -51,6 +52,6 @@ export async function copyLoadedConversation(
   } catch (cause) {
     const current = useAppStore.getState();
     if (current.activeAccountId !== summary.accountId) return;
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }

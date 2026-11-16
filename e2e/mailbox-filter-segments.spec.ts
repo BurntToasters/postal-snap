@@ -1,6 +1,9 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered: F1-F8 (docs/0.4.2-UI-FAILURE-INVENTORY.md).
 // F1 overflow, F2 More active state, F3 menu keyboard, F4 radio arrows,
@@ -43,7 +46,7 @@ test("F2 choosing Pinned names and styles the More button", async ({
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(moreButton(page)).toHaveAccessibleName("More filters: Pinned");
   await expect(moreButton(page)).toHaveClass(/checked/);
-  for (const name of ["All", "Unread", "Starred"]) {
+  for (const name of ["All", "Unread", "Flagged"]) {
     await expect(page.getByRole("radio", { name })).not.toBeChecked();
   }
   await moreButton(page).click();
@@ -91,7 +94,7 @@ test("F4 radio arrow keys never move focus into More", async ({ page }) => {
   await page.getByRole("radio", { name: "All" }).focus();
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("radio", { name: "Starred" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Flagged" })).toBeChecked();
   await page.keyboard.press("ArrowRight");
   await expect(moreButton(page)).not.toBeFocused();
 });
@@ -101,11 +104,11 @@ test("F7 a remembered filter shows in the control", async ({ page }) => {
   await expect(moreButton(page)).toHaveAccessibleName("More filters: To me");
   await expect(moreButton(page)).toHaveClass(/checked/);
   await page.goto("/?rowMix=1&mailboxFilter=starred");
-  await expect(page.getByRole("radio", { name: "Starred" })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Flagged" })).toBeChecked();
   await expect(moreButton(page)).toHaveAccessibleName("More filters");
 });
 
-for (const density of ["compact", "comfortable"] as const)
+for (const density of ["compact", "normal", "comfortable"] as const)
   for (const scale of [1, 2] as const)
     for (const pane of ["bottom", "right"] as const)
       test(`F6 every More item is reachable: ${density} ${scale}x ${pane}`, async ({
@@ -169,12 +172,12 @@ for (const width of [1280, 900]) {
 
 type Combo = {
   width: number;
-  density: "comfortable" | "compact";
+  density: "comfortable" | "normal" | "compact";
   scale: 1 | 2;
   pane: "right" | "bottom";
 };
 const combos: Combo[] = [];
-for (const density of ["comfortable", "compact"] as const)
+for (const density of ["comfortable", "normal", "compact"] as const)
   for (const scale of [1, 2] as const)
     for (const pane of ["right", "bottom"] as const)
       combos.push({ width: 1280, density, scale, pane });

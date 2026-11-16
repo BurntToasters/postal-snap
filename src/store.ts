@@ -75,13 +75,13 @@ export const defaultSettings: AppSettings = {
   textScale: 1,
   privateNotifications: false,
   theme: "system",
-  density: "comfortable",
+  density: "normal",
   cachePolicy: { mode: "recent", days: 90, maxBytes: 1_073_741_824 },
   lastAccountId: null,
   lastMailboxId: null,
-  folderPaneWidth: 264,
-  messagePaneWidth: 400,
-  readerPaneHeight: 360,
+  folderPaneWidth: 240,
+  messagePaneWidth: 380,
+  readerPaneHeight: 420,
   windowEffects: true,
   sidebarVisible: true,
   undoSendSeconds: 10,
@@ -264,6 +264,14 @@ function openReplacement(
   useAppStore.setState((state) => openComposerState(state, composeSeed));
   const { composerOpen, composeNonce } = useAppStore.getState();
   mountingSession = saved && composerOpen ? composeNonce : undefined;
+}
+
+function sameSyncState(a: SyncState, b: SyncState): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<
+    keyof SyncState
+  >;
+  for (const key of keys) if (a[key] !== b[key]) return false;
+  return true;
 }
 
 async function runReplacements(): Promise<void> {
@@ -463,23 +471,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMessages: (messages, messageCursor, hasMoreMessages = false) =>
     set({ messages, messageCursor, hasMoreMessages }),
   appendMessages: (messages, messageCursor, hasMoreMessages = false) =>
-    set((state) => ({
-      messages: [
-        ...state.messages,
-        ...messages.filter(
-          (message) =>
-            !state.messages.some((existing) => existing.id === message.id),
-        ),
-      ],
-      messageCursor,
-      hasMoreMessages,
-    })),
+    set((state) => {
+      const seen = new Set(state.messages.map((message) => message.id));
+      const fresh = messages.filter((message) => {
+        if (seen.has(message.id)) return false;
+        seen.add(message.id);
+        return true;
+      });
+      return {
+        messages: [...state.messages, ...fresh],
+        messageCursor,
+        hasMoreMessages,
+      };
+    }),
   setDrafts: (drafts) => set({ drafts }),
   setOutbox: (outbox) => set({ outbox }),
   setSnoozed: (snoozed) => set({ snoozed }),
   selectMessage: (selectedMessage) => set({ selectedMessage }),
   setSync: (sync) =>
-    set((state) => ({ sync: { ...state.sync, [sync.accountId]: sync } })),
+    set((state) => {
+      const previous = state.sync[sync.accountId];
+      if (previous && sameSyncState(previous, sync)) return state;
+      return { sync: { ...state.sync, [sync.accountId]: sync } };
+    }),
   setSettings: (settings) =>
     set((state) => {
       const activeAccountId =

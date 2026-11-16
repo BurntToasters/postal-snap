@@ -27,6 +27,7 @@ import {
   validateSubject,
 } from "./composerValidate";
 import type { ComposerWarningSetters } from "./useComposerWarnings";
+import { errorText } from "../../errors";
 
 type SaveState = "unsaved" | "saving" | "saved";
 
@@ -264,8 +265,9 @@ export function useComposerSend({
         }
         close();
       } catch (cause) {
+        pendingCloseRef.current = false;
         announceLocalMailChanged(accountId);
-        setError(String(cause));
+        setError(errorText(cause));
       } finally {
         isSendingRef.current = false;
         setSending(false);

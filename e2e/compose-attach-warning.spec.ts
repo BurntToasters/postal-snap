@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. A message that says "attached" with no file sends without a warning.
@@ -15,7 +15,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 async function startMessage(page: Page, path: string, body: string) {
@@ -30,7 +29,7 @@ const dialog = (page: Page) =>
   page.getByRole("alertdialog", { name: "Send without an attachment?" });
 
 async function sends(page: Page) {
-  return (await recordedCalls(page)).filter(
+  return (await ipcCalls(page)).filter(
     (call) => call.command === "send_message",
   );
 }
@@ -94,7 +93,7 @@ test("Add attachment opens the picker and then sends without asking", async ({
   await expect(page.locator(".compose-attachments")).toContainText(
     "budget.pdf",
   );
-  const calls = await recordedCalls(page);
+  const calls = await ipcCalls(page);
   expect(calls.filter((call) => call.command === "choose_attachments")).toEqual(
     [
       {

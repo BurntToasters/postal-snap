@@ -11,20 +11,26 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     function inspectExternalUrl(raw: string) {
       if (raw.length > 16 * 1024) {
-        throw new Error("That link is too long.");
+        throw mock.mockError("invalidInput", "That link is too long.");
       }
       let parsed: URL;
       try {
         parsed = new URL(raw);
       } catch {
-        throw new Error("That link is not a valid web address.");
+        throw mock.mockError(
+          "invalidInput",
+          "That link is not a valid web address.",
+        );
       }
       if (
         parsed.username ||
         parsed.password ||
         !/^https?:$/.test(parsed.protocol)
       ) {
-        throw new Error("Postal Snap can only open ordinary web links.");
+        throw mock.mockError(
+          "invalidInput",
+          "Postal Snap can only open ordinary web links.",
+        );
       }
       return parsed;
     }
@@ -35,8 +41,14 @@ export async function registerMockRemoteSecurity(page: Page): Promise<void> {
           return { status: "blocked" };
         if (location.search.includes("threatBlocked"))
           return { status: "reportedThreat" };
+        if (location.search.includes("nonImageData"))
+          return {
+            status: "loaded",
+            dataUrl:
+              "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+          };
         if (location.search.includes("imageFailed"))
-          throw new Error("Image unavailable.");
+          throw mock.mockError("operationFailed", "Image unavailable.");
         return {
           status: "loaded",
           dataUrl: "data:image/png;base64,iVBORw0KGgo=",

@@ -34,6 +34,18 @@ const account = makeAccount();
 
 const mockedSaveDraft = vi.mocked(api.saveDraft);
 
+/** Checkable message options live in the header's options menu. */
+function optionItem(name: string) {
+  if (!screen.queryByRole("menu", { name: strings.composer.messageOptions }))
+    fireEvent.click(
+      // The name also lists active options, so match its prefix.
+      screen.getByRole("button", {
+        name: new RegExp(`^${strings.composer.messageOptions}`),
+      }),
+    );
+  return screen.getByRole("menuitemcheckbox", { name });
+}
+
 function confirmEmptyMessage() {
   const dialog = screen.queryByRole("alertdialog", {
     name: strings.composer.noMessageTitle,
@@ -243,8 +255,8 @@ describe("composer draft persistence", () => {
     const send = vi.mocked(api.sendMessage);
     send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
     const view = render(<Composer accountId={account.id} />);
-    const box = screen.getByRole("checkbox", { name: "High importance" });
-    expect(box).not.toBeChecked();
+    const box = optionItem("High importance");
+    expect(box).toHaveAttribute("aria-checked", "false");
     fireEvent.click(box);
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
@@ -285,22 +297,23 @@ describe("composer draft persistence", () => {
       },
     });
     render(<Composer accountId={account.id} />);
-    expect(
-      screen.getByRole("checkbox", { name: "High importance" }),
-    ).toBeChecked();
+    expect(optionItem("High importance")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("marks a new message low importance and clears high importance", async () => {
     const send = vi.mocked(api.sendMessage);
     send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
     const view = render(<Composer accountId={account.id} />);
-    const high = screen.getByRole("checkbox", { name: "High importance" });
-    const low = screen.getByRole("checkbox", { name: "Low importance" });
-    expect(low).not.toBeChecked();
+    const high = optionItem("High importance");
+    const low = optionItem("Low importance");
+    expect(low).toHaveAttribute("aria-checked", "false");
     fireEvent.click(high);
     fireEvent.click(low);
-    expect(high).not.toBeChecked();
-    expect(low).toBeChecked();
+    expect(high).toHaveAttribute("aria-checked", "false");
+    expect(low).toHaveAttribute("aria-checked", "true");
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
     });
@@ -339,22 +352,22 @@ describe("composer draft persistence", () => {
       },
     });
     render(<Composer accountId={account.id} />);
-    expect(
-      screen.getByRole("checkbox", { name: "Low importance" }),
-    ).toBeChecked();
-    expect(
-      screen.getByRole("checkbox", { name: "High importance" }),
-    ).not.toBeChecked();
+    expect(optionItem("Low importance")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(optionItem("High importance")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
   });
 
   it("requests a read receipt only when that option is on", async () => {
     const send = vi.mocked(api.sendMessage);
     send.mockResolvedValue({ id: "outbox-1", state: "sent", detail: null });
     const view = render(<Composer accountId={account.id} />);
-    const box = screen.getByRole("checkbox", {
-      name: "Request a read receipt",
-    });
-    expect(box).not.toBeChecked();
+    const box = optionItem("Request a read receipt");
+    expect(box).toHaveAttribute("aria-checked", "false");
     fireEvent.click(box);
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
       target: { value: "jane@example.test" },
@@ -390,9 +403,10 @@ describe("composer draft persistence", () => {
       },
     });
     render(<Composer accountId={account.id} />);
-    expect(
-      screen.getByRole("checkbox", { name: "Request a read receipt" }),
-    ).toBeChecked();
+    expect(optionItem("Request a read receipt")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("keeps a saved draft's Bcc when the preference is on", () => {
@@ -736,24 +750,15 @@ describe("composer draft persistence", () => {
     expect(
       screen.queryByRole("button", { name: strings.composer.picture }),
     ).toBeNull();
+    // Redirect has no options control at all, so no menu can offer these.
     expect(
-      screen.queryByRole("checkbox", {
-        name: strings.composer.includeSignature,
-      }),
+      screen.queryByRole("button", { name: strings.composer.messageOptions }),
     ).toBeNull();
     expect(
-      screen.queryByRole("checkbox", {
-        name: strings.composer.highImportance,
-      }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("checkbox", {
-        name: strings.composer.lowImportance,
-      }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("checkbox", {
-        name: strings.composer.requestReceipt,
+      screen.queryByRole("button", {
+        name: strings.composer.messageOptionsState([
+          strings.composer.highImportanceState,
+        ]),
       }),
     ).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("name@example.com"), {
@@ -1156,7 +1161,7 @@ describe("composer draft persistence", () => {
     expect(api.releaseComposeAttachments).toHaveBeenCalledWith(account.id, [
       "broken-inline",
     ]);
-    expect(useAppStore.getState().error).toBe("Error: image failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("restores stored inline images and reports restore failures", async () => {
@@ -1292,7 +1297,7 @@ describe("composer draft persistence", () => {
       await Promise.resolve();
     });
     expect(api.deleteDraft).toHaveBeenCalledWith("draft-delete", account.id);
-    expect(useAppStore.getState().error).toBe("Error: delete failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("asks before sending to 10 or more people", async () => {
@@ -1459,7 +1464,7 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: send failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
 
     send.mockResolvedValueOnce({
       id: "attention",
@@ -1484,13 +1489,13 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: save failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
     useAppStore.setState({ error: undefined });
     await act(async () => {
       vi.advanceTimersByTime(6_000);
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: save failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("selects the addressed alias for replies", () => {
@@ -1613,7 +1618,7 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: picker failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
 
     vi.mocked(api.chooseAttachments).mockResolvedValueOnce([
       {
@@ -1634,7 +1639,7 @@ describe("composer draft persistence", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useAppStore.getState().error).toBe("Error: release failed");
+    expect(useAppStore.getState().error).toBe(strings.errors.operationFailed);
   });
 
   it("maximizes a signed composer and saves with the keyboard", async () => {
@@ -1643,9 +1648,7 @@ describe("composer draft persistence", () => {
     });
     const { container } = render(<Composer accountId={account.id} />);
     expect(screen.getByText("Best, Sam")).toBeVisible();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Include signature" }),
-    );
+    fireEvent.click(optionItem("Include signature"));
     expect(screen.queryByText("Best, Sam")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Maximize editor" }));
     expect(container.querySelector(".composer-maximized")).toBeInTheDocument();

@@ -1,6 +1,6 @@
 # Postal Snap
 
-Postal Snap is an accessible desktop email client for anyone who wants a calm mail experience. Big readable text, obvious buttons, no clutter — and your mail stays on your computer.
+Postal Snap is an accessible desktop email client for anyone who wants a calm, professional mail experience. A space-efficient default layout, with Comfortable mode and text up to 200% — and your mail stays on your computer.
 
 ## Download
 
@@ -18,7 +18,7 @@ Linux AppImages need FUSE 2 (`libfuse2` on Ubuntu 22.04, `libfuse2t64` on 24.04)
 
 - **Guided iCloud setup:** step-by-step sign-in with an app-specific password; manual IMAP/SMTP for other providers.
 - **Calm mailbox:** familiar folders, large labels, clear unread counts, right/bottom/hidden reading panes.
-- **Readable mail:** adjustable text size up to 200%, light/dark follows the system, reduced-motion and high-contrast support.
+- **Readable mail:** Normal, Comfortable, and Compact density; adjustable text size up to 200%; light/dark follows the system; reduced-motion and high-contrast support.
 - **Full keyboard use:** shortcuts for writing, replying, archiving, and navigating; visible focus everywhere.
 - **Rich compose:** formatting toolbar, inline images, attachments with size warnings, drafts that autosave.
 - **Aliases:** send and receive with iCloud aliases and custom domains.
@@ -41,7 +41,7 @@ Linux AppImages need FUSE 2 (`libfuse2` on Ubuntu 22.04, `libfuse2t64` on 24.04)
 
 ## Development
 
-Prerequisites: Node.js 24+, Rust 1.97.1, and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+Prerequisites: Node.js `^24.22.1` or `>=26.13.0` (CI uses 26.13.0), Rust (version pinned in `rust-toolchain.toml`), and the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 npm install
@@ -59,4 +59,4 @@ npm run audit
 npm run licenses
 ```
 
-Real iCloud and signed-package checks remain manual release gates. See [Releasing](docs/RELEASING.md), the [0.1 release checklist](docs/RELEASE_CHECKLIST.md), [Architecture](docs/ARCHITECTURE.md), and [Security](SECURITY.md).
+Real iCloud and signed-package checks remain manual release gates. See [Releasing](docs/RELEASING.md), the [release checklist](docs/RELEASE_CHECKLIST.md), [Architecture](docs/ARCHITECTURE.md), and [Security](SECURITY.md).

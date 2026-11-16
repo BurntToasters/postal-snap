@@ -35,6 +35,10 @@ Postal Snap's sync layer additionally validates the required counts and UID
 identity before writes, and confirms a changed mailbox generation or empty
 mailbox against `EXAMINE` before replacing or clearing cached state.
 
+Dependency change: `pin-utils` is removed (RUSTSEC-2026-0441). Its
+`unsafe_pinned!` macro is a local copy in `src/lib.rs` with the same projection;
+its `#[allow(unsafe_code)]` covers only that macro.
+
 Keep the local changes limited to these confirmed response-handling issues.
 Remove each patch when an upstream release provides equivalent behavior, then
 rerun the canonical mail integration suite.

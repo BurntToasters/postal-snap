@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc, recordedCalls } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. Switching to plain text silently drops formatting, with no confirmation.
@@ -18,7 +18,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 const plainBox = (page: Page) =>
@@ -29,7 +28,7 @@ async function openMenu(page: Page) {
 }
 
 async function callsOf(page: Page, command: string) {
-  return (await recordedCalls(page)).filter((call) => call.command === command);
+  return (await ipcCalls(page)).filter((call) => call.command === command);
 }
 
 test("confirms, converts, and sends a plain text message", async ({
@@ -137,9 +136,18 @@ test("header menu is keyboard operable and Escape keeps the composer", async ({
   // Empty body: no formatting to lose, so the switch is immediate.
   await page.keyboard.press("Enter");
   await expect(plainBox(page)).toBeFocused();
+  // Normal density: the header control meets the --target-size token.
   const target = await button.boundingBox();
-  expect(target?.width).toBeGreaterThanOrEqual(44);
-  expect(target?.height).toBeGreaterThanOrEqual(44);
+  const token = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.cssText = "position:fixed;width:var(--target-size)";
+    document.body.append(probe);
+    const width = probe.getBoundingClientRect().width;
+    probe.remove();
+    return width;
+  });
+  expect(target?.width).toBeGreaterThanOrEqual(token);
+  expect(target?.height).toBeGreaterThanOrEqual(token);
 });
 
 test("plain editor follows text scale and shows focus", async ({ page }) => {
@@ -159,7 +167,13 @@ test("plain editor follows text scale and shows focus", async ({ page }) => {
   const rootSize = await page.evaluate(() =>
     Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
   );
-  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize);
+  // Plain text inherits the body UI size, which scales with text size.
+  const bodySize = await page.evaluate(() =>
+    Number.parseFloat(getComputedStyle(document.body).fontSize),
+  );
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(bodySize);
+  // Normal body is 0.875rem (WP2.2), so the ratio to the root is 0.875.
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(rootSize * 0.875);
   expect(metrics.height).toBeGreaterThanOrEqual(160);
   expect(metrics.focusRing).not.toBe("none");
   expect(metrics.clipped).toBe(false);
@@ -171,7 +185,7 @@ test("account default starts new messages and replies as plain text", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
   await page
     .getByLabel("New messages start as")

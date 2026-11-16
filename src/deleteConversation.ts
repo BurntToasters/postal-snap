@@ -4,6 +4,7 @@ import { useAppStore } from "./store";
 import { conversationMessages, messageAfterRemovals } from "./threads";
 import type { MailboxSummary, MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
+import { errorText } from "./errors";
 
 function sameIds(left: number[], right: number[]): boolean {
   if (left.length !== right.length) return false;
@@ -58,7 +59,7 @@ export async function deleteListedMessage(
   try {
     await api.deleteTrashMessages(summary.accountId, [summary.id]);
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
     return;
   }
   const after = useAppStore.getState();
@@ -140,7 +141,7 @@ export async function deleteLoadedConversation(
   try {
     await api.deleteTrashMessages(summary.accountId, ids);
   } catch (cause) {
-    useAppStore.getState().setError(String(cause));
+    useAppStore.getState().setError(errorText(cause));
     return;
   }
   const after = useAppStore.getState();

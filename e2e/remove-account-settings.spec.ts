@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A removed account's pinned folders stay in saved settings, so a later
@@ -22,7 +25,7 @@ test("removing an account drops only its saved folder pins", async ({
   await page.goto("/?multiAccount=1&pinnedBoth=1");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("tab", { name: "Accounts" }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .locator(".account-settings-card")

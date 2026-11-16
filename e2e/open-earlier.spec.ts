@@ -1,6 +1,10 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { revealMenuItem } from "./menu-reveal";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A message with no earlier Message-ID hides the action.
@@ -30,8 +34,11 @@ test("a missing earlier message stays on the open message", async ({
   page,
 }) => {
   await page.goto("/?earlierMissing=1");
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("menuitem", { name: "Open earlier message" }).click();
   await expect(page.getByRole("alert")).toContainText(
     "That earlier message is not on this computer.",
@@ -43,8 +50,11 @@ test("a missing earlier message stays on the open message", async ({
 
 test("opens the earlier message in its folder", async ({ page }) => {
   await page.goto("/?earlier=1");
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("option", { name: /Weekend plans/i }).click();
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("button", { name: "More actions" }).click();
+  await revealMenuItem(page, "Open earlier message");
   await page.getByRole("menuitem", { name: "Open earlier message" }).click();
   await expect(
     page.getByRole("heading", { name: "Earlier note" }),

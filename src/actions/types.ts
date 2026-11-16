@@ -79,7 +79,13 @@ export type ActionId =
   | "star-focused"
   | "text-size"
   | "trash-focused"
-  | "undo";
+  | "undo"
+  // Placeholders until their feature WPs wire them; hidden from palette and overlay.
+  | "flag-color"
+  | "clear-flag"
+  | "export-mailbox"
+  | "import-mbox"
+  | "open-eml";
 
 /** Modifier flags are exact when set and ignored when undefined. */
 export interface ShortcutSpec {

@@ -5,9 +5,15 @@ import { defaultSettings, useAppStore } from "../store";
 import { mockSaveSettingsPassthrough } from "./helpers/api-mocks";
 import { resetStore } from "./helpers/store";
 
+vi.mock("../window-fx", () => ({
+  supportsWorkspaceWindowFx: vi.fn().mockResolvedValue(true),
+  syncWorkspaceWindowFx: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../api", () => ({
   api: {
     addAccount: vi.fn(),
+    distribution: vi.fn().mockResolvedValue("direct"),
     getSettings: vi.fn(),
     saveSettings: vi.fn((settings: unknown) => Promise.resolve(settings)),
     openHelpUrl: vi.fn(),
@@ -51,7 +57,7 @@ describe("first-run setup flow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     expect(screen.getByText(/Choose how mail looks/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
-    expect(screen.getByText(/Make it comfortable/i)).toHaveFocus();
+    expect(screen.getByText(/Choose your options/i)).toHaveFocus();
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     expect(screen.getByText(/Add your email/i)).toHaveFocus();
   });
@@ -150,6 +156,9 @@ describe("first-run setup flow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
+    await screen.findByRole("checkbox", {
+      name: /Translucent window background/i,
+    });
     const toggles = screen.getAllByRole("checkbox");
     for (const toggle of toggles) fireEvent.click(toggle);
     await waitFor(() => {
@@ -175,7 +184,7 @@ describe("first-run setup flow", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
     fireEvent.click(screen.getByRole("button", { name: /Back to setup/i }));
-    expect(screen.getByText(/Make it comfortable/i)).toBeVisible();
+    expect(screen.getByText(/Choose your options/i)).toBeVisible();
   });
 
   it("lets Windows first-run setup keep the tray option on by default", async () => {

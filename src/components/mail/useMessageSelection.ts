@@ -13,6 +13,7 @@ import { pinSelectedMessages } from "../../pinConversation";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
 import { messageAfterRemovals } from "../../threads";
 import { undoableMove, undoTargetFor } from "../../undoMove";
+import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -124,7 +125,7 @@ export function useMessageSelection({
       await refreshList();
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -160,7 +161,7 @@ export function useMessageSelection({
       await refreshList();
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -214,7 +215,7 @@ export function useMessageSelection({
       await refreshList();
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -258,7 +259,7 @@ export function useMessageSelection({
     try {
       await api.snoozeMessages(accountId, ids, untilIso);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       setBulkBusy(false);
       return;
     }
@@ -271,7 +272,7 @@ export function useMessageSelection({
       await loadAccountData();
       await refreshList();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       return;
     } finally {
       setBulkBusy(false);
@@ -307,7 +308,7 @@ export function useMessageSelection({
       else if (outcome.queued > 0) setError(strings.mail.copyQueued);
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -383,7 +384,7 @@ export function useMessageSelection({
       await refreshList();
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -407,7 +408,7 @@ export function useMessageSelection({
       }
       await loadAccountData();
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setBulkBusy(false);
     }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Download, X } from "lucide-react";
 import { api } from "../../api";
@@ -7,6 +7,7 @@ import { strings } from "../../i18n";
 import type { MessageSource } from "../../types";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
 /** Raw message source. Always text in <pre> and table cells, never HTML. */
 export function OriginalDialog({
@@ -20,8 +21,9 @@ export function OriginalDialog({
   onClose: () => void;
   onError: (message: string) => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
   const [source, setSource] = useState<MessageSource>();
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -35,7 +37,7 @@ export function OriginalDialog({
       })
       .catch((cause) => {
         if (!active) return;
-        onError(String(cause));
+        onError(errorText(cause));
         onClose();
       });
     return () => {
@@ -68,7 +70,7 @@ export function OriginalDialog({
     try {
       await api.saveMessageEml(accountId, messageId);
     } catch (cause) {
-      onError(String(cause));
+      onError(errorText(cause));
     } finally {
       setSaving(false);
     }

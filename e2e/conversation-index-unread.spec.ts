@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. An unread message in the conversation is listed without saying so.
@@ -25,10 +28,10 @@ test("an unread message in the conversation says so", async ({ page }) => {
     "Unread",
   ]);
   await expect(
-    index.getByRole("button", { name: /Unread, Older family note from Lee/ }),
+    index.getByRole("button", { name: /Older family note Unread Lee/ }),
   ).toBeVisible();
   await expect(
-    index.getByRole("button", { name: /^Weekend plans from Jane/ }),
+    index.getByRole("button", { name: /^Weekend plans .*Jane/ }),
   ).toBeVisible();
 });
 

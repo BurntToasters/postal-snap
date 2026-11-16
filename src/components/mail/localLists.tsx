@@ -1,6 +1,15 @@
 import { outboxDetail } from "../../outboxDetail";
-import { useEffect, useState } from "react";
-import { Clock, FileText, Send, TriangleAlert, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  Clock,
+  FileText,
+  MailOpen,
+  Search,
+  Send,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   formatFullMessageDate,
   formatMessageDate,
@@ -9,6 +18,30 @@ import {
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { MessageSummary } from "../../types";
+
+/** Icon, title and hint, centered. The icon is decorative; the text is the name. */
+export function ListEmptyState({
+  icon: Icon = MailOpen,
+  title,
+  hint,
+  children,
+}: {
+  icon?: LucideIcon;
+  title: string;
+  hint?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="list-state" role="status" aria-live="polite">
+      <div className="empty-state-icon">
+        <Icon aria-hidden="true" />
+      </div>
+      <p className="list-state-title">{title}</p>
+      {hint ? <p className="list-state-hint">{hint}</p> : null}
+      {children}
+    </div>
+  );
+}
 
 export function SnoozedList({
   items,
@@ -23,9 +56,11 @@ export function SnoozedList({
 }) {
   if (items.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noSnoozed}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : Clock}
+        title={emptyLabel ?? strings.mail.noSnoozed}
+        hint={emptyLabel ? undefined : strings.mail.noSnoozedHint}
+      />
     );
   return (
     <div className="local-mail-list">
@@ -52,7 +87,7 @@ export function SnoozedList({
               <small>
                 {item.message.senderName || item.message.senderAddress}
               </small>
-              <small>
+              <small className="local-row-status">
                 {strings.mail.snoozedUntil(
                   formatMessageDate(item.snoozedUntil),
                 )}
@@ -67,7 +102,7 @@ export function SnoozedList({
           </button>
           <button
             type="button"
-            className="icon-button"
+            className="row-action local-row-action"
             onClick={() => void onUnsnooze(item.message.id)}
             aria-label={strings.mail.unsnoozeMessage(
               item.message.subject || strings.common.noSubject,
@@ -95,9 +130,11 @@ export function DraftList({
 }) {
   if (drafts.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noDrafts}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : FileText}
+        title={emptyLabel ?? strings.mail.noDrafts}
+        hint={emptyLabel ? undefined : strings.mail.noDraftsHint}
+      />
     );
   return (
     <div className="local-mail-list">
@@ -119,36 +156,38 @@ export function DraftList({
           <span>
             <strong>{draft.subject || strings.common.noSubject}</strong>
             <small>{draft.recipients || strings.mail.noRecipientYet}</small>
-            {draftKindLabel(draft.sourceKind) ? (
-              <small className="draft-kind">
-                {draftKindLabel(draft.sourceKind)}
-              </small>
-            ) : null}
             {draft.preview ? (
               <small className="draft-preview">{draft.preview}</small>
             ) : null}
-            {draft.attachmentCount ? (
-              <small className="draft-files">
-                {strings.mail.draftFiles(draft.attachmentCount)}
+            <span className="local-row-meta">
+              {draftKindLabel(draft.sourceKind) ? (
+                <small className="draft-kind">
+                  {draftKindLabel(draft.sourceKind)}
+                </small>
+              ) : null}
+              {draft.attachmentCount ? (
+                <small className="draft-files">
+                  {strings.mail.draftFiles(draft.attachmentCount)}
+                </small>
+              ) : null}
+              {draftFromLabel(draft.fromAddress, accountEmail) ? (
+                <small className="draft-from">
+                  {draftFromLabel(draft.fromAddress, accountEmail)}
+                </small>
+              ) : null}
+              <small
+                className={`draft-sync-state ${draft.syncState}`}
+                title={draft.syncDetail ?? undefined}
+              >
+                {draft.syncState === "synced"
+                  ? strings.mail.savedServer
+                  : draft.syncState === "conflict"
+                    ? strings.mail.recoveredConflict
+                    : draft.syncState === "localOnly"
+                      ? strings.mail.savedLocal
+                      : strings.mail.savingServer}
               </small>
-            ) : null}
-            {draftFromLabel(draft.fromAddress, accountEmail) ? (
-              <small className="draft-from">
-                {draftFromLabel(draft.fromAddress, accountEmail)}
-              </small>
-            ) : null}
-            <small
-              className={`draft-sync-state ${draft.syncState}`}
-              title={draft.syncDetail ?? undefined}
-            >
-              {draft.syncState === "synced"
-                ? strings.mail.savedServer
-                : draft.syncState === "conflict"
-                  ? strings.mail.recoveredConflict
-                  : draft.syncState === "localOnly"
-                    ? strings.mail.savedLocal
-                    : strings.mail.savingServer}
-            </small>
+            </span>
           </span>
           <time
             dateTime={draft.updatedAt}
@@ -194,13 +233,39 @@ function scheduledLabel(sendAt: string, now: number): string {
   return strings.mail.sendsAt(formatScheduledTime(sendAt, new Date(now)));
 }
 
+// Shown in the pane heading when two or more sends need attention.
+export function OutboxRetryAll({
+  items,
+  sendingIds,
+  onRetryAll,
+}: {
+  items: ReturnType<typeof useAppStore.getState>["outbox"];
+  sendingIds?: ReadonlySet<string>;
+  onRetryAll: () => Promise<void>;
+}) {
+  const attention = items.filter((item) => item.state === "needs_attention");
+  if (attention.length < 2) return null;
+  const retryingAll = attention.some((item) =>
+    sendingIds?.has(`${item.accountId}:${item.id}`),
+  );
+  return (
+    <button
+      type="button"
+      className="toolbar-button"
+      onClick={() => void onRetryAll()}
+      disabled={retryingAll}
+    >
+      {strings.mail.retryAll}
+    </button>
+  );
+}
+
 export function OutboxList({
   items,
   emptyLabel,
   sendingIds,
   onOpen,
   onRetry,
-  onRetryAll,
   onRetryCopy,
   onRetryArchive,
   onSendNow,
@@ -210,9 +275,9 @@ export function OutboxList({
   items: ReturnType<typeof useAppStore.getState>["outbox"];
   emptyLabel?: string;
   sendingIds?: ReadonlySet<string>;
+  /** Secondary actions show on hover or focus; the context menu has them too. */
   onOpen?: (id: string) => Promise<void>;
   onRetry: (id: string) => Promise<void>;
-  onRetryAll?: () => Promise<void>;
   onRetryCopy: (id: string) => Promise<void>;
   onRetryArchive?: (id: string) => Promise<void>;
   onSendNow: (id: string) => Promise<void>;
@@ -226,10 +291,6 @@ export function OutboxList({
   ) => Promise<void>;
 }) {
   const hasScheduled = items.some((item) => item.state === "scheduled");
-  const attention = items.filter((item) => item.state === "needs_attention");
-  const retryingAll = attention.some((item) =>
-    sendingIds?.has(`${item.accountId}:${item.id}`),
-  );
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!hasScheduled) return;
@@ -238,27 +299,67 @@ export function OutboxList({
   }, [hasScheduled]);
   if (items.length === 0)
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.noQueued}
-      </div>
+      <ListEmptyState
+        icon={emptyLabel ? Search : Send}
+        title={emptyLabel ?? strings.mail.noQueued}
+        hint={emptyLabel ? undefined : strings.mail.noQueuedHint}
+      />
     );
   return (
     <div className="local-mail-list">
-      {onRetryAll && attention.length >= 2 ? (
-        <div className="outbox-retry-all">
-          <button
-            type="button"
-            className="toolbar-button"
-            onClick={() => void onRetryAll()}
-            disabled={retryingAll}
-          >
-            {strings.mail.retryAll}
-          </button>
-        </div>
-      ) : null}
       {items.map((item) => {
         const sending =
           sendingIds?.has(`${item.accountId}:${item.id}`) ?? false;
+        const reason = outboxDetail(item);
+        const stateLabel =
+          item.state === "queued"
+            ? strings.mail.waitingSend
+            : item.state === "sending"
+              ? strings.mail.sending
+              : item.state === "sent_copy_pending"
+                ? strings.mail.sentCopyPending
+                : item.state === "archive_pending"
+                  ? strings.mail.archivePending
+                  : item.state === "scheduled"
+                    ? strings.mail.scheduledWaiting
+                    : strings.mail.needsAttention;
+        const scheduledText =
+          item.state === "scheduled" && item.sendAt
+            ? scheduledLabel(item.sendAt, now)
+            : null;
+        const primary =
+          item.state === "needs_attention" ? (
+            <button type="button" onClick={() => void onRetry(item.id)}>
+              {strings.mail.retrySending}
+            </button>
+          ) : item.state === "sent_copy_pending" ? (
+            <button type="button" onClick={() => void onRetryCopy(item.id)}>
+              {strings.mail.saveSentCopy}
+            </button>
+          ) : item.state === "archive_pending" && onRetryArchive ? (
+            <button
+              type="button"
+              onClick={() => void onRetryArchive(item.id)}
+              disabled={sending}
+            >
+              {strings.mail.retryArchive}
+            </button>
+          ) : item.state === "scheduled" ? (
+            <button
+              type="button"
+              onClick={() => void onSendNow(item.id)}
+              disabled={sending}
+              aria-label={
+                sending
+                  ? strings.mail.sendingNow(
+                      item.subject || strings.common.noSubject,
+                    )
+                  : undefined
+              }
+            >
+              {sending ? strings.mail.sending : strings.mail.sendNow}
+            </button>
+          ) : null;
         return (
           <article
             key={item.id}
@@ -294,87 +395,57 @@ export function OutboxList({
                   {strings.mail.queuedAt(formatMessageDate(item.createdAt))}
                 </time>
               ) : null}
-              <small>{outboxDetail(item)}</small>
-              {item.state === "scheduled" && item.sendAt ? (
-                <small className="status-label">
-                  {scheduledLabel(item.sendAt, now)}
-                </small>
-              ) : null}
-              <small className="status-label">
-                {item.state === "queued"
-                  ? strings.mail.waitingSend
-                  : item.state === "sending"
-                    ? strings.mail.sending
-                    : item.state === "sent_copy_pending"
-                      ? strings.mail.sentCopyPending
-                      : item.state === "archive_pending"
-                        ? strings.mail.archivePending
-                        : item.state === "scheduled"
-                          ? strings.mail.scheduledWaiting
-                          : strings.mail.needsAttention}
+              <small className="outbox-status-line" title={reason ?? undefined}>
+                <span className="status-label">
+                  {scheduledText ?? stateLabel}
+                </span>
+                {scheduledText ? (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    <span>{stateLabel}</span>
+                  </>
+                ) : null}
+                {reason ? (
+                  <>
+                    <span aria-hidden="true"> · </span>
+                    <span>{reason}</span>
+                  </>
+                ) : null}
               </small>
             </span>
-            <div>
-              {onOpen ? (
-                <button type="button" onClick={() => void onOpen(item.id)}>
-                  {strings.contextMenu.open}
-                </button>
-              ) : null}
-              {onEdit &&
-              (item.state === "queued" || item.state === "needs_attention") ? (
+            <div className="attention-row-actions">
+              {primary}
+              <span className="attention-row-more">
+                {onOpen ? (
+                  <button type="button" onClick={() => void onOpen(item.id)}>
+                    {strings.contextMenu.open}
+                  </button>
+                ) : null}
+                {onEdit &&
+                (item.state === "queued" ||
+                  item.state === "needs_attention") ? (
+                  <button
+                    type="button"
+                    onClick={() => void onEdit(item.id, item.state)}
+                    disabled={sending}
+                  >
+                    {strings.mail.editQueued}
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => void onEdit(item.id, item.state)}
+                  className="danger-button"
+                  onClick={() => void onDiscard(item.id, item.state)}
                   disabled={sending}
                 >
-                  {strings.mail.editQueued}
+                  {item.state === "sent_copy_pending" ||
+                  item.state === "archive_pending"
+                    ? strings.mail.dismissWarning
+                    : item.state === "scheduled"
+                      ? strings.mail.undoSend
+                      : strings.common.discard}
                 </button>
-              ) : null}
-              {item.state === "needs_attention" ? (
-                <button type="button" onClick={() => void onRetry(item.id)}>
-                  {strings.mail.retrySending}
-                </button>
-              ) : item.state === "sent_copy_pending" ? (
-                <button type="button" onClick={() => void onRetryCopy(item.id)}>
-                  {strings.mail.saveSentCopy}
-                </button>
-              ) : item.state === "archive_pending" && onRetryArchive ? (
-                <button
-                  type="button"
-                  onClick={() => void onRetryArchive(item.id)}
-                  disabled={sending}
-                >
-                  {strings.mail.retryArchive}
-                </button>
-              ) : item.state === "scheduled" ? (
-                <button
-                  type="button"
-                  onClick={() => void onSendNow(item.id)}
-                  disabled={sending}
-                  aria-label={
-                    sending
-                      ? strings.mail.sendingNow(
-                          item.subject || strings.common.noSubject,
-                        )
-                      : undefined
-                  }
-                >
-                  {sending ? strings.mail.sending : strings.mail.sendNow}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void onDiscard(item.id, item.state)}
-                disabled={sending}
-              >
-                {item.state === "sent_copy_pending" ||
-                item.state === "archive_pending"
-                  ? strings.mail.dismissWarning
-                  : item.state === "scheduled"
-                    ? strings.mail.undoSend
-                    : strings.common.discard}
-              </button>
+              </span>
             </div>
           </article>
         );

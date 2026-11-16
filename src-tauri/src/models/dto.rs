@@ -34,6 +34,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Files with no density key predate the setting and keep the comfortable look.
+fn default_legacy_density() -> String {
+    "comfortable".into()
+}
+
 fn default_group_threads() -> bool {
     true
 }
@@ -147,6 +152,9 @@ pub struct AccountSummary {
     pub color: Option<String>,
     #[serde(default)]
     pub default_body_format: BodyFormat,
+    /// Arrival notifications for this account. Off keeps its mail silent.
+    #[serde(default = "default_true")]
+    pub notify_new_mail: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -232,6 +240,9 @@ pub struct MailboxSummary {
     pub total_count: u32,
     /// IMAP hierarchy delimiter from LIST, when the server reported one.
     pub delimiter: Option<String>,
+    /// False when the server does not accept IMAP keywords (colored flags).
+    #[serde(default = "default_true")]
+    pub allows_keywords: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -278,6 +289,9 @@ pub struct MessageSummary {
     /// Regular files. A picture in the letter stays out. Zero until the message is downloaded.
     #[serde(default)]
     pub attachment_count: usize,
+    /// Colored flag 0 to 6 (red to gray); 0 means no color.
+    #[serde(default)]
+    pub flag_color: u8,
 }
 
 /// Keep only the two importance words a message may store or send.
@@ -709,6 +723,7 @@ pub struct AppSettings {
     pub text_scale: f64,
     pub private_notifications: bool,
     pub theme: String,
+    #[serde(default = "default_legacy_density")]
     pub density: String,
     pub cache_policy: CachePolicy,
     pub last_account_id: Option<String>,
@@ -825,6 +840,7 @@ pub struct PortableSettings {
     pub text_scale: f64,
     pub private_notifications: bool,
     pub theme: String,
+    #[serde(default = "default_legacy_density")]
     pub density: String,
     pub cache_policy: PortableCachePolicy,
     pub folder_pane_width: u32,
@@ -929,13 +945,13 @@ impl Default for AppSettings {
             text_scale: 1.0,
             private_notifications: false,
             theme: "system".into(),
-            density: "comfortable".into(),
+            density: "normal".into(),
             cache_policy: CachePolicy::default(),
             last_account_id: None,
             last_mailbox_id: None,
-            folder_pane_width: 264,
-            message_pane_width: 400,
-            reader_pane_height: 360,
+            folder_pane_width: 240,
+            message_pane_width: 380,
+            reader_pane_height: 420,
             window_effects: true,
             sidebar_visible: true,
             undo_send_seconds: default_undo_send_seconds(),
@@ -1000,6 +1016,20 @@ pub struct AttachmentPreview {
     pub size: u64,
     pub text: Option<String>,
     pub image_data_url: Option<String>,
+    /// PDF page images as data URLs, in page order.
+    pub pages: Option<Vec<String>>,
+    pub page_count: Option<u32>,
+    /// True when the document has more pages than were rendered.
+    pub pages_truncated: bool,
+}
+
+/// A message opened from a file outside the mailbox. The token scopes its
+/// attachment ids; the path never leaves Rust.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedMessage {
+    pub token: String,
+    pub message: MessageDetail,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1020,6 +1050,32 @@ pub struct FilterRule {
     pub action: String,
     pub target_mailbox: Option<String>,
     pub enabled: bool,
+    /// `all` (every condition) or `any` (one condition).
+    #[serde(default = "default_match_mode")]
+    pub match_mode: String,
+    #[serde(default)]
+    pub conditions: Vec<RuleCondition>,
+    #[serde(default)]
+    pub actions: Vec<RuleAction>,
+}
+
+fn default_match_mode() -> String {
+    "all".into()
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleCondition {
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleAction {
+    pub kind: String,
+    pub target_mailbox: Option<String>,
+    pub flag_color: Option<u8>,
 }
 
 /// Unread Inbox messages a rule would catch. Does not file them.

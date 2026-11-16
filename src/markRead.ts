@@ -1,6 +1,7 @@
 import { api } from "./api";
 import { createOptimisticGate } from "./bulk";
 import { useAppStore } from "./store";
+import { errorText } from "./errors";
 
 export type MarkReadMode = "open" | "after2s" | "manual";
 
@@ -74,7 +75,7 @@ export async function toggleListedRead(messageId: number): Promise<void> {
         ? previousUnread
         : undefined;
     applyListedRead(messageId, summary.mailboxId, summary.isRead, restored);
-    current.setError(String(cause));
+    current.setError(errorText(cause));
   }
 }
 

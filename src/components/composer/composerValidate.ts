@@ -1,4 +1,5 @@
 import { strings } from "../../i18n";
+import { mailboxAddress } from "../../fromAddress";
 import { htmlToPlainText } from "../../security";
 import type { BodyFormat, ComposeDraft } from "../../types";
 
@@ -45,11 +46,6 @@ export function mentionsAttachment(
 
 /** Reply-all and wide copies are easy to send by mistake at this size. */
 export const LARGE_RECIPIENT_COUNT = 10;
-
-function mailboxAddress(value: string): string {
-  const bracketed = value.match(/<([^<>]+)>$/)?.[1];
-  return (bracketed ?? value).trim().toLowerCase();
-}
 
 const noreplyLocalPart = /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply)$/i;
 

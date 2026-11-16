@@ -5,9 +5,49 @@
   overflow: hidden;
 }
 
+/* Shared focus ring for header fields and the letter: the global 3px accent
+   ring, inset so the window clip does not cut it. */
+.composer-window {
+  --composer-focus-color: var(--focus);
+  --composer-header-height: min(var(--bar-height-md), 3rem);
+}
+
+/* macOS sheet: xl corners and the window shadow. Maximized stays square. */
+.composer-window:not(.composer-maximized) {
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--shadow-window),
+    inset 0 1px 0 var(--surface-highlight);
+}
+
+.composer-window.composer-maximized {
+  box-shadow: none;
+}
+
 .composer-window > header,
 .composer-window > footer {
   flex-shrink: 0;
+}
+
+/* Mail-like header: capped at 48px in every density; hairline below. */
+.composer-window > header {
+  min-height: var(--composer-header-height);
+  border-bottom-color: var(--separator);
+}
+
+.composer-window > header > span {
+  line-height: 1.2;
+}
+
+/* Field labels are secondary; the hairline separates To, Cc and Subject. */
+.composer-window .address-fields label > span:first-child {
+  color: var(--text-muted);
+  font-weight: var(--fw-medium);
+}
+
+.composer-window .address-fields label,
+.composer-window .address-fields .to-field-row {
+  border-bottom-color: var(--separator);
 }
 
 /* Middle row: everything between the header and the send bar scrolls here,
@@ -37,27 +77,35 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex: 0 1 auto;
   min-width: 0;
   margin-inline-start: auto;
 }
 
-/* 200% text: the toggles always get their own row so To keeps full width. */
+/* 200% text: To keeps at least 12.5rem beside the toggles, which wrap below
+   it only in narrow windows. The letter keeps the freed height. */
 html[data-text-scale="large"] .composer-window .to-field-row .to-field {
-  flex-basis: 100%;
+  flex: 1 1 0;
+  min-width: min(12.5rem, 100%);
+}
+
+@media (max-width: 760px) {
+  html[data-text-scale="large"] .composer-window .to-field-row .to-field {
+    flex-basis: 100%;
+  }
 }
 
 .composer-layer-followup:not(.composer-layer-maximized) {
   place-items: end center;
-  padding: 12px 18px 18px;
+  padding: var(--composer-layer-pad);
   pointer-events: none;
   background: transparent;
 }
 
 .composer-layer-followup:not(.composer-layer-maximized) .composer-window {
   pointer-events: auto;
-  height: min(620px, 78vh, 100%);
+  height: min(35rem, 70vh, 100%);
 }
 
 /* Floating composer: header drags it, the corner grip resizes it. */
@@ -79,7 +127,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   margin-inline-end: auto;
 }
 
-/* 44px target; the drawn grip sits in its lower-right corner. */
+/* Target size token (36px Normal); the drawn grip sits in its lower-right corner. */
 .composer-resize-grip {
   position: absolute;
   right: 0;
@@ -114,43 +162,17 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   }
 }
 
-.composer-signature-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: var(--target-size);
-  margin: 0 var(--toolbar-pad-inline) 8px;
-}
-
-/* Formatting switch and option toggles share one row above the editor. */
-.composer-toggle-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 20px;
-  margin: var(--space-1) var(--toolbar-pad-inline);
-}
-
-.composer-toggle-row .composer-signature-toggle {
-  margin: 0;
-}
-
-.composer-signature-toggle input {
-  width: 1.25rem;
-  height: 1.25rem;
-}
-
 .composer-redirect-note,
 .composer-signature-preview {
-  margin: 0 var(--toolbar-pad-inline) 12px;
-  padding: 8px 12px;
+  margin: 0 var(--toolbar-pad-inline) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted, var(--surface));
 }
 
 .composer-signature-preview pre {
-  margin: 6px 0 0;
+  margin: var(--space-1) 0 0;
   white-space: pre-wrap;
   font: inherit;
 }
@@ -159,8 +181,8 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-pill);
   background: var(--surface-muted);
 }
@@ -179,9 +201,9 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .composer-docked-pill {
   position: fixed;
-  z-index: 1000;
-  bottom: 24px;
-  right: 28px;
+  z-index: 50;
+  bottom: var(--composer-docked-inset-block);
+  right: var(--composer-docked-inset-inline);
   display: flex;
   align-items: center;
   max-width: var(--composer-docked-pill-max-width);
@@ -197,7 +219,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 @keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(var(--motion-slide-distance));
   }
   to {
     opacity: 1;
@@ -209,7 +231,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 8px 14px;
+  padding: var(--space-2) 0.875rem;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -224,7 +246,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .docked-pill-title {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--fs-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -232,15 +254,20 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .docked-pill-status {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 .docked-pill-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 8px;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+}
+
+.docked-pill-actions svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .recipient-combobox {
@@ -256,16 +283,16 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .cc-toggle {
   position: static;
   transform: none;
-  min-height: var(--target-size);
-  min-width: var(--target-size);
-  padding: 8px 12px;
-  font-size: 0.82rem;
+  min-height: var(--target-size-inset);
+  min-width: var(--target-size-inset);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
 .format-toggle .format-aa {
-  font-weight: 800;
-  font-size: 1rem;
+  font-weight: 700;
+  font-size: var(--fs-base);
 }
 
 .format-toolbar[hidden] {
@@ -276,10 +303,10 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px var(--toolbar-pad-inline);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
   overflow-x: auto;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-bottom: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--surface) 90%, var(--surface-muted));
 }
 
@@ -287,7 +314,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: none;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
 }
 
@@ -300,7 +327,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--fill);
@@ -308,69 +335,63 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .toolbar-group > button {
   display: grid;
-  min-width: var(--target-size);
-  min-height: var(--target-size);
-  width: max(var(--target-size), 2.25rem);
-  height: max(var(--target-size), 2.25rem);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
   place-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text);
   cursor: pointer;
-  padding: 0;
+  padding: 0 var(--space-1);
 }
 
-.toolbar-group > button:hover,
+/* Mac format bar: bare icons, a fill on hover, accent ink when pressed. */
+.toolbar-group > button:hover {
+  background: var(--fill-hover);
+}
+
 .toolbar-group > button.active,
 .toolbar-group > button[aria-pressed="true"] {
-  border-color: var(--border);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .toolbar-group button svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
+/* Popup select: transparent fill, but the chevron stays (background-image). */
 .toolbar-group select {
   width: auto;
-  min-height: var(--target-size);
-  padding: 4px 8px;
+  min-height: var(--toolbar-button-size);
+  padding: var(--space-1) 1.75rem var(--space-1) var(--space-2);
   border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  font-size: 0.88rem;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  background-image: var(--popup-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  appearance: none;
+  font-size: var(--fs-md);
 }
 
 .toolbar-group select:hover {
-  background: var(--surface-hover);
+  background-color: var(--fill-hover);
 }
 
 .toolbar-group .color-control {
-  min-width: var(--target-size);
-  min-height: var(--target-size);
-  width: var(--target-size);
-  height: var(--target-size);
-}
-
-.send-kbd-hint {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
-  font-size: 0.74rem;
-  opacity: 0.85;
-  border: 1px solid color-mix(in srgb, var(--accent-contrast) 45%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent-contrast) 15%, transparent);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
+  padding: 0 var(--space-1);
 }
 
 .color-control {
   position: relative;
   display: grid;
-  width: var(--target-size);
-  height: var(--target-size);
+  min-width: var(--toolbar-button-size);
+  min-height: var(--toolbar-button-size);
   place-items: center;
 }
 
@@ -384,11 +405,11 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 .color-control input:focus-visible + span {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 .color-control span {
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: underline 3px;
 }
 
@@ -416,14 +437,21 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   flex: 1 1 auto;
   height: 100%;
   min-height: var(--composer-editor-min-height);
-  padding: 18px var(--toolbar-pad-inline);
+  padding: var(--composer-editor-pad-block) var(--space-4);
   overflow: auto;
   outline: none;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .composer-window .tiptap:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--focus);
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
+  box-shadow: none;
+}
+
+/* Reply quotes start with an empty paragraph; keep it to one line. */
+.composer-window .tiptap > p:first-child:has(> br:only-child) {
+  margin: 0;
 }
 
 .tiptap p:first-child {
@@ -441,10 +469,32 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   border-collapse: collapse;
 }
 
+/* A blocked remote picture: unloaded here, sent with the message. */
+.composer-editor .composer-remote-image {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: var(--space-1) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  vertical-align: middle;
+  user-select: none;
+}
+
+.composer-editor .composer-remote-image::before {
+  content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21'/%3E%3C/svg%3E");
+  flex-shrink: 0;
+}
+
 .composer-editor td,
 .composer-editor th {
   min-width: var(--composer-table-cell-min-width);
-  padding: 6px;
+  padding: var(--composer-cell-pad);
   border: 1px solid var(--border);
 }
 
@@ -490,6 +540,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 
 .compose-original {
   margin-block: 0;
+  padding-inline: var(--space-4);
 }
 
 .compose-original summary {
@@ -552,7 +603,7 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
 }
 
 .draft-sync-banner > svg {
-  width: 1.25rem;
+  width: var(--icon-lg);
   flex: 0 0 auto;
   color: var(--warning);
 }
@@ -574,9 +625,9 @@ html[data-text-scale="large"] .composer-window .to-field-row .to-field {
   bottom: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 9px var(--toolbar-pad-inline);
-  border-top: 1px solid var(--border);
+  gap: var(--space-2);
+  padding: var(--bar-pad-block-lg) var(--space-4);
+  border-top: 1px solid var(--separator);
   background: var(--surface);
 }
 
@@ -608,6 +659,37 @@ html[data-text-scale="large"] .composer-window > header {
   }
 }
 
+/* Pressed formatting toggle in the footer. */
+.composer-window footer .format-toggle[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+/* 200% text: secondary actions keep their names and tooltips as icon buttons. */
+html[data-text-scale="large"] .composer-window footer .footer-action {
+  position: relative;
+  min-width: var(--target-size);
+  justify-content: center;
+  padding-inline: var(--space-2);
+}
+
+html[data-text-scale="large"]
+  .composer-window
+  footer
+  .footer-action
+  .action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .composer-window .discard-button {
   margin-left: auto;
   color: var(--danger);
@@ -619,21 +701,22 @@ html[data-text-scale="large"] .composer-window > header {
   align-items: stretch;
 }
 
+/* Send is a pill; the joined chevron keeps the pill's right end. */
 .send-split .send-button {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
 }
 
 .send-split .send-chevron {
   min-width: var(--target-size);
-  padding-inline: 8px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-inline: var(--space-2);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
   border-left: 1px solid
     color-mix(in srgb, var(--accent-contrast) 30%, transparent);
 }
 
 .send-split .send-chevron svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 /* Send menu: body-level (sendBar.tsx), so the footer's scroll container
@@ -648,20 +731,56 @@ html[data-text-scale="large"] .composer-window > header {
 }
 
 .field-error {
-  margin: 4px 0 6px 15px;
+  margin: var(--field-error-margin);
   color: var(--danger);
-  font-size: 0.84rem;
+  font-size: var(--fs-md);
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.45;
 }
 
 /* Header menu: message format. */
 .composer-options-menu {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 6px);
-  right: 12px;
+  top: calc(100% + var(--space-1));
+  right: var(--space-3);
   min-width: var(--composer-options-menu-min-width);
+}
+
+/* Header fields: the shared focus ring replaces the global outline. */
+.composer-window .address-fields input:focus-visible {
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
+}
+
+/* Message options status, shown beside the options button. */
+.composer-option-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-inline: auto var(--space-2);
+}
+
+.composer-option-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.composer-option-chip svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 
 /* Plain-text editor: same box, focus ring, and text scale as the rich one. */
@@ -673,7 +792,7 @@ html[data-text-scale="large"] .composer-window > header {
   min-height: var(--composer-editor-min-height);
   overflow: auto;
   box-sizing: border-box;
-  padding: 18px var(--toolbar-pad-inline);
+  padding: var(--composer-editor-pad-block) var(--space-4);
   border: 0;
   border-radius: 0;
   outline: none;
@@ -681,11 +800,12 @@ html[data-text-scale="large"] .composer-window > header {
   color: inherit;
   background: transparent;
   font: inherit;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .composer-plain-editor:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--focus);
+  outline: var(--composer-focus-width) solid var(--composer-focus-color);
+  outline-offset: var(--composer-focus-inset);
 }
 
 /* Drop-in attachments: covers the composer while files hover over it. */
@@ -696,7 +816,7 @@ html[data-text-scale="large"] .composer-window > header {
   display: grid;
   align-content: center;
   justify-items: center;
-  gap: 10px;
+  gap: var(--composer-drop-gap);
   border: 3px dashed var(--accent, var(--focus));
   border-radius: inherit;
   color: var(--text);
@@ -705,7 +825,7 @@ html[data-text-scale="large"] .composer-window > header {
     var(--surface) 88%,
     var(--accent, var(--focus))
   );
-  font-size: 1.15rem;
+  font-size: var(--fs-xl);
   opacity: 0;
   pointer-events: none;
 }
@@ -731,7 +851,21 @@ html[data-text-scale="large"] .composer-window > header {
     background: Canvas;
   }
 
+  .composer-window .tiptap:focus-visible,
+  .composer-window .address-fields input:focus-visible,
   .composer-plain-editor:focus-visible {
+    outline-color: Highlight;
+  }
+
+  /* Native popup look: the custom chevron would be lost. */
+  .toolbar-group select {
+    appearance: auto;
+    background-image: none;
+    padding-inline-end: var(--space-2);
+  }
+
+  .composer-window footer .format-toggle[aria-pressed="true"] {
+    border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

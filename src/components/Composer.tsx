@@ -1,29 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type SetStateAction,
-} from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import Underline from "@tiptap/extension-underline";
-import Image from "@tiptap/extension-image";
-import TextAlign from "@tiptap/extension-text-align";
-import Highlight from "@tiptap/extension-highlight";
-import Color from "@tiptap/extension-color";
-import FontFamily from "@tiptap/extension-font-family";
-import { TextStyle } from "@tiptap/extension-text-style";
-import {
-  Table,
-  TableCell,
-  TableHeader,
-  TableRow,
-} from "@tiptap/extension-table";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EditorContent } from "@tiptap/react";
 import { Maximize2, Paperclip, TriangleAlert, X } from "lucide-react";
 import { api } from "../api";
+import { useComposerEditor } from "./composer/useComposerEditor";
 import { useComposerDraftPersistence } from "./composer/useComposerDraftPersistence";
 import { formatBytes, formatMessageDate } from "../format";
 import {
@@ -31,7 +10,6 @@ import {
   type ContextMenuActionDetail,
 } from "../contextMenu";
 import { strings } from "../i18n";
-import { sanitizeComposeHtml } from "../security";
 import { readableMessageText } from "./reader/readerUtils";
 import { rememberedComposerSize } from "../composerSize";
 import {
@@ -43,21 +21,19 @@ import { useAppStore } from "../store";
 import type { BodyFormat, ComposeAttachment, ComposeDraft } from "../types";
 import { useSettingsSave } from "./settings/useSettingsSave";
 import { useDialogFocus } from "./useDialogFocus";
+import { useInertBackground } from "./useInertBackground";
 import { AddressFields } from "./composer/addressFields";
 import { ConfirmDialog } from "./composer/confirmDialog";
 import { ComposerHeader } from "./composer/composerHeader";
 import { FormatToolbar } from "./composer/formatToolbar";
-import { clipboardImages } from "./composer/pasteImage";
 import { SendBar } from "./composer/sendBar";
 import { AttachmentPreview } from "./composer/attachmentPreview";
 import {
   htmlToQuotedPlainText,
   isPlainPasteShortcut,
-  plainPasteBlocks,
   plainTextToHtml,
 } from "./composer/plainText";
 import { useComposerPlacement } from "./composer/useComposerPlacement";
-import { FontSize, Indentation, SafeLink } from "./composer/extensions";
 import { useComposerAttachments } from "./composer/useComposerAttachments";
 import { useComposerSend } from "./composer/useComposerSend";
 import { useComposerWarnings } from "./composer/useComposerWarnings";
@@ -69,12 +45,14 @@ import {
   isRedirectSeed,
   seedBody,
   bccSelfLine,
+  signaturePreviewHtml,
   seedRecipients,
   seedReferences,
   seedSource,
   seedSubject,
 } from "./composer/composerSeed";
 import { hasDraftContent, splitAddresses } from "./composer/composerValidate";
+import { errorText } from "../errors";
 
 interface Props {
   accountId: string;
@@ -89,19 +67,6 @@ function composeImageFile(item: ComposeAttachment): boolean {
   const type = item.contentType?.toLowerCase() ?? "";
   if (type.startsWith("image/")) return true;
   return /\.(png|jpe?g|gif|webp)$/i.test(item.filename);
-}
-
-function signaturePreviewHtml(input: string): string {
-  const doc = new DOMParser().parseFromString(
-    sanitizeComposeHtml(input),
-    "text/html",
-  );
-  for (const image of doc.querySelectorAll("img")) image.remove();
-  for (const link of doc.querySelectorAll("a")) {
-    link.removeAttribute("href");
-    link.removeAttribute("data-external-href");
-  }
-  return doc.body.innerHTML;
 }
 
 export function Composer({ accountId, onDraftSaved }: Props) {
@@ -272,9 +237,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   } = useComposerWarnings();
   const plainRef = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState(false);
-  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
-  const [linkValue, setLinkValue] = useState("https://");
-  const [linkCanRemove, setLinkCanRemove] = useState(false);
   const [showCc, setShowCc] = useState(Boolean(cc));
   const [showBcc, setShowBcc] = useState(Boolean(bcc));
   const [formattingOpen, setFormattingOpen] = useState(false);
@@ -295,6 +257,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   const isSending = useRef(false);
   const draftRevision = useRef(0);
   const saveInFlight = useRef(false);
+  const closePromptOpen = useRef(false);
   const pendingClose = useRef(false);
   const draftIdRef = useRef<string | undefined>(
     seed?.draft?.id ?? seed?.draftSummary?.id,
@@ -307,7 +270,9 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   const keepSourceVisible = Boolean(
     seed?.composeMode && seed.composeMode !== "editAsNew" && !maximized,
   );
-  const dialogRef = useDialogFocus(
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef, !keepSourceVisible && !minimized);
+  useDialogFocus(
     () => {
       if (linkDialogOpen) {
         setLinkDialogOpen(false);
@@ -315,7 +280,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       }
       void requestClose();
     },
-    { trapFocus: !keepSourceVisible },
+    { trapFocus: !keepSourceVisible && !minimized, ref: dialogRef },
   );
 
   const narrowViewport = useMediaQuery(MEDIA_QUERIES.narrowViewport);
@@ -343,76 +308,58 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     },
   );
 
-  const pastePlainRef = useRef<() => Promise<void>>(async () => undefined);
-  const pasteImageRef = useRef<
-    (files: File[], tooLarge: boolean) => Promise<void>
-  >(async () => undefined);
-  const takePastedImages = (event: Event) => {
-    const { files, tooLarge } = clipboardImages(
-      (event as ClipboardEvent).clipboardData,
-    );
-    if (files.length === 0 && !tooLarge) return false;
-    event.preventDefault();
-    void pasteImageRef.current(files, tooLarge);
-    return true;
-  };
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({ link: false, underline: false }),
-      Underline,
-      SafeLink,
-      Image.configure({ allowBase64: true }),
-      TextStyle,
-      FontSize,
-      Indentation,
-      Color,
-      FontFamily,
-      Highlight.configure({ multicolor: true }),
-      TextAlign.configure({ types: ["heading", "paragraph"] }),
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableHeader,
-      TableCell,
-    ],
-    content: seedBody(seed),
-    editorProps: {
-      attributes: {
-        class: "composer-editor",
-        role: "textbox",
-        "aria-multiline": "true",
-        "aria-label": strings.composer.messageBody,
-      },
-      transformPastedHTML: (html) => sanitizeComposeHtml(html),
-      handleDOMEvents: {
-        keydown: (_view, event) => {
-          if (!isPlainPasteShortcut(event)) return false;
-          event.preventDefault();
-          void pastePlainRef.current();
-          return true;
-        },
-        paste: (_view, event) => takePastedImages(event),
-        contextmenu: (_view, event) => {
-          event.preventDefault();
-          return true;
-        },
-        auxclick: (_view, event) => {
-          if (
-            event.button === 1 &&
-            (event.target as HTMLElement | null)?.closest("a")
-          ) {
-            event.preventDefault();
-            return true;
-          }
-          return false;
-        },
-      },
-    },
-    immediatelyRender: false,
-    onUpdate: markUnsaved,
+  const bodyFormatRef = useRef(bodyFormat);
+
+  const {
+    editor,
+    pastePlainRef,
+    pasteImageRef,
+    takePastedImages,
+    linkDialogOpen,
+    setLinkDialogOpen,
+    linkValue,
+    setLinkValue,
+    linkCanRemove,
+    addLink,
+    removeLink,
+    applyLink,
+    adjustIndent,
+    setComposerMinimized,
+  } = useComposerEditor({
+    seed,
+    markUnsaved,
+    setError,
+    plainRef,
+    bodyFormatRef,
+    setPlainBody,
+    minimized,
+    setMinimized,
   });
 
+  const composerSubModalOpen = Boolean(
+    audienceWarning || confirmPlain || linkDialogOpen,
+  );
+  useEffect(() => {
+    const windowEl = dialogRef.current;
+    if (!windowEl || !composerSubModalOpen) return;
+    const backgroundChildren = [...windowEl.children].filter(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement &&
+        !child.classList.contains("settings-confirm-overlay"),
+    );
+    const added: HTMLElement[] = [];
+    for (const child of backgroundChildren) {
+      if (!child.hasAttribute("inert")) {
+        child.setAttribute("inert", "");
+        added.push(child);
+      }
+    }
+    return () => {
+      for (const child of added) child.removeAttribute("inert");
+    };
+  }, [composerSubModalOpen]);
+
   const editorRef = useRef(editor);
-  const composerPlace = useRef(0);
   const didFocusLetter = useRef(false);
   useEffect(() => {
     if (!focusLetter || didFocusLetter.current) return;
@@ -432,7 +379,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     });
     return () => window.cancelAnimationFrame(focusFrame);
   }, [bodyFormat, editor, focusLetter]);
-  const bodyFormatRef = useRef(bodyFormat);
   const plainBodyRef = useRef(plainBody);
   useEffect(() => {
     editorRef.current = editor;
@@ -563,6 +509,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     isDiscardingRef: isDiscarding,
     draftRevisionRef: draftRevision,
     saveInFlightRef: saveInFlight,
+    closePromptOpenRef: closePromptOpen,
     pendingCloseRef: pendingClose,
     closedByComposerRef: closedByComposer,
     session: composeSession,
@@ -629,11 +576,25 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       return;
     }
     if (saveState === "unsaved") {
-      const confirmed = await api.showNativeConfirm(
-        strings.appName,
-        strings.composer.saveCloseQuestion,
-      );
+      let confirmed: boolean;
+      try {
+        closePromptOpen.current = true;
+        confirmed = await api.showNativeConfirm(
+          strings.appName,
+          strings.composer.saveCloseQuestion,
+        );
+      } finally {
+        closePromptOpen.current = false;
+      }
       if (!confirmed) return;
+      if (saveInFlight.current) {
+        pendingClose.current = true;
+        return;
+      }
+      if (!hasDraftContent(buildDraft(), currentBodyText())) {
+        close();
+        return;
+      }
     }
     void saveDraft(true);
   }
@@ -665,7 +626,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       close();
     } catch (cause) {
       isDiscarding.current = false;
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -721,40 +682,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
       attachmentPreview !== null,
   });
 
-  useLayoutEffect(() => {
-    if (minimized) return;
-    const top = composerPlace.current;
-    if (top <= 0) return;
-    const apply = () => {
-      document
-        .querySelectorAll<HTMLElement>(
-          ".composer-window .composer-body, .composer-window .tiptap, .composer-plain-editor",
-        )
-        .forEach((node) => {
-          node.scrollTop = top;
-        });
-    };
-    apply();
-    const frame = requestAnimationFrame(apply);
-    return () => cancelAnimationFrame(frame);
-  }, [minimized]);
-
-  function setComposerMinimized(value: SetStateAction<boolean>) {
-    const next = typeof value === "function" ? value(minimized) : value;
-    if (next) {
-      let top = 0;
-      document
-        .querySelectorAll<HTMLElement>(
-          ".composer-window .composer-body, .composer-window .tiptap, .composer-plain-editor",
-        )
-        .forEach((node) => {
-          top = Math.max(top, node.scrollTop);
-        });
-      composerPlace.current = top;
-    }
-    setMinimized(next);
-  }
-
   function switchToPlain() {
     setPlainBody(htmlToQuotedPlainText(editor?.getHTML() ?? ""));
     stripInlineImages();
@@ -788,75 +715,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     if (bodyFormat === "plain") plainRef.current?.focus();
     else editorRef.current?.commands.focus();
   }, [bodyFormat]);
-
-  function addLink() {
-    const current = editor?.getAttributes("link").href as string | undefined;
-    setLinkCanRemove(Boolean(current));
-    setLinkValue(current ?? "https://");
-    setLinkDialogOpen(true);
-  }
-
-  function removeLink() {
-    editor?.chain().focus().extendMarkRange("link").unsetLink().run();
-    setLinkDialogOpen(false);
-  }
-
-  function applyLink() {
-    const href = linkValue.trim().slice(0, 2000);
-    if (!/^(https?|mailto):/i.test(href) || /\s/.test(href)) {
-      setError(strings.composer.unsafeLink);
-      return;
-    }
-    editor?.chain().focus().extendMarkRange("link").setLink({ href }).run();
-    setLinkDialogOpen(false);
-  }
-
-  function adjustIndent(delta: number) {
-    if (!editor) return;
-    const { from, to } = editor.state.selection;
-    const transaction = editor.state.tr;
-    editor.state.doc.nodesBetween(from, to, (node, position) => {
-      if (!["paragraph", "heading"].includes(node.type.name)) return;
-      const current = Number(node.attrs.indent ?? 0);
-      const indent = Math.max(0, Math.min(6, current + delta));
-      transaction.setNodeMarkup(position, undefined, { ...node.attrs, indent });
-    });
-    if (transaction.docChanged) editor.view.dispatch(transaction);
-    editor.commands.focus();
-  }
-
-  async function pastePlainText() {
-    let text: string;
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      setError(strings.composer.clipboardUnavailable);
-      return;
-    }
-    const blocks = plainPasteBlocks(text);
-    if (blocks.length === 0) return;
-    if (bodyFormatRef.current === "plain") {
-      const field = plainRef.current;
-      if (!field) return;
-      const start = field.selectionStart ?? field.value.length;
-      const end = field.selectionEnd ?? start;
-      const plain = blocks
-        .map((block) => block.content?.[0]?.text ?? "")
-        .join("\n");
-      setPlainBody(
-        field.value.slice(0, start) + plain + field.value.slice(end),
-      );
-      markUnsaved();
-      const cursor = start + plain.length;
-      window.requestAnimationFrame(() => {
-        field.focus();
-        field.setSelectionRange(cursor, cursor);
-      });
-      return;
-    }
-    editorRef.current?.chain().focus().insertContent(blocks).run();
-  }
-  pastePlainRef.current = pastePlainText;
 
   // One listener for the composer's life; editor state stays fresh via a ref.
   const composerActionRef = useRef({
@@ -899,7 +757,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     };
     window.addEventListener(CONTEXT_ACTION_EVENT, onAction);
     return () => window.removeEventListener(CONTEXT_ACTION_EVENT, onAction);
-  }, []);
+  }, [pastePlainRef]);
 
   if (minimized) {
     return (
@@ -938,7 +796,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             aria-label={strings.composer.maximize}
             title={strings.composer.maximize}
           >
-            <Maximize2 size={16} />
+            <Maximize2 aria-hidden="true" />
           </button>
           <button
             className="icon-button"
@@ -947,78 +805,36 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             aria-label={strings.composer.saveClose}
             title={strings.composer.saveClose}
           >
-            <X size={16} />
+            <X aria-hidden="true" />
           </button>
         </div>
       </div>
     );
   }
 
-  const optionToggles = (
-    <>
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.highImportanceHelp}
-        >
-          <input
-            type="checkbox"
-            checked={importance === "high"}
-            onChange={(event) => {
-              setImportance(event.target.checked ? "high" : "");
-              markUnsaved();
-            }}
-          />
-          {strings.composer.highImportance}
-        </label>
-      )}
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.lowImportanceHelp}
-        >
-          <input
-            type="checkbox"
-            checked={importance === "low"}
-            onChange={(event) => {
-              setImportance(event.target.checked ? "low" : "");
-              markUnsaved();
-            }}
-          />
-          {strings.composer.lowImportance}
-        </label>
-      )}
-      {redirecting ? null : (
-        <label
-          className="composer-signature-toggle"
-          title={strings.composer.requestReceiptHelp}
-        >
-          <input
-            type="checkbox"
-            checked={requestReceipt}
-            onChange={(event) => {
-              setRequestReceipt(event.target.checked);
-              markUnsaved();
-            }}
-          />
-          {strings.composer.requestReceipt}
-        </label>
-      )}
-      {account?.signature && !redirecting ? (
-        <label className="composer-signature-toggle">
-          <input
-            type="checkbox"
-            checked={includeSignature}
-            onChange={(event) => {
-              setIncludeSignature(event.target.checked);
-              markUnsaved();
-            }}
-          />
-          {strings.composer.includeSignature}
-        </label>
-      ) : null}
-    </>
-  );
+  const messageOptions = redirecting
+    ? undefined
+    : {
+        importance,
+        onImportanceChange: (value: "" | "high" | "low") => {
+          setImportance(value);
+          markUnsaved();
+        },
+        requestReceipt,
+        onRequestReceiptChange: (value: boolean) => {
+          setRequestReceipt(value);
+          markUnsaved();
+        },
+        signature: account?.signature
+          ? {
+              included: includeSignature,
+              onChange: (value: boolean) => {
+                setIncludeSignature(value);
+                markUnsaved();
+              },
+            }
+          : undefined,
+      };
 
   return (
     <div
@@ -1065,6 +881,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           bodyFormat={bodyFormat}
           onToggleBodyFormat={toggleBodyFormat}
           hideFormat={redirecting}
+          messageOptions={messageOptions}
           setMinimized={setComposerMinimized}
           setMaximized={setMaximized}
           requestClose={requestClose}
@@ -1122,20 +939,15 @@ export function Composer({ accountId, onDraftSaved }: Props) {
               {strings.composer.redirectNote}
             </p>
           ) : null}
-          {redirecting ? null : bodyFormat === "html" ? (
+          {redirecting || bodyFormat !== "html" ? null : (
             <FormatToolbar
               editor={editor}
               formattingOpen={formattingOpen}
-              setFormattingOpen={setFormattingOpen}
               moreFormattingOpen={moreFormattingOpen}
               setMoreFormattingOpen={setMoreFormattingOpen}
               adjustIndent={adjustIndent}
               addLink={addLink}
-            >
-              {optionToggles}
-            </FormatToolbar>
-          ) : (
-            <div className="composer-toggle-row">{optionToggles}</div>
+            />
           )}
           {redirecting ? null : bodyFormat === "html" ? (
             <div data-context="composer" className="composer-editor-wrap">
@@ -1272,8 +1084,15 @@ export function Composer({ accountId, onDraftSaved }: Props) {
           setScheduleValue={setScheduleValue}
           saveDraft={saveDraft}
           saveState={saveState}
-          savedAt={savedAt}
+          formattingOpen={formattingOpen}
+          onToggleFormatting={
+            redirecting || bodyFormat !== "html"
+              ? undefined
+              : () => setFormattingOpen((value) => !value)
+          }
           showAttachments={!redirecting}
+          canInsertInlineImages={bodyFormat === "html"}
+          onScheduleError={setError}
           addAttachments={addAttachments}
           addInlineImage={addInlineImage}
           discardDraft={discardDraft}

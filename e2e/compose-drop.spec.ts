@@ -1,12 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import {
-  attachIpcLog,
-  emitTauriEvent,
-  recordIpc,
-  recordedCalls,
-} from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. A drop outside the composer, or with no composer open, attaches files.
@@ -20,7 +15,6 @@ import { installMockIpc } from "./mock-ipc";
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
 });
 
 async function openComposer(page: Page, path = "/") {
@@ -43,7 +37,7 @@ const drag = (
 ) => emitTauriEvent(page, "compose-drag", { phase, ...point, count });
 
 const dropCalls = async (page: Page) =>
-  (await recordedCalls(page)).filter(
+  (await ipcCalls(page)).filter(
     (call) => call.command === "attach_dropped_files",
   );
 
@@ -77,10 +71,10 @@ test("dropping files on the composer attaches them by opaque token", async ({
   await page.keyboard.press("Meta+s");
   await expect
     .poll(async () =>
-      (await recordedCalls(page)).some((call) => call.command === "save_draft"),
+      (await ipcCalls(page)).some((call) => call.command === "save_draft"),
     )
     .toBe(true);
-  const saved = (await recordedCalls(page)).find(
+  const saved = (await ipcCalls(page)).find(
     (call) => call.command === "save_draft",
   )?.args as { draft: { attachments: Array<{ token: string }> } };
   expect(saved.draft.attachments.map((item) => item.token)).toEqual([
@@ -89,7 +83,7 @@ test("dropping files on the composer attaches them by opaque token", async ({
   ]);
 
   // No IPC argument or event payload the page handled names a path.
-  const everything = JSON.stringify(await recordedCalls(page));
+  const everything = JSON.stringify(await ipcCalls(page));
   expect(everything).not.toMatch(/"paths?"\s*:/);
   expect(everything).not.toMatch(/\/Users\/|[A-Z]:\\\\/);
 
@@ -152,7 +146,7 @@ test("the Attach button still works next to drop-in", async ({ page }) => {
   await expect(page.locator(".compose-attachments")).toContainText(
     "budget.pdf",
   );
-  const picks = (await recordedCalls(page)).filter(
+  const picks = (await ipcCalls(page)).filter(
     (call) => call.command === "choose_attachments",
   );
   expect(picks).toHaveLength(1);

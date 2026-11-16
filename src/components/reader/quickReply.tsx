@@ -105,7 +105,8 @@ export function QuickReply({
             <button
               type="button"
               className="toolbar-button"
-              aria-label={strings.reader.startReplyAll}
+              // The visible "Reply all" leads the name, as axe requires (WCAG 2.5.3).
+              aria-label={`${strings.reader.replyAll}, ${strings.reader.startReplyAll}`}
               disabled={!text}
               onClick={() => {
                 if (!text) return;

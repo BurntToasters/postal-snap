@@ -13,7 +13,7 @@ import {
   folderPathLabel,
 } from "../../i18n/mail";
 import { useAppStore } from "../../store";
-import type { MessageSummary } from "../../types";
+import type { FlagColor, MessageSummary } from "../../types";
 import { useScheduledOutbox } from "../../hooks/useScheduledOutbox";
 import { useSettingsSave } from "../settings/useSettingsSave";
 import { readableMessageText } from "../reader/readerUtils";
@@ -24,12 +24,18 @@ import {
 } from "../../markConversation";
 import { hideMailbox, pinMailbox, unpinMailbox } from "../../pinnedMailboxes";
 import { rememberMoveMailboxId } from "../../recentMailbox";
+import { toggleListedRead } from "../../markRead";
 import { copyLoadedConversationText } from "../../copyMessageText";
 import { forwardLoadedConversation } from "../../forwardConversation";
 import { pinLoadedMessages } from "../../pinConversation";
-import { printLoadedConversation } from "../../printConversation";
+import {
+  printLoadedConversation,
+  printSelectedMessages,
+} from "../../printConversation";
 import { saveLoadedConversationFiles } from "../../saveConversation";
 import { starLoadedConversation } from "../../starConversation";
+import { setFlagColorFor } from "../../flagColor";
+import { FLAG_COLORS } from "../../flagColors";
 import { deleteLoadedConversation } from "../../deleteConversation";
 import {
   moveLoadedConversation,
@@ -37,6 +43,7 @@ import {
 } from "../../moveConversation";
 import { beginMessageOpen } from "../../messageOpen";
 import { conversationMessages } from "../../threads";
+import { startMboxExport, startMboxImport } from "./mboxOperations";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 type Scheduled = ReturnType<typeof useScheduledOutbox>;
@@ -283,6 +290,11 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
       void printLoadedConversation(summary);
       return;
     }
+    // One print path; opening the message would mark it read.
+    if (id === "print") {
+      void printSelectedMessages(summary.accountId, [summary.id]);
+      return;
+    }
     if (id.startsWith("copy-conversation:")) {
       const mailboxId = Number(id.slice("copy-conversation:".length));
       if (Number.isFinite(mailboxId)) {
@@ -323,6 +335,16 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
       })();
       return;
     }
+    if (id === "clear-flag" || id.startsWith("flag-color:")) {
+      const color = id === "clear-flag" ? null : Number(id.slice(11));
+      if (color === null || FLAG_COLORS.includes(color as FlagColor))
+        void setFlagColorFor(
+          summary.accountId,
+          [summary.id],
+          color as FlagColor | null,
+        );
+      return;
+    }
     if (id === "star-conversation" || id === "unstar-conversation") {
       void starLoadedConversation(summary, id === "star-conversation");
       return;
@@ -343,10 +365,31 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
       void markLoadedConversationUnread(summary);
       return;
     }
+    if (id === "toggle-read") {
+      if (!summary.isRead && current.settings.markRead === "after2s") {
+        // Explicit Mark read must apply immediately instead of waiting 2s in chooseMessage.
+        void toggleListedRead(summary.id);
+        void chooseMessage({ ...summary, isRead: true });
+        return;
+      }
+      void (async () => {
+        const opened = await chooseMessage(summary);
+        if (!opened) return;
+        const latest = useAppStore.getState();
+        const isNowRead =
+          latest.selectedMessage?.id === summary.id
+            ? latest.selectedMessage.isRead
+            : summary.isRead;
+        if (!summary.isRead && isNowRead) return;
+        window.dispatchEvent(
+          new CustomEvent("postal:menu-action", { detail: id }),
+        );
+      })();
+      return;
+    }
     void (async () => {
       const opened = await chooseMessage(summary);
       if (!opened) return;
-      if (id === "toggle-read" && !summary.isRead) return;
       if (id === "snooze") {
         window.dispatchEvent(new Event("postal:open-snooze"));
         return;
@@ -410,6 +453,15 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
     }
     if (id === "empty-junk") {
       void emptyJunkFolders();
+      return;
+    }
+    if (id === "export-mailbox") {
+      startMboxExport(mailbox.accountId, mailbox.id);
+      return;
+    }
+    if (id === "import-mbox") {
+      const accountId = mailbox.accountId;
+      startMboxImport(accountId, mailbox.id, () => refreshAccount(accountId));
       return;
     }
     if (id === "hide-folder" || id === "show-folder") {

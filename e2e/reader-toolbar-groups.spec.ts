@@ -1,6 +1,9 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here: T1-T5, H1-H3.
 // T1 more than three toolbar groups; T2 "1 of 1" / nav not last;
@@ -46,7 +49,7 @@ test("one message has two groups and no navigation", async ({ page }) => {
   await expect(page.locator(".reader-action-group")).toHaveCount(2);
   expect(await names(page, 0)).toEqual(["Reply", "Reply all", "Forward"]);
   expect(await names(page, 1)).toEqual([
-    "Add star",
+    "Flag",
     "Archive",
     "Move to trash",
     "More actions",
@@ -59,13 +62,13 @@ test("one message has two groups and no navigation", async ({ page }) => {
 
 test("star keeps its name, pressed state and tooltip", async ({ page }) => {
   await open(page, "theme=light");
-  const star = page.getByRole("button", { name: "Add star", exact: true });
+  const star = page.getByRole("button", { name: "Flag", exact: true });
   await expect(star).toHaveAttribute("aria-pressed", "false");
-  await expect(star).toHaveAttribute("title", /Add star/);
+  await expect(star).toHaveAttribute("title", /Flag/);
   await star.click();
-  const on = page.getByRole("button", { name: "Remove star", exact: true });
+  const on = page.getByRole("button", { name: "Unflag", exact: true });
   await expect(on).toHaveAttribute("aria-pressed", "true");
-  await expect(on).toHaveAttribute("title", /Remove star/);
+  await expect(on).toHaveAttribute("title", /Unflag/);
 });
 
 test("a thread adds navigation last and right-aligned", async ({ page }) => {
@@ -93,7 +96,7 @@ test("a thread adds navigation last and right-aligned", async ({ page }) => {
 });
 
 const combos = [
-  ...(["comfortable", "compact"] as const).flatMap((density) =>
+  ...(["comfortable", "normal", "compact"] as const).flatMap((density) =>
     [1, 2].flatMap((scale) =>
       (["right", "bottom"] as const).map((pane) => ({
         name: `${density} x${scale} ${pane}`,
@@ -190,7 +193,8 @@ test("header links share one line and start at the sender name", async ({
 }) => {
   await open(page, "fileCount=2&earlier=1&inTrash=1");
   const links = page.locator(".message-header-links > *");
-  expect(await links.count()).toBeGreaterThanOrEqual(3);
+  // Details lives in the stamp column, so the links row holds file links only.
+  expect(await links.count()).toBeGreaterThanOrEqual(2);
   const tops = await links.evaluateAll((nodes) =>
     nodes.map((n) => Math.round(n.getBoundingClientRect().top)),
   );

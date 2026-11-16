@@ -8,15 +8,18 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import { MailPlus, PanelLeft, RefreshCw, Search, Settings } from "lucide-react";
 import {
   CONTEXT_ACTION_EVENT,
   type ContextMenuActionDetail,
 } from "../../contextMenu";
+import { formatChord, withChord } from "../../format";
 import { strings } from "../../i18n";
 import { moveMenuFocus } from "../toolbarNav";
-import { GetMailMenu } from "./getMailMenu";
-import { SearchTips } from "./searchTips";
+import { SearchScopeMenu } from "./searchScopeMenu";
+import { SearchTipsButton, watchAnchorLayout } from "./searchTips";
+import { placeAnchoredMenu } from "../popupPlacement";
 
 type LocalView = "drafts" | "outbox" | "snoozed";
 
@@ -27,7 +30,6 @@ const FIT_STEPS = 5;
 const BADGE_STEPS = 3;
 
 function fitToolbar(toolbar: HTMLElement) {
-  toolbar.removeAttribute("data-fit-tips");
   for (let step = 1; step <= FIT_STEPS; step += 1) {
     toolbar.removeAttribute(`data-fit${step}`);
   }
@@ -51,8 +53,6 @@ function fitToolbar(toolbar: HTMLElement) {
   // so Get Mail and Compose drop labels even without clipping.
   const searchUnusable = () =>
     search !== null && search.clientWidth < rem * 3.75;
-  // The tips button gives its width back before anything else shrinks.
-  if (searchCramped()) toolbar.setAttribute("data-fit-tips", "");
   for (let step = 1; step <= FIT_STEPS; step += 1) {
     const badgeStep = step <= BADGE_STEPS;
     if (badgeStep && !hasBadge) continue;
@@ -106,8 +106,44 @@ export function SearchBox({
   onToggleScope,
 }: SearchBoxProps) {
   const [open, setOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
   const menuId = useId();
   const showRecent = open && query.trim() === "" && recentSearches.length > 0;
+
+  // Portalled with fixed placement (.toolbar-trailing clips); flips when short of room.
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const menu = document.getElementById(menuId);
+    if (!showRecent || !form || !menu) return;
+    const place = () => {
+      menu.style.width = `${form.getBoundingClientRect().width}px`;
+      placeAnchoredMenu(menu, form);
+    };
+    place();
+    return watchAnchorLayout(form, place);
+  }, [showRecent, menuId, recentSearches.length]);
+
+  // Outside presses close the recent menu; presses inside it or the field do not.
+  useEffect(() => {
+    if (!showRecent) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        formRef.current?.contains(target) ||
+        document.getElementById(menuId)?.contains(target)
+      )
+        return;
+      // Context menus and their submenus are separate portals; their actions keep this open.
+      if (
+        target instanceof Element &&
+        target.closest(".context-menu, .popup-submenu-panel")
+      )
+        return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [showRecent, menuId]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -203,6 +239,7 @@ export function SearchBox({
 
   return (
     <form
+      ref={formRef}
       className="search-box"
       data-tauri-drag-region="false"
       role="search"
@@ -223,60 +260,61 @@ export function SearchBox({
         aria-keyshortcuts="Meta+F Control+F /"
         aria-controls={showRecent ? menuId : undefined}
       />
-      {showRecent ? (
-        <div
-          id={menuId}
-          className="search-recent app-menu"
-          role="menu"
-          aria-label={strings.mail.recentSearches}
-          onMouseDown={(event) => event.preventDefault()}
-          onKeyDown={onMenuKeyDown}
-        >
-          <div className="context-menu-heading">
-            {strings.mail.recentSearches}
-          </div>
-          {recentSearches.map((recent) => (
-            <button
-              key={recent}
-              type="button"
-              role="menuitem"
-              tabIndex={-1}
-              data-recent={recent}
-              data-context="recent-search"
-              title={strings.mail.forgetRecentHint}
-              onClick={() => {
-                setOpen(false);
-                onPickRecent(recent);
-              }}
+      {showRecent
+        ? createPortal(
+            <div
+              id={menuId}
+              className="search-recent app-menu"
+              role="menu"
+              aria-label={strings.mail.recentSearches}
+              onMouseDown={(event) => event.preventDefault()}
+              onKeyDown={onMenuKeyDown}
             >
-              {recent}
-            </button>
-          ))}
-          <button
-            type="button"
-            role="menuitem"
-            tabIndex={-1}
-            onClick={() => {
-              setOpen(false);
-              onClearRecent();
-            }}
-          >
-            {strings.mail.clearRecentSearches}
-          </button>
-        </div>
-      ) : null}
-      <SearchTips />
+              <div className="context-menu-heading">
+                {strings.mail.recentSearches}
+              </div>
+              {recentSearches.map((recent) => (
+                <button
+                  key={recent}
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  data-recent={recent}
+                  data-context="recent-search"
+                  title={strings.mail.forgetRecentHint}
+                  onClick={() => {
+                    setOpen(false);
+                    onPickRecent(recent);
+                  }}
+                >
+                  {recent}
+                </button>
+              ))}
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => {
+                  setOpen(false);
+                  onClearRecent();
+                }}
+              >
+                {strings.mail.clearRecentSearches}
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       {!activeLocalView ? (
-        <button
-          className="search-scope"
-          type="button"
-          aria-pressed={allFolders}
-          title={strings.mail.searchAllFoldersTitle}
-          onClick={onToggleScope}
-        >
-          {strings.mail.searchAllFolders}
-        </button>
-      ) : null}
+        <SearchScopeMenu
+          allFolders={allFolders}
+          onSelectAllFolders={(all) => {
+            if (all !== allFolders) onToggleScope();
+          }}
+        />
+      ) : (
+        <SearchTipsButton />
+      )}
     </form>
   );
 }
@@ -297,6 +335,19 @@ interface MailToolbarProps extends SearchBoxProps {
   onCompose: () => void;
   onApplyUpdate: () => void;
   onOpenSettings: () => void;
+}
+
+// Plain F5 fetches the active account; Shift+F5 fetches every account.
+function getMailTitle(accountCount: number): string {
+  const label = withChord(
+    strings.mail.getMail,
+    formatChord("F5", { mod: false }),
+  );
+  if (accountCount < 2) return label;
+  const all = strings.mail.getMailAllHint(
+    formatChord("F5", { shift: true, mod: false }),
+  );
+  return `${label}. ${all}`;
 }
 
 export function MailToolbar({
@@ -350,11 +401,15 @@ export function MailToolbar({
         <button
           className="toolbar-button get-mail-button"
           type="button"
-          aria-keyshortcuts="F5 Meta+Shift+M Meta+Shift+N Control+Shift+M Control+Shift+N"
-          onClick={onRefresh}
+          aria-keyshortcuts="F5 Shift+F5 Meta+Shift+N Meta+Shift+M Control+Shift+N Control+Shift+M"
+          onClick={(event) => {
+            // Shift+click fetches every account, like Shift+F5.
+            if (event.shiftKey) onRefreshAll();
+            else onRefresh();
+          }}
           disabled={busy}
           aria-label={strings.mail.getMail}
-          title={strings.mail.getMail}
+          title={getMailTitle(accountCount)}
         >
           <RefreshCw
             aria-hidden="true"
@@ -362,13 +417,6 @@ export function MailToolbar({
           />
           <span>{strings.mail.getMail}</span>
         </button>
-        {accountCount > 1 ? (
-          <GetMailMenu
-            busy={busy}
-            syncingAll={syncingAll}
-            onRefreshAll={onRefreshAll}
-          />
-        ) : null}
       </div>
       <span className="toolbar-flex-spacer" aria-hidden="true" />
       <div className="toolbar-trailing">

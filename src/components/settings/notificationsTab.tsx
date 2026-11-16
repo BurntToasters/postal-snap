@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { api } from "../../api";
+import { errorText } from "../../errors";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import { SettingsGroup, SettingsPanel } from "./primitives";
+import { SettingsGroup, SettingsPanel, SettingsSection } from "./primitives";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 
 interface NotificationsTabProps {
@@ -10,7 +12,54 @@ interface NotificationsTabProps {
 
 export function NotificationsTab({ update }: NotificationsTabProps) {
   const settings = useAppStore((state) => state.settings);
+  const accounts = useAppStore((state) => state.accounts);
   const [sameTimes, setSameTimes] = useState(false);
+  const [accountError, setAccountError] = useState<string>();
+  // Per-account save chain plus the last value the backend accepted.
+  const notifyQueues = useRef(new Map<string, Promise<void>>());
+  const notifyCommitted = useRef(new Map<string, boolean>());
+
+  // Optimistic: the switch flips at once and rolls back if the save fails.
+  function setAccountNotify(accountId: string, enabled: boolean) {
+    const apply = (value: boolean) =>
+      useAppStore
+        .getState()
+        .setAccounts(
+          useAppStore
+            .getState()
+            .accounts.map((item) =>
+              item.id === accountId ? { ...item, notifyNewMail: value } : item,
+            ),
+        );
+    if (!notifyCommitted.current.has(accountId)) {
+      const before = useAppStore
+        .getState()
+        .accounts.find((item) => item.id === accountId);
+      notifyCommitted.current.set(accountId, before?.notifyNewMail !== false);
+    }
+    apply(enabled);
+    setAccountError(undefined);
+    const previous = notifyQueues.current.get(accountId) ?? Promise.resolve();
+    const run = previous.then(async () => {
+      try {
+        await api.setAccountNotifications(accountId, enabled);
+        notifyCommitted.current.set(accountId, enabled);
+      } catch (cause) {
+        setAccountError(errorText(cause));
+        if (notifyQueues.current.get(accountId) === run) {
+          apply(notifyCommitted.current.get(accountId) ?? true);
+        }
+      }
+    });
+    notifyQueues.current.set(accountId, run);
+    void run.then(() => {
+      if (notifyQueues.current.get(accountId) === run) {
+        notifyQueues.current.delete(accountId);
+        notifyCommitted.current.delete(accountId);
+      }
+    });
+    return run;
+  }
 
   function changeQuietHours(which: "start" | "end", value: string) {
     const start = which === "start" ? value : settings.quietHoursStart;
@@ -101,6 +150,38 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
           />
         </label>
       </SettingsGroup>
+      {accounts.length > 0 ? (
+        <SettingsSection title={strings.settings.notifyPerAccount}>
+          <SettingsGroup>
+            {accounts.map((account) => {
+              const label = account.displayName || account.email;
+              return (
+                <label className="switch-row" key={account.id}>
+                  <span>
+                    <strong>{label}</strong>
+                    {account.displayName ? (
+                      <small>{account.email}</small>
+                    ) : null}
+                  </span>
+                  <input
+                    type="checkbox"
+                    aria-label={strings.settings.accountNotifyNewMailFor(label)}
+                    checked={account.notifyNewMail !== false}
+                    onChange={(event) =>
+                      void setAccountNotify(account.id, event.target.checked)
+                    }
+                  />
+                </label>
+              );
+            })}
+          </SettingsGroup>
+          {accountError ? (
+            <p className="settings-row-error" role="alert">
+              {accountError}
+            </p>
+          ) : null}
+        </SettingsSection>
+      ) : null}
     </SettingsPanel>
   );
 }

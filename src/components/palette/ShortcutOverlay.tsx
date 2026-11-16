@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getAction } from "../../actions/registry";
 import type { ActionId, ActionScope } from "../../actions/types";
@@ -28,8 +28,9 @@ export function ShortcutOverlay({ onClose }: { onClose: () => void }) {
     // The dialog restores focus before the inert background clears.
     window.setTimeout(() => invoker?.focus(), 0);
   };
-  const dialogRef = useDialogFocus(dismiss);
-  useInertBackground();
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(dismiss, { ref: dialogRef });
   const titleId = useId();
   // Same entries as Settings > Shortcuts, grouped by the action's scope.
   const groups = useMemo(() => {

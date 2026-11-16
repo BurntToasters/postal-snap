@@ -5,6 +5,9 @@ import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import type { MockShared } from "./mock/context";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A name save response taken before a Reply-To save erases the new Reply-To.
@@ -15,6 +18,8 @@ import type { MockShared } from "./mock/context";
 
 const variants = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },
@@ -31,7 +36,7 @@ async function openIdentity(page: Page, density: string, scale: number) {
   await page.goto(`/?localMail=1&density=${density}&scale=${scale}`);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 }
 

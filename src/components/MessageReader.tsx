@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MailOpen } from "lucide-react";
 import { api } from "../api";
 import { useRemoteImages } from "./reader/useRemoteImages";
 import {
@@ -20,7 +21,11 @@ import { rememberedLetterScroll } from "../letterScroll";
 import { snoozeLoadedConversation } from "../snoozeConversation";
 import { inspectAndOpenExternalLink } from "./externalLink";
 import { parseMailto } from "../mailto";
-import { hasAuthorColors, sanitizeReceivedHtml } from "../security";
+import {
+  hasAuthorColors,
+  htmlToPlainText,
+  sanitizeReceivedHtml,
+} from "../security";
 import { textHighlightTerms } from "../searchHighlight";
 import { useIsDark } from "../hooks/useColorScheme";
 import { useAppStore } from "../store";
@@ -48,18 +53,20 @@ import { useReaderFlags } from "./reader/useReaderFlags";
 import { useReaderMoves } from "./reader/useReaderMoves";
 import { useSenderRules } from "./reader/useSenderRules";
 import { useReplyNotes } from "./reader/useReplyNotes";
+import { useFrameLinks } from "./reader/useFrameLinks";
 import { ReaderToolbar } from "./reader/readerToolbar";
 import { buildReaderActions } from "./reader/buildReaderActions";
 import { SnoozePanel } from "./reader/snoozePanel";
 import {
   buildPrintDocument,
   presentPrintDocument,
-  hasVisibleHtml,
-  htmlToPlainText,
+  htmlBodyPresence,
   readableMessageText,
   recipientLines,
   readReceiptState,
 } from "./reader/readerUtils";
+import { MEDIA_QUERIES } from "../breakpoints";
+import { errorText } from "../errors";
 
 export function MessageReader({
   onSnoozed,
@@ -113,6 +120,8 @@ export function MessageReader({
   const [loadedHtml, setLoadedHtml] = useState<{
     messageId: number;
     html: string;
+    sourceHtml?: string;
+    remoteAttempted?: boolean;
   }>();
   const [preparingForward, setPreparingForward] = useState(false);
   const [downloadingAttachmentId, setDownloadingAttachmentId] =
@@ -223,13 +232,13 @@ export function MessageReader({
         try {
           await onConversationSnoozed?.(target.accountId, ids);
         } catch (cause) {
-          setError(String(cause));
+          setError(errorText(cause));
         }
         return;
       }
       await api.snoozeMessage(target.accountId, target.id, untilIso);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       return;
     }
     setSnoozeOpen(false);
@@ -240,13 +249,13 @@ export function MessageReader({
     try {
       await onSnoozed?.(target.accountId, target.id);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
   const isOverlay = settings.readingPane === "hidden" && message !== undefined;
   const [narrowViewport, setNarrowViewport] = useState(() =>
     typeof window.matchMedia === "function"
-      ? window.matchMedia("(max-width: 760px)").matches
+      ? window.matchMedia(MEDIA_QUERIES.narrowViewport).matches
       : false,
   );
   const treatAsOverlay = isOverlay || (narrowViewport && message !== undefined);
@@ -299,7 +308,7 @@ export function MessageReader({
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia("(max-width: 760px)");
+    const media = window.matchMedia(MEDIA_QUERIES.narrowViewport);
     const update = () => setNarrowViewport(media.matches);
     update();
     media.addEventListener("change", update);
@@ -360,6 +369,8 @@ export function MessageReader({
     // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
     keepSnooze.current = false;
     if (originalOpen) setOriginalOpen(false);
+    if (findIndex !== 0) setFindIndex(0);
+    if (findStatus) setFindStatus("");
   }
 
   const {
@@ -448,35 +459,14 @@ export function MessageReader({
         : await api.declineReadReceipt(message.accountId, message.id);
       setReceiptOverride({ id: message.id, choice });
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setReceiptBusy(false);
     }
   }
 
-  const handleExternalLinkRef = useRef(handleExternalLink);
-  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
-  handleExternalLinkRef.current = handleExternalLink;
-
   // Native side routes denied frame popups (WebKit link clicks) here.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let active = true;
-    void api
-      .onFrameLink((url) => {
-        if (/^https?:\/\//i.test(url)) void handleExternalLinkRef.current(url);
-        else if (/^mailto:/i.test(url))
-          useAppStore.getState().openComposer({ prefill: parseMailto(url) });
-      })
-      .then((stop) => {
-        if (active) unlisten = stop;
-        else stop();
-      });
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
+  useFrameLinks(frame, handleExternalLink);
 
   async function copyReadableText() {
     if (!message) return;
@@ -593,17 +583,22 @@ export function MessageReader({
     [htmlBody],
   );
   // Fall back to the text part when the HTML part sanitizes to nothing visible.
-  const formatted = useMemo(
-    () => (sanitized ? hasVisibleHtml(sanitized.html) : false),
+  const bodyPresence = useMemo(
+    () =>
+      sanitized
+        ? htmlBodyPresence(sanitized.html)
+        : { visible: false, text: false },
     // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
     [sanitized],
   );
-  const extractedPlain = useMemo(
-    () => (sanitized ? htmlToPlainText(sanitized.html) : ""),
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
-    [sanitized],
-  );
+  const formatted = bodyPresence.visible;
   const viewingPlain = plainMessageId === message?.id;
+  // Parsed only while the plain view is open; HTML mail is already parsed for `formatted`.
+  const extractedPlain = useMemo(
+    () => (viewingPlain && sanitized ? htmlToPlainText(sanitized.html) : ""),
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization -- memo kept as written
+    [sanitized, viewingPlain],
+  );
   const showHtml = formatted && !viewingPlain;
   const plainText =
     viewingPlain && message
@@ -612,12 +607,18 @@ export function MessageReader({
         : extractedPlain
       : undefined;
   const canViewPlain =
-    formatted &&
-    (Boolean(message?.textBody.trim()) || extractedPlain.length > 0);
+    formatted && (Boolean(message?.textBody.trim()) || bodyPresence.text);
+  // Loaded HTML is valid only for the body it was built from.
+  const loadedIsCurrent = Boolean(
+    loadedHtml &&
+    loadedHtml.messageId === message?.id &&
+    loadedHtml.sourceHtml === sanitized?.html,
+  );
   const currentLoadedHtml =
-    loadedHtml && loadedHtml.messageId === message?.id
-      ? loadedHtml.html
-      : undefined;
+    loadedHtml && loadedIsCurrent ? loadedHtml.html : undefined;
+  const remoteAttempted = Boolean(
+    loadedIsCurrent && loadedHtml?.remoteAttempted,
+  );
   const { remainingBlockedImages, filteredImages, threatImages } =
     useMemo(() => {
       if (!currentLoadedHtml) {
@@ -684,9 +685,10 @@ export function MessageReader({
     );
   if (!message)
     return (
-      // Quiet text, like Mail's "No Message Selected".
       <section className="reader-pane empty-reader" id="reader-pane">
-        <p>{strings.mail.noMessage}</p>
+        <MailOpen aria-hidden="true" focusable="false" />
+        <p className="empty-reader-title">{strings.reader.emptyTitle}</p>
+        <p className="empty-reader-hint">{strings.mail.noMessage}</p>
       </section>
     );
 
@@ -854,6 +856,24 @@ export function MessageReader({
           onError={(text) => setError(text)}
         />
       ) : null}
+      <AttachmentList
+        message={message}
+        preview={preview}
+        downloadingAttachmentId={downloadingAttachmentId}
+        previewAttachmentId={previewAttachmentId}
+        isPreviewable={isPreviewable}
+        onPreview={previewFile}
+        onDownload={download}
+        onSaveAll={() => void saveAllAttachments()}
+        onSaveChosen={(ids) => void saveChosenAttachments(ids)}
+        onPreviewDownload={() => {
+          const current = message.attachments.find(
+            (item) => item.id === preview?.attachmentId,
+          );
+          if (current) void download(current.id, current.filename);
+        }}
+        onPreviewClose={() => setPreview(null)}
+      />
       <MessageBody
         message={message}
         sanitized={sanitized}
@@ -861,6 +881,7 @@ export function MessageReader({
         plainText={plainText}
         followsTheme={isDark && (!showHtml || !hasAuthorColors(frameSource))}
         currentLoadedHtml={currentLoadedHtml}
+        remoteAttempted={remoteAttempted}
         frameHtml={frameHtml}
         filteredImages={filteredImages}
         threatImages={threatImages}
@@ -901,25 +922,6 @@ export function MessageReader({
         onOpenLink={(url) => void handleExternalLink(url)}
         onOpenMailto={(url) => openComposer({ prefill: parseMailto(url) })}
         searchTerms={textHighlightTerms(searchQuery ?? "")}
-      />
-      <AttachmentList
-        message={message}
-        preview={preview}
-        downloadingAttachmentId={downloadingAttachmentId}
-        previewAttachmentId={previewAttachmentId}
-        isPreviewable={isPreviewable}
-        onPreview={previewFile}
-        onDownload={download}
-        onSaveAll={() => void saveAllAttachments()}
-        onSaveChosen={(ids) => void saveChosenAttachments(ids)}
-        onPreviewDownload={() => {
-          const current = message.attachments.find(
-            (item) =>
-              item.filename === preview?.preview.filename && !item.inline,
-          );
-          if (current) void download(current.id, current.filename);
-        }}
-        onPreviewClose={() => setPreview(null)}
       />
       <QuickReply message={message} replyNotes={replyNotes} />
     </article>

@@ -178,6 +178,36 @@ export function groupByDayLabel<T>(
   return groups;
 }
 
+/** Platform-aware chord: ⌘R on macOS, Ctrl+R elsewhere. Every label uses it. */
+export interface ChordOptions {
+  shift?: boolean;
+  alt?: boolean;
+  /** Set false for keys such as F5 that take no Command/Ctrl. */
+  mod?: boolean;
+}
+
+export function formatChord(key: string, options?: ChordOptions): string {
+  const isMac = document.documentElement.dataset.platform === "macos";
+  const useMod = options?.mod !== false;
+  if (isMac) {
+    const shift = options?.shift ? "⇧" : "";
+    const alt = options?.alt ? "⌥" : "";
+    const cmd = useMod ? "⌘" : "";
+    return `${shift}${alt}${cmd}${key}`;
+  }
+  const parts: string[] = [];
+  if (useMod) parts.push("Ctrl");
+  if (options?.alt) parts.push("Alt");
+  if (options?.shift) parts.push("Shift");
+  parts.push(key);
+  return parts.join("+");
+}
+
+/** Label with its chord in parentheses, for tooltips and titles. */
+export function withChord(label: string, chord: string): string {
+  return `${label} (${chord})`;
+}
+
 export function shortcutMod(): string {
   return document.documentElement.dataset.platform === "macos" ? "⌘" : "Ctrl";
 }
@@ -192,23 +222,6 @@ export function shortcutAltMod(): string {
   return document.documentElement.dataset.platform === "macos"
     ? "⌥⌘"
     : "Ctrl+Alt";
-}
-
-/** Platform-aware chord: ⌘R on macOS, Ctrl+R elsewhere. */
-export function shortcutChord(
-  key: string,
-  options?: { shift?: boolean; alt?: boolean },
-): string {
-  const isMac = document.documentElement.dataset.platform === "macos";
-  if (isMac) {
-    const shift = options?.shift ? "⇧" : "";
-    const alt = options?.alt ? "⌥" : "";
-    return `${shift}${alt}⌘${key}`;
-  }
-  const parts = ["Ctrl"];
-  if (options?.alt) parts.push("Alt");
-  if (options?.shift) parts.push("Shift");
-  return `${parts.join("+")}+${key}`;
 }
 
 export function formatBytes(bytes: number): string {

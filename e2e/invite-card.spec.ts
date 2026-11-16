@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. The invite time is shown in UTC or the sender's zone, not local time.

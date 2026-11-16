@@ -3,13 +3,27 @@ import { api } from "../../api";
 import { earlierHeaderId } from "../../contextMenu";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { MessageSummary } from "../../types";
+import type { MessageDetail, MessageSummary } from "../../types";
 import { waitToMarkRead } from "../../markRead";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
 import { rememberedOpenMessage } from "../../recentMessage";
 import { isOversizeError } from "./mailSearch";
+import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
+
+function oversizePlaceholder(summary: MessageSummary): MessageDetail {
+  return {
+    ...summary,
+    to: [],
+    cc: [],
+    replyTo: null,
+    textBody: "",
+    htmlBody: null,
+    remoteImagesBlocked: false,
+    attachments: [],
+  };
+}
 
 interface Options {
   activeAccountId: AppState["activeAccountId"];
@@ -19,7 +33,7 @@ interface Options {
   selectedMessage: AppState["selectedMessage"];
   submittedQuery: string;
   loadingMessages: boolean;
-  loadAccountData: () => Promise<void>;
+  loadMailboxCounts: () => Promise<void>;
   selectMessage: AppState["selectMessage"];
   selectMailbox: AppState["selectMailbox"];
   setError: AppState["setError"];
@@ -37,7 +51,7 @@ export function useMessageOpening({
   selectedMessage,
   submittedQuery,
   loadingMessages,
-  loadAccountData,
+  loadMailboxCounts,
   selectMessage,
   selectMailbox,
   setError,
@@ -48,8 +62,9 @@ export function useMessageOpening({
 }: Options) {
   const chooseMessage = useCallback(
     async (summary: MessageSummary) => {
-      const accountId = activeAccountId;
-      const mailboxId = activeMailboxId;
+      // Read the live store: a stale render closure must never mix accounts.
+      const { activeAccountId: accountId, activeMailboxId: mailboxId } =
+        useAppStore.getState();
       if (!accountId || !mailboxId) return false;
       const request = beginMessageOpen();
       setLoadingMessageId(summary.id);
@@ -117,24 +132,15 @@ export function useMessageOpening({
               ...useAppStore.getState().selectedMessage!,
               isRead: true,
             });
-            await loadAccountData();
+            await loadMailboxCounts();
           }
         }
       } catch (cause) {
         if (!isCurrentMessageOpen(request)) return false;
-        const detail = String(cause);
+        const detail = errorText(cause);
         setError(detail);
         if (isOversizeError(cause)) {
-          selectMessage({
-            ...summary,
-            to: [],
-            cc: [],
-            replyTo: null,
-            textBody: "",
-            htmlBody: null,
-            remoteImagesBlocked: false,
-            attachments: [],
-          });
+          selectMessage(oversizePlaceholder(summary));
         }
       } finally {
         if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
@@ -142,9 +148,7 @@ export function useMessageOpening({
       return useAppStore.getState().selectedMessage?.id === summary.id;
     },
     [
-      activeAccountId,
-      activeMailboxId,
-      loadAccountData,
+      loadMailboxCounts,
       selectMessage,
       setError,
       setMessages,
@@ -202,13 +206,18 @@ export function useMessageOpening({
     try {
       found = await api.findCachedMessage(accountId, headerId);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
       return;
     }
     if (!found || found.id === summary.id) {
       setError(strings.reader.earlierMessageMissing);
       return;
     }
+    await openFoundMessage(accountId, found);
+  }
+
+  // Shows a message in its own folder; the caller has already made accountId active.
+  async function openFoundMessage(accountId: string, found: MessageSummary) {
     clearQuery();
     resetListState();
     const viewing = useAppStore.getState();
@@ -277,18 +286,29 @@ export function useMessageOpening({
         if (
           isCurrentMessageOpen(request) &&
           latest.selectedMessage?.id === found.id
-        )
+        ) {
           selectMessage({
             ...useAppStore.getState().selectedMessage!,
             isRead: true,
           });
+          await loadMailboxCounts();
+        }
       }
     } catch (cause) {
-      if (isCurrentMessageOpen(request)) setError(String(cause));
+      if (!isCurrentMessageOpen(request)) return;
+      setError(errorText(cause));
+      if (
+        isOversizeError(cause) &&
+        useAppStore.getState().activeAccountId === accountId &&
+        useAppStore.getState().activeMailboxId === mailboxId &&
+        !useAppStore.getState().activeLocalView
+      ) {
+        selectMessage(oversizePlaceholder(found));
+      }
     } finally {
       if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
     }
   }
 
-  return { chooseMessage, openEarlierMessage };
+  return { chooseMessage, openEarlierMessage, openFoundMessage };
 }

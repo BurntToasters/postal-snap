@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts, ipcCommands } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts, ipcCommands } from "./ipc";
 
 // Failure modes covered here (docs/0.5.0-FAILURE-INVENTORY.md, section E):
 // 1. A partial message hides its known attachments or never says why they are missing.
@@ -17,8 +17,10 @@ const NOTICE = "Attachments are not downloaded yet (12.4 MB message).";
 
 const configs = [
   { name: "comfortable", query: "density=comfortable&scale=1" },
+  { name: "normal", query: "density=normal&scale=1" },
   { name: "compact", query: "density=compact&scale=1" },
   { name: "text-200", query: "density=comfortable&scale=2" },
+  { name: "normal-200", query: "density=normal&scale=2" },
   { name: "compact-200", query: "density=compact&scale=2" },
 ] as const;
 

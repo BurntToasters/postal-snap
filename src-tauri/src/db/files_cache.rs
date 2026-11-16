@@ -38,7 +38,7 @@ impl Database {
         account_id: &str,
     ) -> Result<std::path::PathBuf, String> {
         let path: Option<String> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT path FROM file_grants WHERE token=?1 AND account_id=?2",
                 params![token, account_id],
@@ -54,7 +54,7 @@ impl Database {
         &self,
         account_id: &str,
     ) -> Result<Vec<(String, std::path::PathBuf)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT token,path FROM file_grants WHERE account_id=?1 AND token NOT IN (SELECT token FROM attachment_refs)",
@@ -75,7 +75,7 @@ impl Database {
         &self,
         account_id: &str,
     ) -> Result<Vec<(String, std::path::PathBuf)>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT token,path FROM file_grants WHERE account_id=?1
@@ -141,7 +141,7 @@ impl Database {
 
     pub fn legacy_settings(&self) -> Result<AppSettings, String> {
         let json: Option<String> = self
-            .conn()?
+            .read_conn()?
             .query_row("SELECT value FROM settings WHERE key='app'", [], |row| {
                 row.get(0)
             })
@@ -265,7 +265,7 @@ impl Database {
         default: &CachePolicy,
     ) -> Result<CachePolicy, String> {
         let row: Option<(Option<String>, Option<u32>, Option<i64>)> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT cache_mode,cache_days,cache_max_bytes FROM accounts WHERE id=?1",
                 [account_id],
@@ -423,7 +423,7 @@ impl Database {
         max_item_bytes: u64,
     ) -> Result<Vec<(u32, String, u64)>, String> {
         let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn.prepare_cached(PREFETCH_CANDIDATES_SQL).map_err(db_error)?;
         let rows = statement
             .query_map(

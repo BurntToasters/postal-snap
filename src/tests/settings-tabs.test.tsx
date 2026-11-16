@@ -392,8 +392,9 @@ describe("small settings tabs", () => {
     expect(container.querySelectorAll("kbd")).toHaveLength(
       getShortcutsRegistry().length,
     );
-    expect(container).toHaveTextContent("⌘ N");
-    expect(container).toHaveTextContent("⌥⌘ F");
+    // One chord format everywhere: ⌘N, not ⌘ N.
+    expect(container).toHaveTextContent("⌘N");
+    expect(container).toHaveTextContent("⌥⌘F");
   });
 
   it("toggles both advanced protection preferences and warning", () => {

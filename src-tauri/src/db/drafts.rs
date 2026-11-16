@@ -62,7 +62,7 @@ impl Database {
 
     pub fn draft(&self, id: &str, account_id: &str) -> Result<ComposeDraft, String> {
         let json: String = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT draft_json FROM drafts WHERE id=?1 AND account_id=?2 AND (deleted_at IS NULL OR sync_state='deletePending')",
                 params![id, account_id],
@@ -118,7 +118,7 @@ impl Database {
     }
 
     pub fn pending_draft_sync(&self, account_id: &str) -> Result<Vec<DraftSyncRecord>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT id,draft_json,remote_mailbox,remote_uid,remote_uid_validity,
@@ -249,7 +249,7 @@ impl Database {
         mailbox: &str,
         uid_validity: Option<u32>,
     ) -> Result<std::collections::HashSet<u32>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT remote_uid FROM drafts WHERE account_id=?1 AND remote_mailbox=?2
@@ -267,12 +267,12 @@ impl Database {
         &self,
         id: &str,
         account_id: &str,
-    ) -> Result<Option<(String, u32)>, String> {
-        self.conn()?
+    ) -> Result<Option<(String, u32, bool)>, String> {
+        self.read_conn()?
             .query_row(
-                "SELECT sync_state,revision FROM drafts WHERE id=?1 AND account_id=?2",
+                "SELECT sync_state,revision,deleted_at IS NOT NULL FROM drafts WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .map_err(db_error)
@@ -322,7 +322,7 @@ impl Database {
                  remote_mailbox=excluded.remote_mailbox,remote_uid=excluded.remote_uid,
                  remote_uid_validity=excluded.remote_uid_validity,
                  remote_message_id=excluded.remote_message_id,revision=excluded.revision,deleted_at=NULL
-                 WHERE drafts.account_id=excluded.account_id",
+                 WHERE drafts.account_id=excluded.account_id AND drafts.deleted_at IS NULL",
                 params![
                     id,
                     draft.account_id,

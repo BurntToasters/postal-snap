@@ -3,7 +3,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { FilterRule, MailboxSummary } from "../../types";
+import type {
+  FilterRule,
+  FlagColor,
+  MailboxSummary,
+  RuleAction,
+  RuleCondition,
+} from "../../types";
+import { errorText } from "../../errors";
+
+export const MAX_RULE_CONDITIONS = 10;
+export const MAX_RULE_ACTIONS = 5;
+export const MAX_RULE_VALUE_CHARS = 320;
 
 export interface RuleSeed {
   accountId: string;
@@ -11,13 +22,35 @@ export interface RuleSeed {
   field?: "from" | "to" | "subject";
 }
 
-interface RuleDraft {
-  name: string;
+export interface RuleConditionDraft {
+  id?: string;
   field: string;
-  contains: string;
-  action: string;
-  target: string;
+  value: string;
 }
+
+export interface RuleActionDraft {
+  id?: string;
+  kind: string;
+  target: string;
+  flagColor: string;
+}
+
+let nextRowSeq = 0;
+
+/** Monotonic client-only key for draft condition and action rows. */
+export function nextRuleRowId(): string {
+  nextRowSeq += 1;
+  return `rule-row-${nextRowSeq}`;
+}
+
+export interface RuleDraft {
+  name: string;
+  matchMode: "all" | "any";
+  conditions: RuleConditionDraft[];
+  actions: RuleActionDraft[];
+}
+
+type BuiltRule = { rule: FilterRule } | { error: string };
 
 interface Options {
   enabled: boolean;
@@ -36,36 +69,62 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
   );
   const [newRuleInputs, setNewRuleInputs] = useState<Record<string, RuleDraft>>(
     () => {
-      const contains = initialRuleSeed?.contains.trim() ?? "";
-      if (!initialRuleSeed || !contains) return {};
-      return {
-        [initialRuleSeed.accountId]: {
-          name: contains.slice(0, 80),
-          field: seedField(initialRuleSeed.field),
-          contains: contains.slice(0, 200),
-          action: "move_archive",
-          target: "",
-        },
-      };
+      const seeded = seededDraft(initialRuleSeed);
+      return initialRuleSeed && seeded
+        ? { [initialRuleSeed.accountId]: seeded }
+        : {};
     },
   );
+  const [ruleErrors, setRuleErrors] = useState<Record<string, string>>({});
   const [ruleStatus, setRuleStatus] = useState<Record<string, string>>({});
   const [savingRuleAccounts, setSavingRuleAccounts] = useState<
     Record<string, boolean>
   >({});
   const pendingRuleAccounts = useRef(new Set<string>());
+  // Bumped by every mutation so an older list response cannot overwrite it.
+  const ruleGenerations = useRef(new Map<string, number>());
+  const ruleMutationQueues = useRef(new Map<string, Promise<void>>());
+  const filterRulesRef = useRef(filterRules);
+  useEffect(() => {
+    filterRulesRef.current = filterRules;
+  }, [filterRules]);
 
-  const hasDirtyForms = Object.values(newRuleInputs).some(
-    (draft) =>
-      draft.name !== "" ||
-      draft.contains !== "" ||
-      draft.field !== "from" ||
-      draft.action !== "mark_read" ||
-      draft.target !== "",
+  function bumpRuleGeneration(accountId: string) {
+    ruleGenerations.current.set(
+      accountId,
+      (ruleGenerations.current.get(accountId) ?? 0) + 1,
+    );
+  }
+
+  function queueRuleMutation(accountId: string, mutation: () => Promise<void>) {
+    bumpRuleGeneration(accountId);
+    const previous =
+      ruleMutationQueues.current.get(accountId) ?? Promise.resolve();
+    const run = previous.then(mutation, mutation);
+    ruleMutationQueues.current.set(accountId, run);
+    return run.finally(() => {
+      if (ruleMutationQueues.current.get(accountId) === run)
+        ruleMutationQueues.current.delete(accountId);
+    });
+  }
+
+  const hasDirtyForms = Object.entries(newRuleInputs).some(
+    ([accountId, draft]) =>
+      accounts.some((account) => account.id === accountId) &&
+      !sameDraft(draft, emptyRuleDraft()),
   );
+
+  const forgetAccount = useCallback((accountId: string) => {
+    bumpRuleGeneration(accountId);
+    setFilterRules((prev) => withoutKey(prev, accountId));
+    setNewRuleInputs((prev) => withoutKey(prev, accountId));
+    setRuleErrors((prev) => withoutKey(prev, accountId));
+    setRuleStatus((prev) => withoutKey(prev, accountId));
+  }, []);
 
   const discardUnsavedForms = useCallback(() => {
     setNewRuleInputs({});
+    setRuleErrors({});
   }, []);
 
   useEffect(() => {
@@ -80,18 +139,13 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     void (async () => {
       for (const account of accounts) {
         try {
+          const generation = ruleGenerations.current.get(account.id) ?? 0;
           const rules = (await api.listFilterRules(account.id)) ?? [];
-          if (active) {
-            setFilterRules((prev) => {
-              const existing = prev[account.id] ?? [];
-              const merged = [...existing];
-              for (const rule of rules) {
-                if (!merged.some((item) => item.id === rule.id)) {
-                  merged.push(rule);
-                }
-              }
-              return { ...prev, [account.id]: merged };
-            });
+          if (
+            active &&
+            generation === (ruleGenerations.current.get(account.id) ?? 0)
+          ) {
+            setFilterRules((prev) => ({ ...prev, [account.id]: rules }));
           }
         } catch {
           // Rules stay empty; the form below still works.
@@ -104,51 +158,43 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
   }, [accounts, enabled]);
 
   function ruleInput(accountId: string): RuleDraft {
-    return (
-      newRuleInputs[accountId] ?? {
-        name: "",
-        field: "from",
-        contains: "",
-        action: "mark_read",
-        target: "",
-      }
-    );
+    return newRuleInputs[accountId] ?? emptyRuleDraft();
   }
 
-  function setRuleField(accountId: string, patch: Record<string, string>) {
+  function updateRuleDraft(
+    accountId: string,
+    change: (draft: RuleDraft) => RuleDraft,
+  ) {
     setNewRuleInputs((prev) => ({
       ...prev,
-      [accountId]: { ...ruleInput(accountId), ...patch },
+      [accountId]: change(prev[accountId] ?? emptyRuleDraft()),
     }));
+    setRuleErrors((prev) => withoutKey(prev, accountId));
+  }
+
+  function setRuleError(accountId: string, message: string) {
+    setRuleErrors((prev) => ({ ...prev, [accountId]: message }));
   }
 
   async function handleAddRule(accountId: string) {
     if (pendingRuleAccounts.current.has(accountId)) return;
     const input = ruleInput(accountId);
-    const name = input.name.trim() || input.contains.trim();
+    const name = input.name.trim() || firstValue(input);
     if (!name) {
-      setError(strings.settings.ruleNameRequired);
+      setRuleError(accountId, strings.settings.ruleNameRequired);
       return;
     }
-    if (!input.contains.trim()) {
-      setError(strings.settings.ruleMatchRequired);
+    const built = buildRule(accountId, input, name);
+    if ("error" in built) {
+      setRuleError(accountId, built.error);
       return;
     }
-    const submitted = { ...input };
+    const submitted = input;
     pendingRuleAccounts.current.add(accountId);
     setSavingRuleAccounts((prev) => ({ ...prev, [accountId]: true }));
     try {
-      const created = await api.createFilterRule({
-        id: "",
-        accountId,
-        name,
-        field: input.field as FilterRule["field"],
-        contains: input.contains,
-        action: input.action as FilterRule["action"],
-        targetMailbox:
-          input.action === "move_mailbox" ? (input.target ?? "") : null,
-        enabled: true,
-      });
+      const created = await api.createFilterRule(built.rule);
+      bumpRuleGeneration(accountId);
       setFilterRules((prev) => {
         const existing = prev[accountId] ?? [];
         if (existing.some((item) => item.id === created.id)) return prev;
@@ -156,7 +202,7 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       });
       setNewRuleInputs((prev) => {
         const current = prev[accountId];
-        return current && ruleDraftEquals(current, submitted)
+        return current && sameDraft(current, submitted)
           ? { ...prev, [accountId]: emptyRuleDraft() }
           : prev;
       });
@@ -165,35 +211,22 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
         [accountId]: strings.settings.ruleSaved,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       pendingRuleAccounts.current.delete(accountId);
-      setSavingRuleAccounts((prev) => {
-        const next = { ...prev };
-        delete next[accountId];
-        return next;
-      });
+      setSavingRuleAccounts((prev) => withoutKey(prev, accountId));
     }
   }
 
   async function handlePreviewRule(accountId: string) {
     const input = ruleInput(accountId);
-    if (!input.contains.trim()) {
-      setError(strings.settings.ruleMatchRequired);
+    const built = buildRule(accountId, input, input.name.trim() || "Preview");
+    if ("error" in built) {
+      setRuleError(accountId, built.error);
       return;
     }
     try {
-      const preview = await api.previewFilterRule({
-        id: "",
-        accountId,
-        name: input.name.trim() || "Preview",
-        field: input.field as FilterRule["field"],
-        contains: input.contains,
-        action: input.action as FilterRule["action"],
-        targetMailbox:
-          input.action === "move_mailbox" ? (input.target ?? "") : null,
-        enabled: true,
-      });
+      const preview = await api.previewFilterRule(built.rule);
       const summary = preview.capped
         ? strings.settings.ruleMatchesCapped
         : preview.matched === 0
@@ -208,48 +241,62 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
             : summary,
       }));
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
-  async function handleMoveRule(
+  function handleMoveRule(
     accountId: string,
     ruleId: string,
     direction: -1 | 1,
   ) {
-    const rules = filterRules[accountId] ?? [];
-    const index = rules.findIndex((rule) => rule.id === ruleId);
-    const next = index + direction;
-    if (index < 0 || next < 0 || next >= rules.length) return;
-    const ordered = [...rules];
-    const [moved] = ordered.splice(index, 1);
-    ordered.splice(next, 0, moved);
-    try {
-      const saved = await api.reorderFilterRules(
-        accountId,
-        ordered.map((rule) => rule.id),
-      );
-      setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
-    } catch (cause) {
-      setError(String(cause));
-    }
+    return queueRuleMutation(accountId, async () => {
+      const rules = filterRulesRef.current[accountId] ?? [];
+      const index = rules.findIndex((rule) => rule.id === ruleId);
+      const next = index + direction;
+      if (index < 0 || next < 0 || next >= rules.length) return;
+      const ordered = [...rules];
+      const [moved] = ordered.splice(index, 1);
+      ordered.splice(next, 0, moved);
+      try {
+        const saved = await api.reorderFilterRules(
+          accountId,
+          ordered.map((rule) => rule.id),
+        );
+        filterRulesRef.current = {
+          ...filterRulesRef.current,
+          [accountId]: saved,
+        };
+        setFilterRules((prev) => ({ ...prev, [accountId]: saved }));
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
-  async function handleToggleRule(accountId: string, rule: FilterRule) {
-    try {
-      const updated = await api.updateFilterRule({
-        ...rule,
-        enabled: !rule.enabled,
-      });
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).map((item) =>
-          item.id === rule.id ? updated : item,
-        ),
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
+  function handleToggleRule(accountId: string, rule: FilterRule) {
+    return queueRuleMutation(accountId, async () => {
+      const latest =
+        (filterRulesRef.current[accountId] ?? []).find(
+          (item) => item.id === rule.id,
+        ) ?? rule;
+      try {
+        const updated = await api.updateFilterRule({
+          ...latest,
+          enabled: !latest.enabled,
+        });
+        const apply = (prev: Record<string, FilterRule[]>) => ({
+          ...prev,
+          [accountId]: (prev[accountId] ?? []).map((item) =>
+            item.id === rule.id ? updated : item,
+          ),
+        });
+        filterRulesRef.current = apply(filterRulesRef.current);
+        setFilterRules(apply);
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
   async function handleDeleteRule(accountId: string, rule: FilterRule) {
@@ -258,21 +305,25 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       strings.settings.removeRuleConfirm(rule.name),
     );
     if (!confirmed) return;
-    try {
-      await api.deleteFilterRule(accountId, rule.id);
-      setFilterRules((prev) => ({
-        ...prev,
-        [accountId]: (prev[accountId] ?? []).filter(
-          (item) => item.id !== rule.id,
-        ),
-      }));
-      setRuleStatus((prev) => ({
-        ...prev,
-        [accountId]: strings.settings.ruleRemoved,
-      }));
-    } catch (cause) {
-      setError(String(cause));
-    }
+    await queueRuleMutation(accountId, async () => {
+      try {
+        await api.deleteFilterRule(accountId, rule.id);
+        const apply = (prev: Record<string, FilterRule[]>) => ({
+          ...prev,
+          [accountId]: (prev[accountId] ?? []).filter(
+            (item) => item.id !== rule.id,
+          ),
+        });
+        filterRulesRef.current = apply(filterRulesRef.current);
+        setFilterRules(apply);
+        setRuleStatus((prev) => ({
+          ...prev,
+          [accountId]: strings.settings.ruleRemoved,
+        }));
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    });
   }
 
   return {
@@ -280,12 +331,14 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     filterRules,
     hasDirtyForms,
     discardUnsavedForms,
+    forgetAccount,
     newRuleInputs,
+    ruleErrors,
     ruleInput,
     ruleStatus,
     savingRuleAccounts,
     setNewRuleInputs,
-    setRuleField,
+    updateRuleDraft,
     handleAddRule,
     handlePreviewRule,
     handleMoveRule,
@@ -294,26 +347,128 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
   };
 }
 
+/** Turns the draft into a v2 rule, or the first plain-text problem. */
+function buildRule(
+  accountId: string,
+  draft: RuleDraft,
+  name: string,
+): BuiltRule {
+  const conditions: RuleCondition[] = [];
+  for (const condition of draft.conditions) {
+    const value = condition.value.trim();
+    if (!value) return { error: strings.settings.ruleMatchRequired };
+    conditions.push({
+      field: condition.field as RuleCondition["field"],
+      value,
+    });
+  }
+  const actions: RuleAction[] = [];
+  for (const action of draft.actions) {
+    if (action.kind === "move_mailbox" && !action.target) {
+      return { error: strings.settings.ruleFolderRequired };
+    }
+    if (action.kind === "flag" && !/^[0-6]$/.test(action.flagColor)) {
+      return { error: strings.settings.ruleFlagRequired };
+    }
+    actions.push({
+      kind: action.kind as RuleAction["kind"],
+      targetMailbox: action.kind === "move_mailbox" ? action.target : null,
+      flagColor:
+        action.kind === "flag" ? (Number(action.flagColor) as FlagColor) : null,
+    });
+  }
+  const first = conditions[0];
+  const move = actions.find((action) => action.kind.startsWith("move_"));
+  const lead = move ?? actions[0];
+  if (!first || !lead) return { error: strings.settings.ruleMatchRequired };
+  return {
+    rule: {
+      id: "",
+      accountId,
+      name,
+      // Legacy columns mirror the first condition and action for older readers.
+      field: first.field,
+      contains: first.value,
+      action: lead.kind as FilterRule["action"],
+      targetMailbox: move?.targetMailbox ?? null,
+      enabled: true,
+      matchMode: draft.matchMode,
+      conditions,
+      actions,
+    },
+  };
+}
+
+function firstValue(draft: RuleDraft): string {
+  return draft.conditions[0]?.value.trim() ?? "";
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string) {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
 function seedField(field: RuleSeed["field"]): "from" | "to" | "subject" {
   return field === "to" || field === "subject" ? field : "from";
 }
 
-function emptyRuleDraft(): RuleDraft {
+function seededDraft(seed?: RuleSeed): RuleDraft | undefined {
+  const contains = seed?.contains.trim() ?? "";
+  if (!seed || !contains) return undefined;
   return {
-    name: "",
-    field: "from",
-    contains: "",
-    action: "mark_read",
-    target: "",
+    name: contains.slice(0, 80),
+    matchMode: "all",
+    conditions: [
+      {
+        id: nextRuleRowId(),
+        field: seedField(seed.field),
+        value: contains.slice(0, 200),
+      },
+    ],
+    actions: [
+      {
+        id: nextRuleRowId(),
+        kind: "move_archive",
+        target: "",
+        flagColor: "0",
+      },
+    ],
   };
 }
 
-function ruleDraftEquals(left: RuleDraft, right: RuleDraft): boolean {
+export function emptyRuleDraft(): RuleDraft {
+  return {
+    name: "",
+    matchMode: "all",
+    conditions: [{ id: nextRuleRowId(), field: "from", value: "" }],
+    actions: [
+      { id: nextRuleRowId(), kind: "mark_read", target: "", flagColor: "0" },
+    ],
+  };
+}
+
+function sameDraft(left: RuleDraft, right: RuleDraft): boolean {
+  if (left.name !== right.name || left.matchMode !== right.matchMode) {
+    return false;
+  }
+  if (
+    left.conditions.length !== right.conditions.length ||
+    left.actions.length !== right.actions.length
+  ) {
+    return false;
+  }
   return (
-    left.name === right.name &&
-    left.field === right.field &&
-    left.contains === right.contains &&
-    left.action === right.action &&
-    left.target === right.target
+    left.conditions.every(
+      (cond, index) =>
+        cond.field === right.conditions[index]?.field &&
+        cond.value === right.conditions[index]?.value,
+    ) &&
+    left.actions.every(
+      (action, index) =>
+        action.kind === right.actions[index]?.kind &&
+        action.target === right.actions[index]?.target &&
+        action.flagColor === right.actions[index]?.flagColor,
+    )
   );
 }

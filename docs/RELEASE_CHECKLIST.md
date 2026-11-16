@@ -1,6 +1,6 @@
-# Postal Snap 0.5.0 release checklist
+# Postal Snap release checklist
 
-Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub 0.5.0 release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
+Record the build commit, tester, date, operating-system version, and result for every manual item. A GitHub release is blocked by any unchecked **required** item. Store items are listed separately and are not a GitHub-train go/no-go.
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
@@ -8,9 +8,9 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 
 ## Automated gates
 
-- [ ] Clean checkout uses Node.js 24 and Rust 1.97.1.
+- [ ] Clean checkout uses Node.js 26.13.0 (CI and `package.json` `engines`; `24.22.1` is also allowed) and the Rust version pinned in `rust-toolchain.toml`.
 - [ ] `npm ci` succeeds without lockfile changes.
-- [ ] `npm run audit` reports no npm or RustSec vulnerabilities (online; signing host).
+- [ ] `npm run audit` passes: no npm high-severity advisory and no denied RustSec warning (online; signing host). Moderate dev-only npm advisories are tracked in `docs/partially_implemented.md`.
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).
 - [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
@@ -18,6 +18,28 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
+
+## 0.5.2 additions
+
+Automated gate decisions made for 0.5.2. Each must hold on the release commit.
+
+- [ ] `npm run audit:cargo` passes with the acknowledged list unchanged. `pin-utils` (RUSTSEC-2026-0441) is removed from the vendored `async-imap`, and `async-executor` is 1.14.1 because 1.14.0 is yanked. The five existing acknowledged IDs are still reported and stay listed in `scripts/audit-cargo.js`.
+- [ ] `npm run audit:npm` passes. Its gate is high severity; the 14 moderate advisories all come from `minimatch` and `glob` through dev tooling and are recorded in `docs/partially_implemented.md`.
+
+## 0.5.2 manual checks
+
+Record the same details as above. These native checks are required before the 0.5.2 GitHub release.
+
+- [ ] macOS traffic lights sit centered in the caption bar in Normal, Comfortable, and Compact density, at 100% and 200% text. Tune `MAC_TRAFFIC_LIGHTS` in `src-tauri/src/main.rs` if they do not.
+- [ ] The direct macOS build (DMG/ZIP) shows the translucent sidebar. The Mac App Store build shows an opaque sidebar, and its bundle has no `macos-vibrancy` feature and no private API (`macOSPrivateApi` false).
+- [ ] Windows 10 and Windows 11 show the Mica sidebar. On a system where Mica is unavailable, the window is opaque and fully usable.
+- [ ] Print a multi-page letter with an inline image on Windows and Linux: the sandboxed frame prints the whole body. On macOS the native print sheet shows the whole body.
+- [ ] Double-clicking a `.eml` file opens the viewer on macOS, Windows, and Linux. Remote images stay blocked.
+- [ ] Clicking a new-mail notification opens that message on macOS, Windows, and Linux. Turning notifications off for an account silences only that account.
+- [ ] Colored flags set in Postal Snap appear in Apple Mail on the same iCloud account, and colors set in Apple Mail appear here. `flag:<color>` search finds them.
+- [ ] mbox export and import with a real server: export a folder, import the file into another account's folder, and check progress and Cancel. Imported messages appear as read, and no path or file name appears in any error.
+- [ ] Preview a real PDF with more than 20 pages: the first pages render with "Page n of m" labels, the total count is shown, and the reader stays responsive.
+- [ ] Move a message to Junk and back on a server that accepts `$Junk` and `$NotJunk`. Confirm the keywords on the server with its own tools.
 
 ## 0.5.0 compatibility and UI evidence
 
@@ -32,7 +54,8 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] All-inboxes badge counts match the existing Inbox unread semantics for each account; non-Inbox folders and removed accounts do not contribute.
 - [ ] Recipient suggestions exclude junk/trash, blocked or muted senders, no-reply addresses, the user's own addresses and aliases, and addresses from other accounts.
 - [ ] Rich signatures save and render safely with a plain-text alternative; existing plain signatures remain intact through settings changes and message replies.
-- [ ] Comfortable and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
+- [ ] Normal, comfortable, and compact density work at 100% and 200% text, light/dark themes, narrow/wide windows, forced colors, and reduced motion.
+- [ ] At the default 1280×840 window with a thread open, the letter takes at least 55% of the reader height in Normal.
 - [ ] Real Proton Bridge smoke passes on Windows, macOS, and Linux, including Flatpak loopback access, combined-address and split-address modes, certificate replacement, and Bridge restart. **Pending: keep support experimental until recorded.**
 
 See [mail compatibility](MAIL_COMPATIBILITY.md). Automated fixtures remain separate from the native and signed-package gates below.

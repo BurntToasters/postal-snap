@@ -1,9 +1,11 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use super::attachments::{forwarded_message_filename, write_user_chosen_file};
 use super::sync::account_policy;
 use super::{
     command_result, emit_folder_counts, emit_message_change, wake, AppState, CommandResult,
@@ -17,15 +19,55 @@ use crate::{
     mail::{
         self,
         failure::{FailureKind, MailError},
+        keywords::{color_change, ColorChange},
     },
     models::{
-        MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
+        IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
         MessageSummary, SearchQuery,
     },
 };
 
 // Must match `BULK_LIMIT` in src/bulk.ts.
-const MAX_BULK_MESSAGES: usize = 200;
+pub(crate) const MAX_BULK_MESSAGES: usize = 200;
+const BULK_LIMIT_MESSAGE: &str = "Select up to 200 messages at a time.";
+
+/// Refuses a bulk request over the cap. limitExceeded keeps the authored text.
+pub(crate) fn check_bulk_message_count(len: usize) -> CommandResult<()> {
+    if len > MAX_BULK_MESSAGES {
+        return Err(IpcError {
+            code: "limitExceeded".into(),
+            message: BULK_LIMIT_MESSAGE.into(),
+            retryable: false,
+            stage: None,
+        });
+    }
+    Ok(())
+}
+
+/// Resolves selected ids to (id, mailbox, uid) for one account. Ids with no
+/// local row are skipped as stale. An id owned by another account rejects the
+/// whole request before any change.
+pub(crate) fn resolve_bulk_items(
+    account_id: &str,
+    message_ids: &[i64],
+    mut locate: impl FnMut(i64) -> Result<(String, String, u32), String>,
+) -> Result<Vec<(i64, String, u32)>, String> {
+    let mut items = Vec::with_capacity(message_ids.len());
+    let mut seen = std::collections::HashSet::with_capacity(message_ids.len());
+    for &id in message_ids {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Ok((owner, mailbox, uid)) = locate(id) else {
+            continue;
+        };
+        if owner != account_id {
+            return Err("Message does not belong to this account.".into());
+        }
+        items.push((id, mailbox, uid));
+    }
+    Ok(items)
+}
 /// Longest an undo-window move waits without a commit. The frontend commits
 /// when its window closes; this only covers a commit that never arrives.
 const UNDO_HOLD_SECONDS: i64 = 60;
@@ -104,9 +146,16 @@ fn settle_open_download<T>(
     mailbox_id: i64,
     uid: u32,
     attempt_open: bool,
+    continue_parse: bool,
     result: &Result<T, MailError>,
 ) -> Result<(), MailError> {
     if !attempt_open {
+        if continue_parse {
+            state
+                .db
+                .end_parse(mailbox_id, uid)
+                .map_err(MailError::local_storage)?;
+        }
         return Ok(());
     }
     let action = crate::mail::sync::full_parse_action(result);
@@ -164,6 +213,7 @@ async fn download_full_once(
         location.mailbox_id,
         location.uid,
         attempt_open.load(Ordering::SeqCst),
+        continue_parse,
         &result,
     )?;
     result
@@ -461,6 +511,14 @@ pub async fn get_message_source(
     Ok(mail::source::build_source(&raw))
 }
 
+/// Writes the original message with the same symlink and overwrite rules as
+/// attachment saves.
+pub(crate) async fn write_saved_message(destination: &Path, raw: &[u8]) -> Result<(), String> {
+    write_user_chosen_file(destination, raw)
+        .await
+        .map_err(|_| "Could not save the message at that location.".to_string())
+}
+
 /// Save the original message to a destination the user picks.
 #[tauri::command]
 pub async fn save_message_eml(
@@ -471,12 +529,18 @@ pub async fn save_message_eml(
 ) -> CommandResult<()> {
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
+    let subject = state
+        .db
+        .message_detail(message_id, &account_id)?
+        .summary
+        .subject;
+    let suggested = forwarded_message_filename(&subject);
     let picker = app.clone();
     let destination = tokio::task::spawn_blocking(move || {
         picker
             .dialog()
             .file()
-            .set_file_name("message.eml")
+            .set_file_name(suggested)
             .blocking_save_file()
     })
     .await
@@ -487,9 +551,7 @@ pub async fn save_message_eml(
     let destination = destination
         .into_path()
         .map_err(|_| "Choose a valid save location.".to_string())?;
-    tokio::fs::write(&destination, raw)
-        .await
-        .map_err(|_| "Could not save the message at that location.".to_string())?;
+    write_saved_message(&destination, &raw).await?;
     // A saved message can carry attachments; mark it like saved files.
     crate::download_mark::mark_downloaded(&destination);
     Ok(())
@@ -559,6 +621,9 @@ pub(crate) struct FlagOperation {
     pub(crate) uid_validity: Option<u32>,
     pub(crate) is_read: Option<bool>,
     pub(crate) is_starred: Option<bool>,
+    /// Queued color (0 to 6) for a flag op. Older queues lack it.
+    #[serde(default)]
+    pub(crate) flag_color: Option<u8>,
 }
 
 #[tauri::command]
@@ -588,7 +653,9 @@ pub async fn set_message_flags(
         uid_validity: Some(uid_validity),
         is_read,
         is_starred,
+        flag_color: None,
     };
+    let color = color_change(is_starred, None);
     let remote_result = {
         let account = state.db.account(&account_id)?;
         let password = crate::oauth::session_secret(&account).await?;
@@ -600,24 +667,29 @@ pub async fn set_message_flags(
             Some(uid_validity),
             is_read,
             is_starred,
+            color,
         )
         .await
     };
     match remote_result {
-        Ok(()) => {
-            state
-                .db
-                .record_flag_change(&account_id, message_id, is_read, is_starred, None)?
-        }
+        Ok(()) => state.db.record_colored_flag_change(
+            &account_id,
+            message_id,
+            is_read,
+            is_starred,
+            color,
+            None,
+        )?,
         Err(error) if error.terminal => return Err(error.message.into()),
         Err(_) => {
             let queued = serde_json::to_value(&operation)
                 .map_err(|_| "Could not queue the flag change.".to_string())?;
-            state.db.record_flag_change(
+            state.db.record_colored_flag_change(
                 &account_id,
                 message_id,
                 is_read,
                 is_starred,
+                color,
                 Some(&queued),
             )?;
         }
@@ -636,6 +708,9 @@ pub(crate) struct MoveOperation {
     pub(crate) destination: String,
     #[serde(default)]
     pub(crate) uid_validity: Option<u32>,
+    /// Junk training for user moves only: `Some(true)` into junk, `Some(false)` out.
+    #[serde(default)]
+    pub(crate) junk_keyword: Option<bool>,
 }
 
 #[tauri::command]
@@ -794,6 +869,7 @@ async fn copy_message_inner(
         uid,
         source: source.clone(),
         destination: destination.clone(),
+        junk_keyword: None,
         uid_validity: Some(
             state
                 .db
@@ -854,6 +930,7 @@ fn move_operation_for(
         uid,
         source: source.to_string(),
         destination: destination.to_string(),
+        junk_keyword: user_junk_keyword(&state.db, account_id, source, destination),
         uid_validity: Some(
             state
                 .db
@@ -863,6 +940,26 @@ fn move_operation_for(
                 })?,
         ),
     })
+}
+
+/// Junk training for a user move. Rule-driven and bulk moves never train.
+fn user_junk_keyword(
+    db: &Database,
+    account_id: &str,
+    source: &str,
+    destination: &str,
+) -> Option<bool> {
+    let destination_role = db.mailbox_effective_role(account_id, destination).ok()?;
+    let source_role = db.mailbox_effective_role(account_id, source).ok()?;
+    junk_keyword_for_roles(&source_role, &destination_role)
+}
+
+/// Pure role rule behind [`user_junk_keyword`].
+fn junk_keyword_for_roles(source_role: &str, destination_role: &str) -> Option<bool> {
+    if destination_role == "junk" {
+        return Some(true);
+    }
+    (source_role == "junk" && destination_role == "inbox").then_some(false)
 }
 
 fn undo_not_before() -> chrono::DateTime<chrono::Utc> {
@@ -924,6 +1021,7 @@ async fn move_message_inner(
             message_id: remote_message_id.as_deref(),
             dedupe_existing: false,
             replay_flags: None,
+            junk_keyword: operation.junk_keyword,
         },
     )
     .await;
@@ -974,6 +1072,9 @@ async fn move_message_inner(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Counts for one bulk action. Ids with no local row are skipped and counted
+/// nowhere. An id owned by another account rejects the whole request before
+/// any change. `failed` counts found messages that could not be changed.
 pub struct BulkOutcome {
     pub updated: usize,
     pub queued: usize,
@@ -982,12 +1083,14 @@ pub struct BulkOutcome {
 
 /// Apply flag changes to many messages with one IMAP round trip per mailbox.
 /// Stale rows are skipped; only messages that fail locally count as failed.
-async fn bulk_apply_flags(
+/// Ids resolve through `resolve_bulk_items`, so see `BulkOutcome` for skips.
+pub(crate) async fn bulk_apply_flags(
     state: &AppState,
     account_id: &str,
     items: &[(i64, String, u32)],
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 ) -> Result<BulkOutcome, String> {
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
@@ -1016,6 +1119,7 @@ async fn bulk_apply_flags(
             Some(validity),
             is_read,
             is_starred,
+            color,
         )
         .await;
         match remote {
@@ -1023,7 +1127,9 @@ async fn bulk_apply_flags(
                 for (id, _) in &entries {
                     if state
                         .db
-                        .record_flag_change(account_id, *id, is_read, is_starred, None)
+                        .record_colored_flag_change(
+                            account_id, *id, is_read, is_starred, color, None,
+                        )
                         .is_ok()
                     {
                         updated += 1;
@@ -1042,12 +1148,23 @@ async fn bulk_apply_flags(
                         uid_validity: Some(validity),
                         is_read,
                         is_starred,
+                        flag_color: match color {
+                            Some(ColorChange::Set(value)) => Some(value),
+                            _ => None,
+                        },
                     };
                     let payload = serde_json::to_value(&operation)
                         .map_err(|_| "Could not queue the flag change.".to_string())?;
                     if state
                         .db
-                        .record_flag_change(account_id, *id, is_read, is_starred, Some(&payload))
+                        .record_colored_flag_change(
+                            account_id,
+                            *id,
+                            is_read,
+                            is_starred,
+                            color,
+                            Some(&payload),
+                        )
                         .is_ok()
                     {
                         queued += 1;
@@ -1072,6 +1189,7 @@ pub async fn set_messages_pinned(
     pinned: bool,
     state: State<'_, AppState>,
 ) -> CommandResult<u32> {
+    check_bulk_message_count(message_ids.len())?;
     let db = state.db.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         db.set_pinned(&account_id, &message_ids, pinned)
@@ -1081,6 +1199,7 @@ pub async fn set_messages_pinned(
     command_result(result)
 }
 
+/// Skips ids with no local row and rejects a foreign id. See `BulkOutcome`.
 #[tauri::command]
 pub async fn set_messages_flags(
     account_id: String,
@@ -1090,21 +1209,13 @@ pub async fn set_messages_flags(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     let _guard = state.lock_account(&account_id).await?;
-    let mut items = Vec::new();
-    for id in message_ids {
-        let Ok((owner, mailbox, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
-        items.push((id, mailbox, uid));
-    }
-    let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred).await?;
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
+    let color = color_change(is_starred, None);
+    let outcome = bulk_apply_flags(&state, &account_id, &items, is_read, is_starred, color).await?;
     emit_message_change(&app, &account_id, None, "flags");
     emit_folder_counts(&app, &account_id);
     Ok(outcome)
@@ -1119,9 +1230,7 @@ pub async fn move_messages_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     if let Some(token) = undo_token.as_deref() {
         validate_undo_token(token)?;
     }
@@ -1132,15 +1241,12 @@ pub async fn move_messages_to_mailbox(
     if destination_account_id != account_id {
         return Err("Messages cannot be moved between accounts.".into());
     }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
-    for id in message_ids {
-        let Ok((owner, source, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
+    for (id, source, uid) in items {
         if source == destination {
             continue;
         }
@@ -1172,13 +1278,15 @@ pub async fn move_messages_to_mailbox(
             continue;
         };
         let uids: Vec<u32> = entries.iter().map(|(_, uid)| *uid).collect();
-        let remote = mail::move_remote_uids(
+        let junk_keyword = user_junk_keyword(&state.db, &account_id, &source, &destination);
+        let remote = mail::move_remote_uids_with_junk(
             &account,
             &password,
             &source,
             &destination,
             &uids,
             Some(validity),
+            junk_keyword,
         )
         .await;
         if remote.is_ok() {
@@ -1201,6 +1309,7 @@ pub async fn move_messages_to_mailbox(
                     source: source.clone(),
                     destination: destination.clone(),
                     uid_validity: Some(validity),
+                    junk_keyword,
                 };
                 let dedupe_key = format!("move:{id}");
                 let queued_ok = state
@@ -1257,6 +1366,7 @@ fn defer_bulk_moves(
             failed += messages.len();
             continue;
         };
+        let junk_keyword = user_junk_keyword(db, account_id, source, destination);
         for (id, uid) in messages {
             let operation = MoveOperation {
                 message_id: *id,
@@ -1264,6 +1374,7 @@ fn defer_bulk_moves(
                 source: source.clone(),
                 destination: destination.to_string(),
                 uid_validity: Some(validity),
+                junk_keyword,
             };
             entries.push((*id, operation, destination_mailbox_id));
         }
@@ -1344,23 +1455,18 @@ pub async fn copy_messages_to_mailbox(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<BulkOutcome> {
-    if message_ids.len() > MAX_BULK_MESSAGES {
-        return Err("Select up to 200 messages at a time.".into());
-    }
+    check_bulk_message_count(message_ids.len())?;
     let _guard = state.lock_account(&account_id).await?;
     let (destination_account_id, destination) = state.db.mailbox(destination_mailbox_id)?;
     if destination_account_id != account_id {
         return Err("Messages cannot be copied between accounts.".into());
     }
+    let items = resolve_bulk_items(&account_id, &message_ids, |id| {
+        state.db.message_location(id)
+    })?;
     let mut groups: std::collections::HashMap<String, Vec<(i64, u32)>> =
         std::collections::HashMap::new();
-    for id in message_ids {
-        let Ok((owner, source, uid)) = state.db.message_location(id) else {
-            continue;
-        };
-        if owner != account_id {
-            return Err("Message does not belong to this account.".into());
-        }
+    for (id, source, uid) in items {
         if source == destination {
             continue;
         }
@@ -1400,6 +1506,7 @@ pub async fn copy_messages_to_mailbox(
                     source: source.clone(),
                     destination: destination.clone(),
                     uid_validity: Some(validity),
+                    junk_keyword: None,
                 };
                 let dedupe_key = format!("copy:{id}:{destination}");
                 if state
@@ -1453,7 +1560,7 @@ pub async fn mark_mailbox_read(
             .iter()
             .map(|(id, uid)| (*id, name.clone(), *uid))
             .collect();
-        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None).await?;
+        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
         outcome.updated += batch.updated;
         outcome.queued += batch.queued;
         outcome.failed += batch.failed;
@@ -1608,6 +1715,33 @@ mod download_parse_settle_tests {
         AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig, TlsMode,
     };
 
+    #[test]
+    fn junk_training_applies_only_to_inbound_and_outbound_junk_moves() {
+        use super::junk_keyword_for_roles;
+        assert_eq!(junk_keyword_for_roles("inbox", "junk"), Some(true));
+        assert_eq!(junk_keyword_for_roles("junk", "inbox"), Some(false));
+        assert_eq!(junk_keyword_for_roles("inbox", "archive"), None);
+        assert_eq!(junk_keyword_for_roles("junk", "trash"), None);
+    }
+
+    #[test]
+    fn move_operations_keep_junk_training_through_undo_json() {
+        use super::MoveOperation;
+        let legacy: MoveOperation = serde_json::from_str(
+            r#"{"messageId":3,"uid":1,"source":"INBOX","destination":"Archive","uidValidity":1}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.junk_keyword, None, "queued before training existed");
+        let trained = MoveOperation {
+            junk_keyword: Some(true),
+            ..legacy
+        };
+        let payload = serde_json::to_value(&trained).unwrap();
+        assert_eq!(payload["junkKeyword"], serde_json::json!(true));
+        let restored: MoveOperation = serde_json::from_value(payload).unwrap();
+        assert_eq!(restored.junk_keyword, Some(true));
+    }
+
     fn envelope(uid: u32) -> CachedMessage {
         CachedMessage {
             uid,
@@ -1646,6 +1780,7 @@ mod download_parse_settle_tests {
     fn test_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
@@ -1810,6 +1945,7 @@ mod undo_session_tls_tests {
     fn account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
                 email: EMAIL.into(),
@@ -2049,5 +2185,263 @@ mod undo_session_tls_tests {
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);
+    }
+}
+
+#[cfg(test)]
+mod bulk_cap_tests {
+    use super::{check_bulk_message_count, resolve_bulk_items, MAX_BULK_MESSAGES};
+
+    fn locate(id: i64) -> Result<(String, String, u32), String> {
+        match id {
+            1 => Ok(("acct".into(), "INBOX".into(), 10)),
+            2 => Ok(("other".into(), "INBOX".into(), 11)),
+            _ => Err("Message not found.".into()),
+        }
+    }
+
+    #[test]
+    fn bulk_over_the_cap_is_refused_as_limit_exceeded() {
+        // Failure mode: an unbounded id list reaches the database or IMAP.
+        let error = check_bulk_message_count(MAX_BULK_MESSAGES + 1).unwrap_err();
+        assert_eq!(error.code, "limitExceeded");
+        assert_eq!(error.message, "Select up to 200 messages at a time.");
+    }
+
+    #[test]
+    fn bulk_at_the_cap_is_accepted() {
+        assert!(check_bulk_message_count(MAX_BULK_MESSAGES).is_ok());
+    }
+
+    #[test]
+    fn stale_ids_are_skipped_and_owned_ids_are_kept() {
+        // Failure mode: one missing row aborts the whole bulk action.
+        let items = resolve_bulk_items("acct", &[1, 99], locate).unwrap();
+        assert_eq!(items, vec![(1, "INBOX".to_string(), 10)]);
+    }
+
+    #[test]
+    fn duplicate_ids_are_deduplicated_preserving_first_order() {
+        let items = resolve_bulk_items("acct", &[1, 1, 99, 1], locate).unwrap();
+        assert_eq!(items, vec![(1, "INBOX".to_string(), 10)]);
+    }
+
+    #[test]
+    fn a_foreign_id_rejects_the_whole_bulk_request() {
+        // Failure mode: owned ids change while a foreign id is silently dropped.
+        let error = resolve_bulk_items("acct", &[1, 2], locate).unwrap_err();
+        assert_eq!(error, "Message does not belong to this account.");
+    }
+}
+
+#[cfg(test)]
+mod eml_save_tests {
+    use super::write_saved_message;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn saved_eml_refuses_a_symlink_destination() {
+        // Failure mode: tokio::fs::write follows the link and overwrites the target.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("secret.txt");
+        let link = dir.path().join("message.eml");
+        std::fs::write(&target, b"secret").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_saved_message(&link, b"From: a\r\n\r\nbody\r\n")
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn saved_eml_overwrites_a_regular_file_in_place() {
+        // Failure mode: the save appends to or keeps the earlier bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("message.eml");
+        std::fs::write(&path, b"old message bytes that are longer").unwrap();
+        write_saved_message(&path, b"new").await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[tokio::test]
+    async fn download_full_once_pre_parse_failure_clears_open_prefix_parse() {
+        use crate::commands::messages::{fetch_and_store, ContentPlan, Location};
+        use crate::commands::AppState;
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig,
+            TlsMode,
+        };
+        use crate::{
+            db::{CachedMessage, Database},
+            mail::sync::BodyFetch,
+        };
+
+        // Failure mode: download_partial_once returns Fallback (LeaveOpen -> parse_pending=1),
+        // then download_full_once hits a pre-parse network/IMAP failure before before_parse,
+        // leaving parse_pending=1 until the next retry hits PARSE_QUARANTINE_AT=2.
+        let prefix = b"Message-ID: <b2-open@example.test>\r\nSubject: OpenPrefix\r\nContent-Type: text/plain\r\n\r\nPartial prefix body";
+        let (port, _, server) = crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+            let tag = tag.to_string();
+            let verb = verb.to_string();
+            let rest = rest.to_string();
+            let prefix_bytes = prefix.to_vec();
+            Box::pin(async move {
+                let upper = rest.to_ascii_uppercase();
+                let reply = match verb.as_str() {
+                    "CAPABILITY" => {
+                        format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes()
+                    }
+                    "LOGIN" | "LOGOUT" => format!("{tag} OK ok\r\n").into_bytes(),
+                    "EXAMINE" | "SELECT" => format!(
+                        "* 1 EXISTS\r\n* OK [UIDVALIDITY 10]\r\n* OK [UIDNEXT 2]\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK selected\r\n"
+                    )
+                    .into_bytes(),
+                    "UID" if upper.starts_with("UID FETCH") && upper.contains("BODY.PEEK[]<0.262144>") => {
+                        let mut out = format!(
+                            "* 1 FETCH (UID 1 FLAGS () RFC822.SIZE 2000000 INTERNALDATE \"15-Nov-2026 12:00:00 +0000\" BODY[]<0> {{{}}}\r\n",
+                            prefix_bytes.len()
+                        )
+                        .into_bytes();
+                        out.extend_from_slice(&prefix_bytes);
+                        out.extend_from_slice(format!(")\r\n{tag} OK partial\r\n").as_bytes());
+                        out
+                    }
+                    "UID" if upper.starts_with("UID FETCH") => {
+                        // Subsequent full download fails before before_parse runs.
+                        format!("{tag} NO temporary full download failure\r\n").into_bytes()
+                    }
+                    _ => format!("{tag} OK ok\r\n").into_bytes(),
+                };
+                Some(reply)
+            })
+        })
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::memory();
+        let settings =
+            crate::settings::SettingsStore::load(dir.path().join("settings.json"), &db).unwrap();
+        let state = AppState::new(db.clone(), settings, dir.path().to_path_buf());
+        let account_id = format!("b2-open-{}", uuid::Uuid::new_v4());
+        let _secret = crate::oauth::TestSecretGuard::install(&account_id, "pw");
+        let server_cfg = ServerConfig {
+            host: "127.0.0.1".into(),
+            port,
+            tls_mode: TlsMode::Tls,
+            username: "fixture@example.test".into(),
+            trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: account_id.clone(),
+                provider: ProviderKind::ProtonBridge,
+                email: "fixture@example.test".into(),
+                display_name: "Fixture".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server_cfg.clone(),
+            smtp: server_cfg,
+        };
+        crate::mail::pool::forget(&account_id);
+        state.db.insert_account(&account).unwrap();
+        let inbox = state
+            .db
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(10),
+                Some(2),
+                Some(1),
+                1,
+            )
+            .unwrap();
+        state
+            .db
+            .upsert_envelopes(
+                &account_id,
+                inbox,
+                &[CachedMessage {
+                    uid: 1,
+                    message_id: Some("<b2-open@example.test>".into()),
+                    subject: "OpenPrefix".into(),
+                    sender_name: "Jane".into(),
+                    sender_address: "jane@example.test".into(),
+                    recipients: "fixture@example.test".into(),
+                    received_at: "2026-11-15T12:00:00Z".into(),
+                    internal_at: Some("2026-11-15T12:00:00Z".into()),
+                    preview: String::new(),
+                    is_read: false,
+                    is_starred: false,
+                    size: 2_000_000,
+                    to: vec!["fixture@example.test".into()],
+                    cc: vec![],
+                    bcc: vec![],
+                    reply_to: None,
+                    thread_parent: None,
+                    text_body: String::new(),
+                    html_body: None,
+                    attachments: vec![],
+                    raw_message: Vec::new(),
+                    has_attachments: false,
+                    is_answered: false,
+                    is_forwarded: false,
+                    has_calendar: false,
+                    calendar_json: None,
+                    list_unsubscribe: None,
+                    list_unsubscribe_post: None,
+                    importance: String::new(),
+                    disposition_to: String::new(),
+                }],
+            )
+            .unwrap();
+        let msg_id = state
+            .db
+            .message_summary_by_uid(inbox, 1)
+            .unwrap()
+            .unwrap()
+            .id;
+        let loc = Location {
+            message_id: msg_id,
+            mailbox_id: inbox,
+            mailbox: "INBOX".into(),
+            uid: 1,
+            size: 2_000_000,
+        };
+
+        let res = fetch_and_store(
+            &state,
+            &account_id,
+            &loc,
+            10,
+            ContentPlan::Download(BodyFetch::Partial),
+        )
+        .await;
+        assert!(res.is_err());
+        let pending: i64 = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT parse_pending FROM messages WHERE id=?1",
+                [msg_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            pending, 0,
+            "pre-parse full download failure after prefix fallback must clear parse_pending"
+        );
+        crate::mail::pool::forget(&account_id);
+        server.abort();
     }
 }

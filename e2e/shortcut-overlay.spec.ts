@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here (inventory B7, B8, G5):
 // 1. The "?" overlay lists a shortcut that Settings does not, or omits one.
@@ -124,7 +124,7 @@ test("Keyboard shortcuts runs from the palette and restores focus on close", asy
   await attachArtifacts(page, testInfo, "shortcut-overlay-from-palette");
 });
 
-const densities = ["comfortable", "compact"] as const;
+const densities = ["comfortable", "normal", "compact"] as const;
 const scales = [1, 2] as const;
 
 for (const density of densities) {

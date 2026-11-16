@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
-import { attachIpcLog, recordIpc } from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog } from "./ipc";
 
 // Failure modes covered here:
 // 1. A refused composer replacement (save fails) loses the typed note.
@@ -32,7 +32,6 @@ test("a refused replacement keeps the note in the box", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__;
     if (!mock) throw new Error("Mock IPC was not installed");
@@ -59,7 +58,6 @@ test("a refused replacement keeps the note in the box", async ({
 
 test("a refused Ctrl+Enter keeps the note too", async ({ page }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__;
     if (!mock) throw new Error("Mock IPC was not installed");
@@ -84,7 +82,6 @@ test("an accepted replacement clears the note and a new note stays", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.goto("/");
   await dirtyMinimizedDraft(page);
   await openWeekend(page);

@@ -35,6 +35,8 @@ export async function registerMockWindowEvents(
         },
         async invoke(command: string, args: Record<string, unknown> = {}) {
           const state = window.__POSTAL_SNAP_TEST__ as MockState;
+          if (!command.startsWith("plugin:event|"))
+            state.ipcCalls.push({ command, args: structuredClone(args) });
           if (command.startsWith("plugin:window|")) {
             const action = command.split("|")[1];
             if (action === "is_maximized") return state.maximized;
@@ -103,7 +105,6 @@ export async function registerMockWindowEvents(
             default: {
               const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
               const handler = mock.handlers[command];
-              state.ipcCalls.push({ command, args: { ...args } });
               if (handler) return handler(args);
               throw new Error(`No mock handler for native command: ${command}`);
             }

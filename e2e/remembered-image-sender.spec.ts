@@ -1,6 +1,9 @@
 import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Remembered From addresses never bypass explicit image consent.
@@ -28,7 +31,7 @@ function remoteFetches(page: Page) {
   );
 }
 
-for (const density of ["comfortable", "compact"] as const) {
+for (const density of ["comfortable", "normal", "compact"] as const) {
   for (const scale of [1, 2]) {
     test(`remembered sender requires consent: ${density}, ${scale * 100}%`, async ({
       page,

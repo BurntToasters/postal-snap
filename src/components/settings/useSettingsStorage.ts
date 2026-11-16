@@ -5,6 +5,7 @@ import { strings } from "../../i18n";
 import { applySettings } from "../../settings";
 import { useAppStore } from "../../store";
 import type { CacheUsage } from "../../types";
+import { errorText } from "../../errors";
 
 /** Storage usage, settings import/export, cache cleanup, and data erasure. */
 export function useSettingsStorage() {
@@ -39,7 +40,7 @@ export function useSettingsStorage() {
       await api.clearCache();
       setUsage(await api.cacheUsage());
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -50,7 +51,7 @@ export function useSettingsStorage() {
         current ? { ...current, attachmentLeftovers: leftovers } : current,
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     }
   }
 
@@ -62,7 +63,7 @@ export function useSettingsStorage() {
       if (await api.exportSettings())
         setDataStatus(strings.settings.exportSaved);
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDataBusy(false);
     }
@@ -85,7 +86,7 @@ export function useSettingsStorage() {
         setDataStatus(strings.settings.importApplied);
       }
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setDataBusy(false);
     }
@@ -105,7 +106,7 @@ export function useSettingsStorage() {
       await api.relaunch();
     } catch (cause) {
       setEraseStatus(strings.settings.eraseFailed);
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setEraseBusy(false);
     }

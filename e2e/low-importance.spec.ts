@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Low importance is off until it is chosen, and it replaces High importance.
@@ -19,8 +22,9 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("a new message can be marked low importance", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
-  const low = page.getByRole("checkbox", { name: "Low importance" });
-  const high = page.getByRole("checkbox", { name: "High importance" });
+  await page.getByRole("button", { name: "Message options" }).click();
+  const low = page.getByRole("menuitemcheckbox", { name: "Low importance" });
+  const high = page.getByRole("menuitemcheckbox", { name: "High importance" });
   await expect(low).not.toBeChecked();
   await high.click();
   await low.click();

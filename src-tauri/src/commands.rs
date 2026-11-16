@@ -14,9 +14,13 @@ pub mod badge;
 pub mod cache_policy;
 pub mod compatibility;
 pub mod drafts_send;
+pub mod drag;
 pub mod drag_drop;
+pub mod flags;
 pub mod folders;
+pub mod import_export;
 pub mod messages;
+pub mod opened;
 pub mod outbox;
 pub mod replied;
 pub mod security_net;
@@ -30,7 +34,6 @@ mod deferred_integration_tests;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -45,6 +48,7 @@ use crate::{
     settings::SettingsStore,
 };
 
+use crate::mail::keywords::{color_change, ColorChange};
 use messages::{FlagOperation, MoveOperation};
 
 type CommandResult<T> = Result<T, IpcError>;
@@ -524,6 +528,25 @@ impl<R: tauri::Runtime> Drop for WorkerCleanup<'_, R> {
     }
 }
 
+pub(crate) fn failed_sync_other_error_requeue_reasons(
+    reasons: u16,
+    full_scope: bool,
+    ran_outbox_before_pass: bool,
+) -> u16 {
+    let targeted = wake::DRAFTS
+        | wake::REPLAY
+        | if ran_outbox_before_pass {
+            0
+        } else {
+            wake::OUTBOX
+        };
+    if full_scope {
+        reasons & targeted
+    } else {
+        reasons & (wake::INBOX | wake::FOLDER | targeted)
+    }
+}
+
 /// Long-lived loop for one account: sync passes, targeted jobs, IDLE, and
 /// the outbox timer. Exits when the account is removed.
 async fn run_account_worker(account_id: &str, app: &AppHandle) {
@@ -575,7 +598,8 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         };
         let guard = actor.acquire_for_worker().await;
         let work = state.hold_activity();
-        if reasons & wake::OUTBOX != 0 && (pending_full || more_work) {
+        let ran_outbox_before_pass = reasons & wake::OUTBOX != 0 && (pending_full || more_work);
+        if ran_outbox_before_pass {
             // Send Later items that came due (for example during sleep) go
             // out before a long pass.
             sync::run_targeted_jobs(account_id, app, &state, wake::OUTBOX).await;
@@ -584,15 +608,35 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             // Only a full pass is the complete Get Mail; a scoped pass stays
             // quick and leaves backfill to the next full pass.
             let quick = scope != mail::sync::SyncScope::All;
+            let full_scope = !quick;
             let previous_message_id = state.db.inbox_high_water(account_id).ok().flatten();
-            match sync::run_sync_pass(account_id, app, &state, &actor, guard, quick, scope).await {
+            match sync::run_sync_pass(
+                account_id,
+                app,
+                &state,
+                &actor,
+                guard,
+                sync::SyncPassOptions {
+                    quick,
+                    scope,
+                    allow_rule_notices: !first_pass,
+                },
+            )
+            .await
+            {
                 Ok(outcome) => {
                     backoff = 2;
                     attempt = 0;
                     pending_full = false;
                     more_work = outcome.more_work;
                     if !first_pass {
-                        notify_new_mail(app, &state.db, account_id, previous_message_id);
+                        crate::notify::notify_new_mail(
+                            app,
+                            &state.db,
+                            account_id,
+                            previous_message_id,
+                            &outcome.rule_notify_suppressed_ids,
+                        );
                     }
                     first_pass = false;
                 }
@@ -602,6 +646,14 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                     continue;
                 }
                 Err(sync::PassError::Other(_)) => {
+                    let requeue = failed_sync_other_error_requeue_reasons(
+                        reasons,
+                        full_scope,
+                        ran_outbox_before_pass,
+                    );
+                    if requeue != 0 {
+                        actor.reasons.fetch_or(requeue, Ordering::SeqCst);
+                    }
                     more_work = false;
                     tokio::select! {
                         _ = tokio::time::sleep(reconnect_delay(account_id, backoff, attempt)) => {},
@@ -883,6 +935,7 @@ struct MoveReplayFlagDependencies {
     operation_ids: Vec<i64>,
     is_read: Option<bool>,
     is_starred: Option<bool>,
+    color: Option<ColorChange>,
 }
 
 fn move_replay_flag_dependencies(
@@ -912,7 +965,9 @@ fn move_replay_flag_dependencies(
             dependencies.is_read = flag.is_read;
         }
         if flag.is_starred.is_some() {
+            // A later star op replaces the color of an earlier one.
             dependencies.is_starred = flag.is_starred;
+            dependencies.color = color_change(flag.is_starred, flag.flag_color);
         }
     }
     dependencies
@@ -1205,6 +1260,7 @@ async fn replay_flag_batch(
     };
     let mailbox = first.mailbox.clone();
     let (is_read, is_starred) = (first.is_read, first.is_starred);
+    let color = color_change(first.is_starred, first.flag_color);
     let Some(uid_validity) = first.uid_validity else {
         return Ok(false);
     };
@@ -1214,6 +1270,7 @@ async fn replay_flag_batch(
             || operation.uid_validity != Some(uid_validity)
             || operation.is_read != is_read
             || operation.is_starred != is_starred
+            || color_change(operation.is_starred, operation.flag_color) != color
     }) {
         return Ok(false);
     }
@@ -1229,6 +1286,7 @@ async fn replay_flag_batch(
         Some(uid_validity),
         is_read,
         is_starred,
+        color,
     )
     .await
     .is_err()
@@ -1241,6 +1299,7 @@ async fn replay_flag_batch(
             operation.is_read,
             operation.is_starred,
         )?;
+        db.apply_flag_color(operation.message_id, color)?;
         flag_state.failed_messages.remove(&operation.message_id);
         db.remove_operation(account_id, *id)?;
     }
@@ -1282,10 +1341,12 @@ async fn replay_move_batch(
     let Some(uid_validity) = first.uid_validity else {
         return Ok(false);
     };
+    let junk_keyword = first.junk_keyword;
     if operations.iter().any(|(_, operation)| {
         operation.source != source
             || operation.destination != destination
             || operation.uid_validity != Some(uid_validity)
+            || operation.junk_keyword != junk_keyword
     }) {
         return Ok(false);
     }
@@ -1293,13 +1354,14 @@ async fn replay_move_batch(
         .iter()
         .map(|(_, operation)| operation.uid)
         .collect();
-    if mail::move_remote_uids(
+    if mail::move_remote_uids_with_junk(
         account,
         password,
         &source,
         &destination,
         &uids,
         Some(uid_validity),
+        junk_keyword,
     )
     .await
     .is_err()
@@ -1333,6 +1395,30 @@ fn land_pending_snoozes(db: &Database, account_id: &str, destination: &str) {
     }
 }
 
+/// Transient replay failures before an offline op is retired.
+const MAX_OFFLINE_OP_ATTEMPTS: i64 = 10;
+
+/// `attempts` counts failures before this one, so this failure records
+/// attempt `attempts + 1`. Reaching the cap retires the op.
+fn should_drop_after_transient(attempts: i64) -> bool {
+    attempts.saturating_add(1) >= MAX_OFFLINE_OP_ATTEMPTS
+}
+
+/// Records a transient failure, or retires the op at the cap. True when retired.
+fn record_transient_failure(
+    db: &Database,
+    account_id: &str,
+    id: i64,
+    attempts: i64,
+) -> Result<bool, String> {
+    if should_drop_after_transient(attempts) {
+        db.remove_operation(account_id, id)?;
+        return Ok(true);
+    }
+    let _ = db.record_operation_attempt(account_id, id);
+    Ok(false)
+}
+
 async fn replay_offline_operations(
     app: &AppHandle,
     db: &Database,
@@ -1356,6 +1442,10 @@ async fn replay_offline_operations_with_notification(
     let account_id = &account.summary.id;
     let mut dropped = 0u32;
     let queued = db.queued_operations_with_attempts(account_id)?;
+    let attempts_by_id: HashMap<i64, i64> = queued
+        .iter()
+        .map(|(id, _, _, attempts)| (*id, *attempts))
+        .collect();
     let operations: Vec<(i64, String, String)> = queued
         .iter()
         .map(|(id, kind, payload, _)| (*id, kind.clone(), payload.clone()))
@@ -1404,6 +1494,7 @@ async fn replay_offline_operations_with_notification(
                 continue;
             }
             ValidatedReplay::Flags(operation) => {
+                let color = color_change(operation.is_starred, operation.flag_color);
                 let result = mail::set_remote_flags(
                     account,
                     password,
@@ -1412,29 +1503,29 @@ async fn replay_offline_operations_with_notification(
                     operation.uid_validity,
                     operation.is_read,
                     operation.is_starred,
+                    color,
                 )
                 .await;
                 if let Err(error) = &result {
+                    flag_state.failed_messages.insert(operation.message_id);
                     if error.terminal {
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
-                        flag_state.failed_messages.insert(operation.message_id);
                         flag_state.terminal_messages.insert(operation.message_id);
-                        continue;
+                    } else {
+                        let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                        if record_transient_failure(db, account_id, id, attempts)? {
+                            dropped = dropped.saturating_add(1);
+                        }
                     }
-                    flag_state.failed_messages.insert(operation.message_id);
+                    continue;
                 }
-                // Initial sync restored server flags. Keep queued intent only
-                // while replay can still succeed.
                 db.set_flags(
                     operation.message_id,
                     operation.is_read,
                     operation.is_starred,
                 )?;
-                if result.is_err() {
-                    let _ = db.record_operation_attempt(account_id, id);
-                    continue;
-                }
+                db.apply_flag_color(operation.message_id, color)?;
                 flag_state.failed_messages.remove(&operation.message_id);
             }
             ValidatedReplay::Keyword(operation) => {
@@ -1452,7 +1543,10 @@ async fn replay_offline_operations_with_notification(
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
                     } else {
-                        let _ = db.record_operation_attempt(account_id, id);
+                        let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                        if record_transient_failure(db, account_id, id, attempts)? {
+                            dropped = dropped.saturating_add(1);
+                        }
                     }
                     continue;
                 }
@@ -1466,10 +1560,15 @@ async fn replay_offline_operations_with_notification(
                 }
                 let dependencies =
                     move_replay_flag_dependencies(&db.queued_operations(account_id)?, &operation);
+                let keywords_permitted = db
+                    .mailbox_allows_keywords(account_id, &operation.destination)
+                    .unwrap_or(false);
                 let replay_flags =
                     (!dependencies.operation_ids.is_empty()).then_some(mail::MoveReplayFlags {
                         is_read: dependencies.is_read,
                         is_starred: dependencies.is_starred,
+                        color: dependencies.color,
+                        keywords_permitted,
                     });
                 if !dependencies.operation_ids.is_empty() {
                     let flag_result = mail::set_remote_flags(
@@ -1480,6 +1579,7 @@ async fn replay_offline_operations_with_notification(
                         operation.uid_validity,
                         dependencies.is_read,
                         dependencies.is_starred,
+                        dependencies.color,
                     )
                     .await;
                     match flag_result {
@@ -1489,6 +1589,7 @@ async fn replay_offline_operations_with_notification(
                                 dependencies.is_read,
                                 dependencies.is_starred,
                             )?;
+                            db.apply_flag_color(operation.message_id, dependencies.color)?;
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
                             }
@@ -1509,8 +1610,22 @@ async fn replay_offline_operations_with_notification(
                             flag_state.failed_messages.insert(operation.message_id);
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
+                                let flag_attempts =
+                                    attempts_by_id.get(flag_id).copied().unwrap_or(0);
+                                if record_transient_failure(
+                                    db,
+                                    account_id,
+                                    *flag_id,
+                                    flag_attempts,
+                                )? {
+                                    dropped = dropped.saturating_add(1);
+                                }
                             }
-                            let _ = db.record_operation_attempt(account_id, id);
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                             continue;
                         }
                     }
@@ -1530,6 +1645,7 @@ async fn replay_offline_operations_with_notification(
                         message_id: remote_message_id.as_deref(),
                         dedupe_existing: true,
                         replay_flags,
+                        junk_keyword: operation.junk_keyword,
                     },
                 )
                 .await;
@@ -1551,7 +1667,11 @@ async fn replay_offline_operations_with_notification(
                             )
                             .is_err()
                         {
-                            let _ = db.record_operation_attempt(account_id, id);
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                             continue;
                         }
                         let _ = mail::refresh_mailbox_envelopes(
@@ -1577,10 +1697,16 @@ async fn replay_offline_operations_with_notification(
                             for flag_id in &dependencies.operation_ids {
                                 flag_state.handled.insert(*flag_id);
                             }
+                            // Transient failure: keep the queued op and the
+                            // pending-move hiding so a later sync retries it.
+                            // At the cap the move is retired, and its hiding
+                            // is cleared with it.
+                            let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                            if record_transient_failure(db, account_id, id, attempts)? {
+                                let _ = db.clear_pending_move(operation.message_id);
+                                dropped = dropped.saturating_add(1);
+                            }
                         }
-                        // Transient failure: keep the queued op and the
-                        // pending-move hiding so a later sync retries it.
-                        let _ = db.record_operation_attempt(account_id, id);
                         continue;
                     }
                 }
@@ -1605,7 +1731,10 @@ async fn replay_offline_operations_with_notification(
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
                     } else {
-                        let _ = db.record_operation_attempt(account_id, id);
+                        let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
+                        if record_transient_failure(db, account_id, id, attempts)? {
+                            dropped = dropped.saturating_add(1);
+                        }
                     }
                     continue;
                 }
@@ -1819,98 +1948,6 @@ async fn release_attachment_tokens<'a>(
     }
 }
 
-fn notify_new_mail(
-    app: &AppHandle,
-    db: &Database,
-    account_id: &str,
-    previous_message_id: Option<i64>,
-) {
-    // Sync stores rows with rising ids, so arrival order never depends on
-    // the sender's Date header.
-    let Ok(Some(message)) = db.newest_unread_inbox_after(account_id, previous_message_id) else {
-        return;
-    };
-    let settings = app.state::<AppState>().settings.get().ok();
-    if settings.as_ref().is_some_and(|settings| {
-        !settings.notify_new_mail
-            || crate::settings::quiet_hours_active(
-                &settings.quiet_hours_start,
-                &settings.quiet_hours_end,
-                local_minutes_now(),
-            )
-    }) {
-        return;
-    }
-    let private = settings
-        .as_ref()
-        .map(|settings| settings.private_notifications)
-        .unwrap_or(true);
-    // With several accounts, say which one received the mail. The account's
-    // own display name is shown, never its address, even in private mode.
-    let account_label = (db.account_count().unwrap_or(0) > 1)
-        .then(|| db.account(account_id).ok())
-        .flatten()
-        .map(|account| account.summary.display_name)
-        .filter(|name| !name.trim().is_empty());
-    let (title, body) = if private {
-        (
-            account_label.as_deref().map_or_else(
-                || crate::strings::notify::NEW_MAIL.to_string(),
-                crate::strings::notify::new_mail_for,
-            ),
-            crate::strings::notify::OPEN_TO_READ.to_string(),
-        )
-    } else {
-        let sender = if message.sender_name.is_empty() {
-            message.sender_address.clone()
-        } else {
-            message.sender_name.clone()
-        };
-        (
-            sender,
-            match account_label {
-                Some(name) => format!(
-                    "{}
-{name}",
-                    message.subject
-                ),
-                None => message.subject.clone(),
-            },
-        )
-    };
-    let play_sound = settings
-        .as_ref()
-        .map(|settings| settings.new_mail_sound)
-        .unwrap_or(true);
-    let mut notice = app.notification().builder().title(title).body(body);
-    if play_sound {
-        notice = notice.sound(new_mail_sound_name());
-    }
-    let _ = notice.show();
-}
-
-fn local_minutes_now() -> u32 {
-    use chrono::Timelike;
-    let now = chrono::Local::now();
-    now.hour() * 60 + now.minute()
-}
-
-/// System sound for a new-mail alert. Each desktop has its own name.
-fn new_mail_sound_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Mail"
-    } else if cfg!(target_os = "macos") {
-        "Ping"
-    } else {
-        "message-new-email"
-    }
-}
-
-#[cfg(test)]
-fn mail_alert_sound(play: bool) -> Option<&'static str> {
-    play.then(new_mail_sound_name)
-}
-
 #[cfg(test)]
 mod tests {
     // Get Mail stall failure modes:
@@ -2087,8 +2124,7 @@ mod tests {
     #[cfg(unix)]
     use super::make_unwritable;
     use super::{
-        attachments::preview_text, drafts_send::resolve_requested_send_at, mail_alert_sound,
-        new_mail_sound_name, sync::apply_filter_rules,
+        attachments::preview_text, drafts_send::resolve_requested_send_at, sync::apply_filter_rules,
     };
     use super::{
         cleanup_orphaned_account_dirs, record_orphan_marker, sweep_orphaned_account_dirs,
@@ -2171,12 +2207,6 @@ mod tests {
         assert!(!forward_as_inline(&no_id, Some("<img src=\"cid:\">")));
     }
 
-    #[test]
-    fn mail_alert_sound_follows_setting() {
-        assert_eq!(mail_alert_sound(false), None);
-        assert_eq!(mail_alert_sound(true), Some(new_mail_sound_name()));
-        assert!(!new_mail_sound_name().is_empty());
-    }
     use super::replied;
     use crate::db::{CachedMessage, Database};
     use crate::mail;
@@ -2187,6 +2217,7 @@ mod tests {
     fn rule_account() -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
@@ -2263,6 +2294,9 @@ mod tests {
 
     fn enabled_rule(account_id: &str, action: &str) -> FilterRule {
         FilterRule {
+            match_mode: "all".into(),
+            conditions: Vec::new(),
+            actions: Vec::new(),
             id: String::new(),
             account_id: account_id.into(),
             name: "Bills".into(),
@@ -2294,21 +2328,21 @@ mod tests {
 
         let first = begin_rule_window(&db, &account_id);
         bill(&db, &account_id, inbox, 1);
-        finish_rule_window(&db, &account, first, false);
+        finish_rule_window(&db, &account, first, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
         let second = begin_rule_window(&db, &account_id);
         bill(&db, &account_id, inbox, 2);
-        finish_rule_window(&db, &account, second, false);
+        finish_rule_window(&db, &account, second, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
         let third = begin_rule_window(&db, &account_id);
-        finish_rule_window(&db, &account, third, true);
+        finish_rule_window(&db, &account, third, true, &mut |_| {});
         assert_eq!(pending(&db), vec![2, 1]);
 
         bill(&db, &account_id, inbox, 3);
         let fourth = begin_rule_window(&db, &account_id);
-        finish_rule_window(&db, &account, fourth, true);
+        finish_rule_window(&db, &account, fourth, true, &mut |_| {});
         assert_eq!(pending(&db), vec![2, 1]);
     }
 
@@ -2329,7 +2363,7 @@ mod tests {
         bill(&db, account_id, inbox, 1);
         let restarted = begin_rule_window(&db, account_id);
         assert_eq!(restarted, first);
-        finish_rule_window(&db, &account, restarted, true);
+        finish_rule_window(&db, &account, restarted, true, &mut |_| {});
         assert_eq!(db.pending_move_uids(inbox).unwrap(), vec![1]);
     }
 
@@ -2349,9 +2383,9 @@ mod tests {
         for uid in 1..=101 {
             bill(&db, account_id, inbox, uid);
         }
-        finish_rule_window(&db, &account, first, true);
+        finish_rule_window(&db, &account, first, true, &mut |_| {});
         let second = begin_rule_window(&db, account_id);
-        finish_rule_window(&db, &account, second, true);
+        finish_rule_window(&db, &account, second, true, &mut |_| {});
         assert_eq!(db.pending_move_uids(inbox).unwrap().len(), 101);
         assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
     }
@@ -2789,6 +2823,7 @@ mod tests {
                 uid_validity: validity,
                 is_read: Some(true),
                 is_starred: None,
+                flag_color: None,
             };
         let flags_payload =
             |operation: &super::messages::FlagOperation| serde_json::to_string(operation).unwrap();
@@ -2863,6 +2898,7 @@ mod tests {
                 source: "INBOX".into(),
                 destination: destination.into(),
                 uid_validity: validity,
+                junk_keyword: None,
             };
         let move_payload =
             |operation: &super::messages::MoveOperation| serde_json::to_string(operation).unwrap();
@@ -3386,6 +3422,7 @@ mod tests {
             source: "INBOX".into(),
             destination: "Archive".into(),
             uid_validity: Some(1),
+            junk_keyword: None,
         };
         db.queue_operation(account_id, "move", &movement, Some(&format!("move:{id}")))
             .unwrap();
@@ -3452,6 +3489,59 @@ mod tests {
     const NO_MOVE: ReplayBatchCaps = ReplayBatchCaps {
         move_supported: false,
     };
+
+    #[test]
+    fn legacy_flag_ops_without_color_replay_as_plain_star_changes() {
+        use super::messages::{FlagOperation, MoveOperation};
+        use super::move_replay_flag_dependencies;
+        use crate::mail::keywords::{color_change, ColorChange};
+        // Queued before flag colors existed: no flagColor key at all.
+        let legacy_star: FlagOperation = serde_json::from_str(
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_star.flag_color, None);
+        assert_eq!(
+            color_change(legacy_star.is_starred, legacy_star.flag_color),
+            None
+        );
+        let legacy_unstar: FlagOperation = serde_json::from_str(
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            color_change(legacy_unstar.is_starred, legacy_unstar.flag_color),
+            Some(ColorChange::Clear)
+        );
+        let movement = MoveOperation {
+            message_id: 4,
+            uid: 2,
+            source: "INBOX".into(),
+            destination: "Archive".into(),
+            uid_validity: Some(1),
+            junk_keyword: None,
+        };
+        let legacy = vec![(
+            9,
+            "flags".to_string(),
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":true,"isStarred":null}"#
+                .to_string(),
+        )];
+        let dependencies = move_replay_flag_dependencies(&legacy, &movement);
+        assert_eq!(dependencies.operation_ids, vec![9]);
+        assert_eq!(dependencies.is_read, Some(true));
+        assert_eq!(dependencies.color, None);
+        let colored = vec![(
+            10,
+            "flags".to_string(),
+            r#"{"messageId":4,"uid":2,"mailbox":"INBOX","uidValidity":1,"isRead":null,"isStarred":true,"flagColor":3}"#
+                .to_string(),
+        )];
+        assert_eq!(
+            move_replay_flag_dependencies(&colored, &movement).color,
+            Some(ColorChange::Set(3))
+        );
+    }
 
     fn flag_candidate(
         id: i64,
@@ -3664,6 +3754,424 @@ mod tests {
         assert_eq!(
             plan_replay_batches(&candidates, MOVE_CAPABLE),
             vec![vec![0], vec![1], vec![2], vec![3]]
+        );
+    }
+
+    // Attempt cap failure modes for offline replay:
+    // 1. The first transient failures keep the op queued.
+    // 2. The failure that would record the cap retires the op, not just counts it.
+    // 3. A huge attempt count overflows instead of retiring.
+    // 4. The DB helper leaves the row queued below the cap, and removes it at the cap.
+    #[test]
+    fn attempt_cap_keeps_the_op_below_the_cap() {
+        use super::should_drop_after_transient;
+        for attempts in 0..(super::MAX_OFFLINE_OP_ATTEMPTS - 1) {
+            assert!(
+                !should_drop_after_transient(attempts),
+                "attempts {attempts}"
+            );
+        }
+    }
+
+    #[test]
+    fn attempt_cap_retires_the_failure_that_reaches_it() {
+        use super::{should_drop_after_transient, MAX_OFFLINE_OP_ATTEMPTS};
+        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS - 1));
+        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS));
+        assert!(should_drop_after_transient(i64::MAX));
+    }
+
+    #[test]
+    fn transient_failure_counts_until_the_cap_then_drops_the_op() {
+        use super::{record_transient_failure, MAX_OFFLINE_OP_ATTEMPTS};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        db.queue_operation(
+            account_id,
+            "keyword",
+            &serde_json::json!({"m": 1}),
+            Some("cap"),
+        )
+        .unwrap();
+        for expected in 1..MAX_OFFLINE_OP_ATTEMPTS {
+            let (id, _, _, attempts) = db
+                .queued_operations_with_attempts(account_id)
+                .unwrap()
+                .remove(0);
+            assert_eq!(attempts, expected - 1);
+            assert!(!record_transient_failure(&db, account_id, id, attempts).unwrap());
+        }
+        let (id, _, _, attempts) = db
+            .queued_operations_with_attempts(account_id)
+            .unwrap()
+            .remove(0);
+        assert!(record_transient_failure(&db, account_id, id, attempts).unwrap());
+        assert!(db.queued_operations(account_id).unwrap().is_empty());
+    }
+
+    // Rule notify gating and flag-batch fallback failure modes:
+    // - Startup first_pass emits rule notifications or skips rule actions.
+    // - Mixed valid/stale flag batch mutates state instead of falling back per op.
+    #[test]
+    fn first_pass_rule_notify_is_suppressed_while_actions_run() {
+        use super::sync::{begin_rule_window, finish_sync_rule_window};
+        use crate::models::{RuleAction, RuleCondition};
+
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+
+        let mut rule = enabled_rule(account_id, "flag");
+        rule.conditions = vec![RuleCondition {
+            field: "from".into(),
+            value: "power.example.com".into(),
+        }];
+        rule.actions = vec![
+            RuleAction {
+                kind: "flag".into(),
+                target_mailbox: None,
+                flag_color: Some(1),
+            },
+            RuleAction {
+                kind: "notify".into(),
+                target_mailbox: None,
+                flag_color: None,
+            },
+        ];
+        db.create_filter_rule(&rule).unwrap();
+
+        let startup_watermark = begin_rule_window(&db, account_id);
+        let first_id = bill(&db, account_id, inbox, 1);
+        let mut notices = Vec::new();
+        let suppressed =
+            finish_sync_rule_window(&db, &account, startup_watermark, true, false, &mut |id| {
+                notices.push(id);
+                true
+            });
+        assert!(notices.is_empty(), "startup first_pass must not notify");
+        assert!(suppressed.is_empty());
+        assert!(
+            db.message_detail(first_id, account_id)
+                .unwrap()
+                .summary
+                .is_starred
+        );
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
+
+        let later_watermark = begin_rule_window(&db, account_id);
+        let second_id = bill(&db, account_id, inbox, 2);
+        let third_id = bill(&db, account_id, inbox, 3);
+        let suppressed =
+            finish_sync_rule_window(&db, &account, later_watermark, true, true, &mut |id| {
+                notices.push(id);
+                true
+            });
+        assert_eq!(notices, vec![third_id]);
+        assert!(suppressed.contains(&second_id) && suppressed.contains(&third_id));
+    }
+
+    #[tokio::test]
+    async fn replay_flag_batch_falls_back_safely_on_mixed_stale_group() {
+        use super::{replay_flag_batch, ReplayFlagState};
+
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let live_id = bill(&db, account_id, inbox, 10);
+        let missing_id = bill(&db, account_id, inbox, 11);
+
+        let op_live = serde_json::json!({
+            "messageId": live_id,
+            "uid": 10,
+            "mailbox": "INBOX",
+            "uidValidity": 1,
+            "isRead": true,
+            "isStarred": null,
+            "flagColor": null
+        });
+        let op_missing = serde_json::json!({
+            "messageId": missing_id,
+            "uid": 11,
+            "mailbox": "INBOX",
+            "uidValidity": 1,
+            "isRead": true,
+            "isStarred": null,
+            "flagColor": null
+        });
+        db.queue_operation(account_id, "flags", &op_live, None)
+            .unwrap();
+        db.queue_operation(account_id, "flags", &op_missing, None)
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute("DELETE FROM messages WHERE id=?1", [missing_id])
+            .unwrap();
+
+        let group: Vec<(i64, String, String)> = db
+            .queued_operations_with_attempts(account_id)
+            .unwrap()
+            .into_iter()
+            .map(|(id, kind, payload, _)| (id, kind, payload))
+            .collect();
+        let mut flag_state = ReplayFlagState::default();
+        let batched = replay_flag_batch(&db, &account, "pw", &group, &mut flag_state)
+            .await
+            .unwrap();
+        assert!(
+            !batched,
+            "mixed stale batch must fall back to per-op replay"
+        );
+        assert!(flag_state.handled.is_empty());
+        assert_eq!(db.queued_operations(account_id).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn replay_transient_flag_failure_does_not_mutate_local_flags() {
+        use super::replay_offline_operations_with_notification;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let closed_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let db = Database::memory();
+        let mut account = rule_account();
+        account.summary.id = format!("b4-replay-{}", uuid::Uuid::new_v4());
+        account.imap.host = "127.0.0.1".into();
+        account.imap.port = closed_port;
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let msg_id = bill(&db, account_id, inbox, 10);
+        // Server sync restored unread/unstarred; queued offline op wants read + starred + color 4.
+        let op = serde_json::json!({
+            "messageId": msg_id,
+            "uid": 10,
+            "mailbox": "INBOX",
+            "uidValidity": 1,
+            "isRead": true,
+            "isStarred": true,
+            "flagColor": 4
+        });
+        db.queue_operation(account_id, "flags", &op, None).unwrap();
+
+        replay_offline_operations_with_notification(
+            &db,
+            &account,
+            "pw",
+            &crate::models::CachePolicy::default(),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        let detail = db.message_detail(msg_id, account_id).unwrap();
+        assert!(
+            !detail.summary.is_read,
+            "transient flag replay failure must not mark local row read"
+        );
+        assert!(
+            !detail.summary.is_starred,
+            "transient flag replay failure must not star local row"
+        );
+        assert_eq!(detail.summary.flag_color, 0);
+    }
+
+    #[tokio::test]
+    async fn replay_move_uses_destination_keyword_capability_and_not_source() {
+        use super::replay_offline_operations_with_notification;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
+
+        let selected_box = Arc::new(Mutex::new(String::new()));
+        let selected_for_server = selected_box.clone();
+        let search_count = Arc::new(AtomicUsize::new(0));
+        let search_for_server = search_count.clone();
+
+        let (port, cmd_log, server) =
+            crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+                let selected_box = selected_for_server.clone();
+                let search_count = search_for_server.clone();
+                let tag = tag.to_string();
+                let verb = verb.to_string();
+                let rest = rest.to_string();
+                Box::pin(async move {
+                    let upper = rest.to_ascii_uppercase();
+                    let body = "Message-ID: <b5-move@example.test>\r\nSubject: B5\r\n\r\nhello";
+                    let reply = match verb.as_str() {
+                        "CAPABILITY" => {
+                            format!("* CAPABILITY IMAP4rev1 UIDPLUS MOVE\r\n{tag} OK done\r\n")
+                                .into_bytes()
+                        }
+                        "LOGIN" | "NOOP" | "LOGOUT" => format!("{tag} OK ok\r\n").into_bytes(),
+                        "SELECT" | "EXAMINE" => {
+                            let is_archive = rest.contains("Archive");
+                            *selected_box.lock().unwrap() =
+                                if is_archive { "Archive" } else { "INBOX" }.into();
+                            let pflags = if is_archive {
+                                "\\Seen \\Flagged \\*"
+                            } else {
+                                "\\Seen \\Flagged"
+                            };
+                            let uidnext = if is_archive { 200 } else { 20 };
+                            format!(
+                                "* 1 EXISTS\r\n* OK [UIDVALIDITY 1]\r\n* OK [UIDNEXT {uidnext}]\r\n* OK [PERMANENTFLAGS ({pflags})]\r\n{tag} OK selected\r\n"
+                            )
+                            .into_bytes()
+                        }
+                        "STATUS" => {
+                            format!("* STATUS \"Archive\" (MESSAGES 1 UNSEEN 0 UIDNEXT 200 UIDVALIDITY 1)\r\n{tag} OK status\r\n").into_bytes()
+                        }
+                        "UID" if upper.starts_with("UID SEARCH") => {
+                            let cur = selected_box.lock().unwrap().clone();
+                            let n = search_count.fetch_add(1, Ordering::SeqCst);
+                            let uids = if cur == "Archive" || n > 0 { "101" } else { "" };
+                            if uids.is_empty() {
+                                format!("* SEARCH\r\n{tag} OK search\r\n").into_bytes()
+                            } else {
+                                format!("* SEARCH {uids}\r\n{tag} OK search\r\n").into_bytes()
+                            }
+                        }
+                        "UID" if upper.starts_with("UID FETCH") && upper.contains("(UID)") => {
+                            let cur = selected_box.lock().unwrap().clone();
+                            let uid = if cur == "Archive" { 101 } else { 10 };
+                            format!("* 1 FETCH (UID {uid})\r\n{tag} OK fetch\r\n").into_bytes()
+                        }
+                        "UID" if upper.starts_with("UID FETCH") && upper.contains("(UID FLAGS)") => {
+                            // Report stored flags matching Archive (\Flagged $MailFlagBit2).
+                            format!("* 1 FETCH (UID 101 FLAGS (\\Seen \\Flagged $MailFlagBit2))\r\n{tag} OK fetch\r\n").into_bytes()
+                        }
+                        "UID" if upper.starts_with("UID FETCH") => {
+                            let cur = selected_box.lock().unwrap().clone();
+                            let uid = if cur == "Archive" { 101 } else { 10 };
+                            let section = if upper.contains("<0.") {
+                                "BODY[]<0>"
+                            } else {
+                                "BODY[]"
+                            };
+                            let mut out = format!(
+                                "* 1 FETCH (UID {uid} RFC822.SIZE {} {section} {{{}}}\r\n",
+                                body.len(),
+                                body.len()
+                            )
+                            .into_bytes();
+                            out.extend_from_slice(body.as_bytes());
+                            out.extend_from_slice(format!(")\r\n{tag} OK fetch\r\n").as_bytes());
+                            out
+                        }
+                        _ => format!("{tag} OK ok\r\n").into_bytes(),
+                    };
+                    Some(reply)
+                })
+            })
+            .await;
+
+        let db = Database::memory();
+        let mut account = rule_account();
+        account.summary.id = format!("b5-move-{}", uuid::Uuid::new_v4());
+        account.summary.provider = ProviderKind::ProtonBridge;
+        account.imap.host = "127.0.0.1".into();
+        account.imap.port = port;
+        account.imap.trusted_certificate = Some(crate::mail::test_tls::CERT_PEM.into());
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        let archive = rule_mailbox(&db, account_id, "Archive", &MailboxRole::Archive);
+        db.set_mailbox_allows_keywords(inbox, false).unwrap();
+        db.set_mailbox_allows_keywords(archive, true).unwrap();
+
+        let msg_id = bill(&db, account_id, inbox, 10);
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET message_id='<b5-move@example.test>' WHERE id=?1",
+                [msg_id],
+            )
+            .unwrap();
+        let move_op = serde_json::json!({
+            "messageId": msg_id,
+            "uid": 10,
+            "source": "INBOX",
+            "destination": "Archive",
+            "uidValidity": 1
+        });
+        db.queue_operation(
+            account_id,
+            "move",
+            &move_op,
+            Some(&format!("move:{msg_id}")),
+        )
+        .unwrap();
+        db.mark_pending_move(msg_id, archive).unwrap();
+        let flag_op = serde_json::json!({
+            "messageId": msg_id,
+            "uid": 10,
+            "mailbox": "INBOX",
+            "uidValidity": 1,
+            "isRead": true,
+            "isStarred": true,
+            "flagColor": 4
+        });
+        db.queue_operation(account_id, "flags", &flag_op, None)
+            .unwrap();
+
+        let pending = replay_offline_operations_with_notification(
+            &db,
+            &account,
+            "pw",
+            &crate::models::CachePolicy::default(),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert!(!pending, "replay must finish without leaving pending ops");
+
+        let commands = cmd_log.lock().unwrap().clone();
+        assert!(
+            commands
+                .iter()
+                .any(|line| line.contains("UID STORE 101 +FLAGS.SILENT ($MailFlagBit2)")),
+            "destination Archive allows keywords so replayed move must write $MailFlagBit2 there; got commands: {commands:?}"
+        );
+        crate::mail::pool::forget(account_id);
+        server.abort();
+    }
+
+    #[test]
+    fn worker_preserves_scoped_sync_and_targeted_jobs_after_transient_sync_error() {
+        use super::{failed_sync_other_error_requeue_reasons, wake};
+
+        assert_eq!(
+            failed_sync_other_error_requeue_reasons(
+                wake::INBOX | wake::DRAFTS | wake::OUTBOX | wake::REPLAY,
+                false,
+                false,
+            ),
+            wake::INBOX | wake::DRAFTS | wake::OUTBOX | wake::REPLAY,
+            "failed scoped Inbox pass must preserve INBOX sync and co-scheduled targeted jobs"
+        );
+        assert_eq!(
+            failed_sync_other_error_requeue_reasons(wake::FOLDER | wake::REPLAY, false, false,),
+            wake::FOLDER | wake::REPLAY,
+            "failed scoped Folder pass must preserve FOLDER poll and REPLAY"
+        );
+        assert_eq!(
+            failed_sync_other_error_requeue_reasons(
+                wake::SYNC | wake::OUTBOX | wake::DRAFTS | wake::REPLAY,
+                true,
+                true,
+            ),
+            wake::DRAFTS | wake::REPLAY,
+            "full pass keeps pending_full=true so it preserves un-run targeted jobs without duplicating early OUTBOX"
         );
     }
 }

@@ -1,4 +1,4 @@
-import type { FilterRule } from "./types";
+import type { FilterRule, RuleAction, RuleCondition } from "./types";
 
 const needlesByAccount = new Map<string, string[]>();
 const domainsByAccount = new Map<string, string[]>();
@@ -93,6 +93,45 @@ function needleOf(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/** Conditions a rule matches; pre-v2 rules read as their one legacy field. */
+export function ruleConditionsOf(rule: FilterRule): RuleCondition[] {
+  return rule.conditions?.length
+    ? rule.conditions
+    : [{ field: rule.field, value: rule.contains }];
+}
+
+/** Actions a rule runs; pre-v2 rules read as their one legacy action. */
+export function ruleActionsOf(rule: FilterRule): RuleAction[] {
+  return rule.actions?.length
+    ? rule.actions
+    : [
+        {
+          kind: rule.action,
+          targetMailbox: rule.targetMailbox ?? null,
+          flagColor: null,
+        },
+      ];
+}
+
+/** The rule's only condition; undefined when it has several. */
+function soleCondition(rule: FilterRule): RuleCondition | undefined {
+  const conditions = ruleConditionsOf(rule);
+  return conditions.length === 1 ? conditions[0] : undefined;
+}
+
+/** A block is a single-condition rule that moves mail to Junk. */
+function blockCondition(
+  rule: FilterRule,
+  field: RuleCondition["field"],
+): string | undefined {
+  const condition = soleCondition(rule);
+  if (!rule.enabled || condition?.field !== field) return undefined;
+  const junks = ruleActionsOf(rule).some(
+    (action) => action.kind === "move_junk",
+  );
+  return junks ? needleOf(condition.value) : undefined;
+}
+
 /** Enabled Junk rules that match a sender address. */
 export function matchingBlockRules(
   rules: FilterRule[],
@@ -100,13 +139,7 @@ export function matchingBlockRules(
 ): FilterRule[] {
   const wanted = needleOf(needle);
   if (!wanted) return [];
-  return rules.filter(
-    (rule) =>
-      rule.enabled &&
-      rule.field === "from" &&
-      rule.action === "move_junk" &&
-      needleOf(rule.contains) === wanted,
-  );
+  return rules.filter((rule) => blockCondition(rule, "from") === wanted);
 }
 
 export function matchingDomainRules(
@@ -116,9 +149,9 @@ export function matchingDomainRules(
   const domain = senderDomain(address);
   if (!domain) return [];
   return rules.filter((rule) => {
-    if (!rule.enabled || rule.field !== "domain" || rule.action !== "move_junk")
-      return false;
-    const blocked = senderDomain(`blocked@${needleOf(rule.contains)}`);
+    const value = blockCondition(rule, "domain");
+    if (value === undefined) return false;
+    const blocked = senderDomain(`blocked@${value}`);
     return (
       blocked !== undefined &&
       (domain === blocked || domain.endsWith(`.${blocked}`))
@@ -133,15 +166,12 @@ export function rememberBlockedSenders(
   const needles: string[] = [];
   const domains: string[] = [];
   for (const rule of rules) {
-    if (!rule.enabled || rule.action !== "move_junk") continue;
-    const needle = needleOf(rule.contains);
-    if (!needle) continue;
-    if (rule.field === "from" && !needles.includes(needle))
-      needles.push(needle);
-    if (rule.field === "domain") {
-      const domain = senderDomain(`blocked@${needle}`);
-      if (domain && !domains.includes(domain)) domains.push(domain);
-    }
+    const sender = blockCondition(rule, "from");
+    if (sender && !needles.includes(sender)) needles.push(sender);
+    const value = blockCondition(rule, "domain");
+    if (value === undefined) continue;
+    const domain = senderDomain(`blocked@${value}`);
+    if (domain && !domains.includes(domain)) domains.push(domain);
   }
   needlesByAccount.set(accountId, needles);
   domainsByAccount.set(accountId, domains);

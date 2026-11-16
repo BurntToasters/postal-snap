@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A conversation with two senders names only the newest one.
@@ -28,7 +31,7 @@ test("a conversation with one sender names that sender once", async ({
 }) => {
   await page.goto("/?threadGap=1");
   const header = page.getByRole("treeitem", {
-    name: /Conversation, Jane, jane@example.com/i,
+    name: /Conversation, Jane, .*jane@example\.com/i,
   });
   await expect(header).toBeVisible();
   await expect(header).not.toHaveAccessibleName(/Lee/);

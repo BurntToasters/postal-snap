@@ -1,4 +1,5 @@
 import { outboxDetail } from "../outboxDetail";
+import { watchDrawerDrag } from "../messageDrag";
 import {
   useCallback,
   useEffect,
@@ -22,11 +23,16 @@ import {
 } from "../contextMenu";
 import { strings } from "../i18n";
 import { matchesListFilter, type MessageListFilter } from "../listFilter";
-import type { MessageListSort } from "../listSort";
+import { sortFamily, type MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
 import { folderLabel, folderParentLabel } from "../i18n/mail";
 import { useAppStore } from "../store";
-import type { AccountInboxCount, ComposeDraft, MessageSummary } from "../types";
+import type {
+  AccountInboxCount,
+  AppSettings,
+  ComposeDraft,
+  MessageSummary,
+} from "../types";
 import { applyPendingUpdate } from "../update";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MessageReader } from "./MessageReader";
@@ -36,8 +42,14 @@ import {
   OutboxPreviewDialog,
   SentNoticeToast,
 } from "./mail/mailDialogs";
-import { Sidebar } from "./mail/sidebar";
-import { DraftList, OutboxList, SnoozedList } from "./mail/localLists";
+import { Sidebar, type SidebarProps } from "./mail/sidebar";
+import { recordRender } from "../devPerf";
+import {
+  DraftList,
+  OutboxList,
+  OutboxRetryAll,
+  SnoozedList,
+} from "./mail/localLists";
 import { matchesLocalQuery } from "./mail/mailSearch";
 import { folderIcons } from "./mail/folderIcons";
 import {
@@ -59,10 +71,12 @@ import {
 } from "./mail/mailContextActions";
 import { useLocalListActions } from "./mail/useLocalListActions";
 import { useMailEvents } from "./mail/useMailEvents";
+import { useAccountRefresh } from "./mail/useAccountRefresh";
 import { useMessageSelection } from "./mail/useMessageSelection";
 import { useRowActions } from "./mail/useRowActions";
 import { useSelectionMenu } from "./mail/selectionMenu";
 import { useMessageOpening } from "./mail/useMessageOpening";
+import { useNotificationOpen } from "./mail/useNotificationOpen";
 import {
   useFolderDialog,
   type FolderDialogState,
@@ -91,6 +105,30 @@ import {
   groupThreads,
   unreadStep,
 } from "../threads";
+import { errorText } from "../errors";
+
+// The fields this shell renders from. Other autosaves leave them unchanged.
+function shellSettings(settings: AppSettings) {
+  return {
+    groupThreads: settings.groupThreads,
+    readingPane: settings.readingPane,
+    sidebarVisible: settings.sidebarVisible,
+    folderPaneWidth: settings.folderPaneWidth,
+    messagePaneWidth: settings.messagePaneWidth,
+    readerPaneHeight: settings.readerPaneHeight,
+    unreadFoldersOnly: settings.unreadFoldersOnly,
+    recentMoveMailboxId: settings.recentMoveMailboxId,
+    lastAccountId: settings.lastAccountId,
+    lastMailboxId: settings.lastMailboxId,
+    mailboxSort: settings.mailboxSort,
+    mailboxFilter: settings.mailboxFilter,
+    mailboxViews: settings.mailboxViews,
+    pinnedMailboxes: settings.pinnedMailboxes,
+    hiddenMailboxes: settings.hiddenMailboxes,
+    collapsedMailboxes: settings.collapsedMailboxes,
+  };
+}
+type ShellSettings = ReturnType<typeof shellSettings>;
 
 interface Props {
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
@@ -106,7 +144,14 @@ function relativeMessage(delta: number): MessageSummary | undefined {
   );
 }
 
+// Reads the whole sync map here, so one account's sync tick skips MailShell.
+function SyncedSidebar(props: Omit<SidebarProps, "syncByAccount">) {
+  const syncByAccount = useAppStore((state) => state.sync);
+  return <Sidebar {...props} syncByAccount={syncByAccount} />;
+}
+
 export function MailShell({ onOpenSettings }: Props) {
+  recordRender("mailShell");
   const accounts = useAppStore((state) => state.accounts);
   const activeAccountId = useAppStore((state) => state.activeAccountId);
   const selectAccount = useAppStore((state) => state.selectAccount);
@@ -129,7 +174,14 @@ export function MailShell({ onOpenSettings }: Props) {
   const selectedMessage = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const openComposer = useAppStore((state) => state.openComposer);
-  const settings = useAppStore((state) => state.settings);
+  // Save responses replace every array, so compare the picked fields by content.
+  const settingsJson = useAppStore((state) =>
+    JSON.stringify(shellSettings(state.settings)),
+  );
+  const settings = useMemo(
+    () => JSON.parse(settingsJson) as ShellSettings,
+    [settingsJson],
+  );
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
   const { update: updateSettings } = useSettingsSave();
@@ -152,7 +204,6 @@ export function MailShell({ onOpenSettings }: Props) {
   const sync = useAppStore((state) =>
     activeAccountId ? state.sync[activeAccountId] : undefined,
   );
-  const syncByAccount = useAppStore((state) => state.sync);
   const updateReady = useAppStore((state) => state.updateReady);
   const [query, setQuery] = useState("");
   const [recentByAccount, setRecentByAccount] = useState<
@@ -189,12 +240,6 @@ export function MailShell({ onOpenSettings }: Props) {
   const openCommandPalette = useCallback(() => setPaletteOpen(true), []);
   const openShortcutOverlay = useCallback(() => setShortcutsOpen(true), []);
   const [accountCounts, setAccountCounts] = useState<AccountInboxCount[]>([]);
-  const [syncingAllAccounts, setSyncingAllAccounts] = useState(false);
-  const [syncingAccountIds, setSyncingAccountIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const syncingAccountIdsRef = useRef(new Set<string>());
-  const syncingAllRef = useRef(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const onDrawerChange = useCallback((matches: boolean) => {
     if (!matches) setSidebarOpen(false);
@@ -203,6 +248,15 @@ export function MailShell({ onOpenSettings }: Props) {
     MEDIA_QUERIES.sidebarDrawer,
     onDrawerChange,
   );
+  // Read by the drag watcher, which must not reopen or close on a stale value.
+  const sidebarOpenRef = useRef(sidebarOpen);
+  useEffect(() => {
+    sidebarOpenRef.current = sidebarOpen;
+  });
+  useEffect(() => {
+    if (!sidebarDrawerViewport) return;
+    return watchDrawerDrag(() => sidebarOpenRef.current, setSidebarOpen);
+  }, [sidebarDrawerViewport]);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const folderPaneRef = useRef<HTMLElement>(null);
   const [loadingMessageId, setLoadingMessageId] = useState<number>();
@@ -290,7 +344,7 @@ export function MailShell({ onOpenSettings }: Props) {
     );
     menu
       ?.querySelector<HTMLButtonElement>(
-        "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled)",
+        "[role='menuitem']:not(:disabled), [role='menuitemradio']:not(:disabled), [role='menuitemcheckbox']:not(:disabled)",
       )
       ?.focus();
     const close = (event: MouseEvent) => {
@@ -440,9 +494,9 @@ export function MailShell({ onOpenSettings }: Props) {
         outboxResult,
         snoozedResult,
       ].find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") setError(String(failed.reason));
+      if (failed?.status === "rejected") setError(errorText(failed.reason));
     } catch (cause) {
-      if (request === mailboxRequest.current) setError(String(cause));
+      if (request === mailboxRequest.current) setError(errorText(cause));
     }
   }, [
     activeAccountId,
@@ -453,13 +507,32 @@ export function MailShell({ onOpenSettings }: Props) {
     setSnoozed,
   ]);
 
-  const { scheduledSendInFlight, sendScheduledNow } = useScheduledOutbox(
-    activeAccountId,
-    outbox,
-    sync,
-    loadAccountData,
-    setError,
-  );
+  // Mailbox counts only; used after a read flag change.
+  const loadMailboxCounts = useCallback(async () => {
+    if (!activeAccountId) return;
+    const accountId = activeAccountId;
+    const request = ++mailboxRequest.current;
+    try {
+      const mailboxes = await api.listMailboxes(accountId);
+      if (
+        request !== mailboxRequest.current ||
+        useAppStore.getState().activeAccountId !== accountId
+      )
+        return;
+      setMailboxes(mailboxes);
+    } catch (cause) {
+      if (request === mailboxRequest.current) setError(errorText(cause));
+    }
+  }, [activeAccountId, setError, setMailboxes]);
+
+  const { scheduledSendInFlight, isScheduledSendInFlight, sendScheduledNow } =
+    useScheduledOutbox(
+      activeAccountId,
+      outbox,
+      sync,
+      loadAccountData,
+      setError,
+    );
 
   const {
     loadMessages,
@@ -512,68 +585,22 @@ export function MailShell({ onOpenSettings }: Props) {
     searchAccount(subjectSearchQuery(subject));
   }
 
-  const refreshAccount = useCallback(
-    async (accountId: string) => {
-      if (syncingAccountIdsRef.current.has(accountId)) return;
-      syncingAccountIdsRef.current.add(accountId);
-      setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
-      try {
-        await api.syncAccount(accountId);
-        if (useAppStore.getState().activeAccountId === accountId) {
-          await loadAccountData();
-          if (submittedQueryRef.current) await runSearch();
-          else await loadMessages();
-        }
-      } catch (cause) {
-        if (useAppStore.getState().activeAccountId === accountId) {
-          setError(String(cause));
-        }
-      } finally {
-        syncingAccountIdsRef.current.delete(accountId);
-        setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
-      }
-    },
-    [loadAccountData, loadMessages, runSearch, setError],
-  );
-
-  const refresh = useCallback(async () => {
-    if (activeAccountId) await refreshAccount(activeAccountId);
-  }, [activeAccountId, refreshAccount]);
-
-  // Same progress and error handling as one account; counts come from STATUS.
-  const refreshAllAccounts = useCallback(async () => {
-    if (syncingAllRef.current) return;
-    syncingAllRef.current = true;
-    setSyncingAllAccounts(true);
-    const ids = useAppStore.getState().accounts.map((account) => account.id);
-    // Only claim accounts no single refresh already owns.
-    const claimed = ids.filter((id) => !syncingAccountIdsRef.current.has(id));
-    for (const id of claimed) syncingAccountIdsRef.current.add(id);
-    setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
-    try {
-      const synced = await api.syncAllAccounts();
-      const failed = ids.filter((id) => !synced.includes(id)).length;
-      if (failed > 0) setError(strings.mail.refreshAllPartial(failed));
-      await loadAccountCounts();
-      if (useAppStore.getState().activeAccountId) {
-        await loadAccountData();
-        if (submittedQueryRef.current) await runSearch();
-        else await loadMessages();
-      }
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      for (const id of claimed) syncingAccountIdsRef.current.delete(id);
-      setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
-      syncingAllRef.current = false;
-      setSyncingAllAccounts(false);
-    }
-  }, [loadAccountCounts, loadAccountData, loadMessages, runSearch, setError]);
-
-  async function refreshList() {
-    if (submittedQueryRef.current) await runSearch();
-    else await loadMessages();
-  }
+  const {
+    syncingAccountIds,
+    syncingAllAccounts,
+    refresh,
+    refreshAccount,
+    refreshAllAccounts,
+    refreshList,
+  } = useAccountRefresh({
+    activeAccountId,
+    submittedQueryRef,
+    loadAccountData,
+    loadAccountCounts,
+    loadMessages,
+    runSearch,
+    setError,
+  });
 
   const {
     openFolderDialog,
@@ -600,23 +627,25 @@ export function MailShell({ onOpenSettings }: Props) {
     updateSettings,
     setError,
   });
-  const { chooseMessage, openEarlierMessage } = useMessageOpening({
-    activeAccountId,
-    activeMailboxId,
-    activeLocalView,
-    messages,
-    selectedMessage,
-    submittedQuery,
-    loadingMessages,
-    loadAccountData,
-    selectMessage,
-    selectMailbox,
-    setError,
-    setMessages,
-    setLoadingMessageId,
-    clearQuery,
-    resetListState,
-  });
+  const { chooseMessage, openEarlierMessage, openFoundMessage } =
+    useMessageOpening({
+      activeAccountId,
+      activeMailboxId,
+      activeLocalView,
+      messages,
+      selectedMessage,
+      submittedQuery,
+      loadingMessages,
+      loadMailboxCounts,
+      selectMessage,
+      selectMailbox,
+      setError,
+      setMessages,
+      setLoadingMessageId,
+      clearQuery,
+      resetListState,
+    });
+  useNotificationOpen({ openFoundMessage, setError });
   const listedMessages =
     activeLocalView || submittedQuery || listFilter === "all"
       ? messages
@@ -661,14 +690,19 @@ export function MailShell({ onOpenSettings }: Props) {
     setSelectionSnoozeOpen,
   });
 
-  const { archiveFocused, trashFocused, junkFocused, replyFocused } =
-    useRowActions({
-      setSelectedIds,
-      chooseMessage,
-      selectMessage,
-      setError,
-      openComposer,
-    });
+  const {
+    archiveFocused,
+    trashFocused,
+    junkFocused,
+    replyFocused,
+    forwardFocused,
+  } = useRowActions({
+    setSelectedIds,
+    chooseMessage,
+    selectMessage,
+    setError,
+    openComposer,
+  });
 
   useEffect(() => {
     void loadAccountData();
@@ -679,9 +713,19 @@ export function MailShell({ onOpenSettings }: Props) {
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
 
-  const loadersRef = useRef({ loadAccountData, loadMessages, runSearch });
+  const loadersRef = useRef({
+    loadAccountData,
+    loadMailboxCounts,
+    loadMessages,
+    runSearch,
+  });
   useEffect(() => {
-    loadersRef.current = { loadAccountData, loadMessages, runSearch };
+    loadersRef.current = {
+      loadAccountData,
+      loadMailboxCounts,
+      loadMessages,
+      runSearch,
+    };
   });
 
   useMailEvents({
@@ -691,9 +735,16 @@ export function MailShell({ onOpenSettings }: Props) {
     setError,
   });
 
+  const jumpToMailboxRef = useRef<(mailboxId: number) => void>(() => undefined);
+  const selectMailboxFromShortcut = useCallback(
+    (mailboxId: number) => jumpToMailboxRef.current(mailboxId),
+    [],
+  );
+
   useMailShortcuts({
     accounts,
     selectAccount,
+    selectMailbox: selectMailboxFromShortcut,
     setAccountSwitcherOpen,
     openComposer,
     refresh,
@@ -789,6 +840,7 @@ export function MailShell({ onOpenSettings }: Props) {
     setLoadingMessageId,
     setOutboxPreview,
     scheduledSendInFlight,
+    isScheduledSendInFlight,
     selectMessage,
     openComposer,
     setDrafts,
@@ -873,6 +925,20 @@ export function MailShell({ onOpenSettings }: Props) {
     [activeAccountId, accounts],
   );
   const busy = activeAccountId ? syncingAccountIds.has(activeAccountId) : false;
+  function jumpToMailbox(mailboxId: number) {
+    const sameMailbox = mailboxId === activeMailboxId && !activeLocalView;
+    if (!sameMailbox) messageRequest.current += 1;
+    searchRequest.current += 1;
+    clearQuery();
+    resetListState();
+    selectMailbox(mailboxId);
+    setSidebarOpen(false);
+    if (sameMailbox) void loadMessages();
+  }
+  useEffect(() => {
+    jumpToMailboxRef.current = jumpToMailbox;
+  });
+
   function openRoleMailbox(role: "inbox" | "sent") {
     closeMailboxMore();
     const mailbox = mailboxByRole(mailboxes, role);
@@ -880,13 +946,22 @@ export function MailShell({ onOpenSettings }: Props) {
       setError(role === "inbox" ? strings.mail.noInbox : strings.mail.noSent);
       return;
     }
-    if (mailbox.id === activeMailboxId && !activeLocalView) return;
-    selectMailbox(mailbox.id);
+    if (
+      mailbox.id === activeMailboxId &&
+      !activeLocalView &&
+      !submittedQueryRef.current &&
+      !selecting
+    ) {
+      return;
+    }
+    jumpToMailbox(mailbox.id);
   }
 
   function roleMailboxOpen(role: "inbox" | "sent") {
     return (
-      mailboxByRole(mailboxes, role)?.id === activeMailboxId && !activeLocalView
+      mailboxByRole(mailboxes, role)?.id === activeMailboxId &&
+      !activeLocalView &&
+      !submittedQuery
     );
   }
 
@@ -916,6 +991,12 @@ export function MailShell({ onOpenSettings }: Props) {
         ? snoozed.length
         : outbox.length
     : listedMessages.length;
+  const visibleOutbox = outbox.filter((item) =>
+    matchesLocalQuery(
+      `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
+      query,
+    ),
+  );
   const shellClass = `mail-shell pane-${settings.readingPane} ${sidebarOpen ? "sidebar-open" : ""} ${sidebarVisible ? "" : "sidebar-collapsed"} ${selectedMessage ? "message-open" : ""}`;
 
   const shellStyle = {
@@ -942,6 +1023,37 @@ export function MailShell({ onOpenSettings }: Props) {
     bulkMoveTo,
     bulkCopyTo,
   });
+
+  // Shortcuts act on the checked messages while selecting.
+  function selectionKey(key: string) {
+    if (key === "Escape") {
+      selectionAnchor.current = undefined;
+      setSelecting(false);
+      setSelectedIds([]);
+      setSelectionSnoozeOpen(false);
+      return;
+    }
+    if (selectedIds.length === 0) return;
+    if (key === "s") {
+      // Like u: star when any checked message is unstarred, else unstar.
+      if (selection.anySelectedUnstarred) selection.onStar();
+      else selection.onUnstar();
+    } else if (key === "u") {
+      const anyUnread = listedMessages.some(
+        (message) => selectedIds.includes(message.id) && !message.isRead,
+      );
+      if (anyUnread) selection.onMarkRead();
+      else selection.onMarkUnread();
+    } else if (key === "e") {
+      void bulkMove(activeMailbox?.role === "archive" ? "inbox" : "archive");
+    } else if (key === "#") {
+      if (activeMailbox?.role === "trash") void deleteSelectedTrash();
+      else void bulkMove("trash");
+    } else if (key === "!") {
+      if (selection.mailboxRole === "junk") selection.onNotJunk();
+      else selection.onJunk();
+    }
+  }
 
   return (
     <main className={shellClass} style={shellStyle}>
@@ -1025,12 +1137,11 @@ export function MailShell({ onOpenSettings }: Props) {
         onReset={loadAccountData}
         focusSelector="#folder-pane .folder-list button:not([disabled])"
       >
-        <Sidebar
+        <SyncedSidebar
           folderPaneRef={folderPaneRef}
           accounts={accounts}
           activeAccount={activeAccount}
           accountCounts={accountCounts}
-          syncByAccount={syncByAccount}
           activeSync={sync}
           accountSwitcherOpen={accountSwitcherOpen}
           syncingAllAccounts={syncingAllAccounts}
@@ -1081,19 +1192,19 @@ export function MailShell({ onOpenSettings }: Props) {
             if (next) void updateSettings({ collapsedMailboxes: next });
           }}
           onToggleCollapsed={(mailboxId, collapsed) => {
-            if (!activeAccountId) return;
+            if (!activeAccountId) return Promise.resolve(false);
             const current = settings.collapsedMailboxes ?? [];
             if (
               collapsed &&
               mailboxIsPinned(current, activeAccountId, mailboxId)
             ) {
-              return;
+              return Promise.resolve(false);
             }
             const next = collapsed
               ? pinMailbox(current, activeAccountId, mailboxId, 200)
               : unpinMailbox(current, activeAccountId, mailboxId);
-            if (!next) return;
-            void updateSettings({ collapsedMailboxes: next });
+            if (!next) return Promise.resolve(false);
+            return updateSettings({ collapsedMailboxes: next });
           }}
           activeMailboxId={activeMailboxId}
           folderIcons={folderIcons}
@@ -1102,15 +1213,7 @@ export function MailShell({ onOpenSettings }: Props) {
           folderBusy={folderBusy}
           newFolderButtonRef={newFolderButtonRef}
           onFolderClick={(mailbox) => {
-            const sameMailbox =
-              mailbox.id === activeMailboxId && !activeLocalView;
-            if (!sameMailbox) messageRequest.current += 1;
-            searchRequest.current += 1;
-            clearQuery();
-            resetListState();
-            selectMailbox(mailbox.id);
-            setSidebarOpen(false);
-            if (sameMailbox) void loadMessages();
+            jumpToMailbox(mailbox.id);
           }}
           onFolderRename={(mailbox) => {
             openFolderDialog({
@@ -1242,7 +1345,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 setError(strings.mail.noOtherUnreadMailbox);
                 return;
               }
-              selectMailbox(next.id);
+              jumpToMailbox(next.id);
             }}
             nextUnreadMailboxDisabled={
               !nextUnreadMailbox(mailboxes, activeMailboxId)
@@ -1257,7 +1360,7 @@ export function MailShell({ onOpenSettings }: Props) {
                 setError(strings.mail.noOtherUnreadMailbox);
                 return;
               }
-              selectMailbox(previous.id);
+              jumpToMailbox(previous.id);
             }}
             previousUnreadMailboxDisabled={
               !previousUnreadMailbox(mailboxes, activeMailboxId)
@@ -1274,6 +1377,12 @@ export function MailShell({ onOpenSettings }: Props) {
                   listSort,
                   filter,
                 ),
+              }).then((saved) => {
+                if (!saved) {
+                  setPendingFilter((current) =>
+                    current === filter ? null : current,
+                  );
+                }
               });
             }}
             listSort={listSort}
@@ -1290,9 +1399,24 @@ export function MailShell({ onOpenSettings }: Props) {
                   sort,
                   listFilter,
                 ),
+              }).then((saved) => {
+                if (!saved) {
+                  setPendingSort((current) =>
+                    current === sort ? null : current,
+                  );
+                }
               });
             }}
             selection={selection}
+            localAction={
+              activeLocalView === "outbox" ? (
+                <OutboxRetryAll
+                  items={visibleOutbox}
+                  sendingIds={scheduledSendInFlight}
+                  onRetryAll={retryAllQueued}
+                />
+              ) : undefined
+            }
             onClearSearch={() => {
               messageRequest.current += 1;
               searchRequest.current += 1;
@@ -1382,12 +1506,7 @@ export function MailShell({ onOpenSettings }: Props) {
             />
           ) : activeLocalView === "outbox" ? (
             <OutboxList
-              items={outbox.filter((item) =>
-                matchesLocalQuery(
-                  `${item.subject} ${item.recipients} ${item.preview ?? ""} ${outboxDetail(item) ?? ""}`,
-                  query,
-                ),
-              )}
+              items={visibleOutbox}
               emptyLabel={
                 query.trim() && outbox.length > 0
                   ? strings.mail.noOutboxMatch
@@ -1396,7 +1515,6 @@ export function MailShell({ onOpenSettings }: Props) {
               sendingIds={scheduledSendInFlight}
               onOpen={previewQueued}
               onRetry={retryQueued}
-              onRetryAll={retryAllQueued}
               onRetryCopy={retrySentCopy}
               onRetryArchive={retryArchiveAfterSend}
               onSendNow={sendScheduledNow}
@@ -1441,12 +1559,17 @@ export function MailShell({ onOpenSettings }: Props) {
               selecting={selecting}
               selectedIds={selectedIds}
               onToggleSelect={toggleSelectMessage}
+              onSelectionKey={selectionKey}
+              showSizes={sortFamily(listSort) === "size"}
               onCheckFocused={toggleSelectIds}
               onArchiveFocused={archiveFocused}
               onTrashFocused={trashFocused}
               onJunkFocused={junkFocused}
               onReplyFocused={(message, mode) => {
                 void replyFocused(message, mode);
+              }}
+              onForwardFocused={(message) => {
+                void forwardFocused(message);
               }}
               onSelectDay={(ids) => {
                 if (ids.length === 0) return;

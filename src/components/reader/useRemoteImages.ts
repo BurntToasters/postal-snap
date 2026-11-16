@@ -9,6 +9,7 @@ import { strings } from "../../i18n";
 import type { SanitizedMail } from "../../security";
 import type { Attachment, MessageDetail } from "../../types";
 import { hydrateInlineImages } from "./readerUtils";
+import { errorText } from "../../errors";
 
 interface Options {
   message?: MessageDetail;
@@ -17,9 +18,21 @@ interface Options {
   inlineAttachments: Attachment[];
   contentOperationRef: RefObject<number>;
   setLoadedHtml: Dispatch<
-    SetStateAction<{ messageId: number; html: string } | undefined>
+    SetStateAction<
+      | {
+          messageId: number;
+          html: string;
+          sourceHtml?: string;
+          remoteAttempted?: boolean;
+        }
+      | undefined
+    >
   >;
   setError: (error?: string) => void;
+}
+
+function isImageDataUrl(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("data:image/");
 }
 
 export function useRemoteImages({
@@ -64,9 +77,13 @@ export function useRemoteImages({
               } else if (result.status === "reportedThreat") {
                 image.dataset.threatBlocked = "true";
                 image.alt = strings.reader.threatImage;
-              } else {
+              } else if (isImageDataUrl(result.dataUrl)) {
                 image.src = result.dataUrl;
                 image.classList.remove("remote-image-blocked");
+              } else {
+                // Anything but an image data URL is treated as blocked.
+                image.dataset.contentBlocked = "true";
+                image.alt = strings.reader.filteredImage;
               }
               image.removeAttribute("data-remote-src");
             } catch {
@@ -83,9 +100,14 @@ export function useRemoteImages({
           inlineAttachments,
         );
       if (message && contentOperationRef.current === operation)
-        setLoadedHtml({ messageId: message.id, html: doc.body.innerHTML });
+        setLoadedHtml({
+          messageId: message.id,
+          html: doc.body.innerHTML,
+          sourceHtml: sanitized?.html,
+          remoteAttempted: true,
+        });
     } catch (cause) {
-      if (contentOperationRef.current === operation) setError(String(cause));
+      if (contentOperationRef.current === operation) setError(errorText(cause));
     } finally {
       setLoadingImagesFor((current) =>
         current === targetId ? undefined : current,

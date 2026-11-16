@@ -26,7 +26,7 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
       textScale: Number(params.get("scale") ?? 1),
       privateNotifications: false,
       theme: params.get("theme") ?? "system",
-      density: params.get("density") ?? "comfortable",
+      density: params.get("density") ?? "normal",
       cachePolicy: {
         mode: "recent",
         days: 90,
@@ -44,7 +44,11 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
         : params.has("oversized")
           ? 720
           : 390,
-      readerPaneHeight: location.search.includes("tallBottom") ? 800 : 360,
+      readerPaneHeight: params.has("readerPaneHeight")
+        ? Number(params.get("readerPaneHeight"))
+        : location.search.includes("tallBottom")
+          ? 800
+          : 360,
       windowEffects: !windowFxSupported,
       sidebarVisible: !params.has("hiddenSidebar"),
       undoSendSeconds: params.has("undoSendOff") ? 0 : 10,
@@ -139,16 +143,25 @@ export async function registerMockSettingsSystem(page: Page): Promise<void> {
           );
         }
         if (params.has("failStepSave") && next.setupStep) {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         if (
           params.has("failChannelSave") &&
           next.updateChannel !== currentSettings.updateChannel
         ) {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         if (params.has("failDarkSave") && next.theme === "dark") {
-          throw new Error("Could not write settings.");
+          throw mock.mockError(
+            "settingsWriteFailed",
+            "Could not write settings.",
+          );
         }
         state.savedSettings.push(args.settings);
         try {

@@ -25,6 +25,55 @@ function clearSystemThemeListener() {
   systemThemeListener = undefined;
 }
 
+const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
+const CACHED_THEME_KEY = "postal-snap.theme";
+let resolvedThemeSetting: AppSettings["theme"] = "system";
+let schemeListenerAttached = false;
+
+function systemPrefersDark(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(DARK_SCHEME_QUERY).matches
+  );
+}
+
+/** Light or dark for a theme setting; system follows the OS appearance. */
+export function resolveTheme(theme: AppSettings["theme"]): "light" | "dark" {
+  if (theme === "light" || theme === "dark") return theme;
+  return systemPrefersDark() ? "dark" : "light";
+}
+
+function writeResolvedTheme() {
+  document.documentElement.dataset.resolvedTheme =
+    resolveTheme(resolvedThemeSetting);
+}
+
+/** Last theme seen, so the first paint matches it before settings load. */
+export function cachedThemeSetting(): AppSettings["theme"] {
+  try {
+    const value = window.localStorage.getItem(CACHED_THEME_KEY);
+    return value === "light" || value === "dark" ? value : "system";
+  } catch {
+    return "system";
+  }
+}
+
+/** Sets html[data-resolved-theme] and follows system appearance changes live. */
+export function applyResolvedTheme(theme: AppSettings["theme"]) {
+  resolvedThemeSetting = theme;
+  try {
+    window.localStorage.setItem(CACHED_THEME_KEY, theme);
+  } catch {
+    // Storage can be blocked; the first paint then falls back to system.
+  }
+  writeResolvedTheme();
+  if (schemeListenerAttached || typeof window.matchMedia !== "function") return;
+  schemeListenerAttached = true;
+  window
+    .matchMedia(DARK_SCHEME_QUERY)
+    .addEventListener?.("change", writeResolvedTheme);
+}
+
 export function mergeSettingsPatches(
   current: SettingsPatch,
   patch: SettingsPatch,
@@ -69,6 +118,7 @@ export function applySettingsPatch(
 
 export function applySettings(settings: AppSettings) {
   document.documentElement.dataset.theme = settings.theme;
+  applyResolvedTheme(settings.theme);
   document.documentElement.dataset.density = settings.density;
   document.documentElement.dataset.textScale =
     settings.textScale >= 1.5 ? "large" : "normal";

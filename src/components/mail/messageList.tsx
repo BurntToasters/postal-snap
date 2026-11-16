@@ -13,14 +13,13 @@ import {
   type Virtualizer,
 } from "@tanstack/react-virtual";
 import {
-  ArrowDown,
   CalendarDays,
-  CircleAlert,
+  Flag,
   Forward,
   Paperclip,
   Pin,
   Reply,
-  Star,
+  Search,
 } from "lucide-react";
 import {
   createListDateFormatters,
@@ -30,71 +29,56 @@ import {
   groupByDayLabel,
   messageListDay,
   notableArrival,
-  type ListDateFormatters,
 } from "../../format";
 import { addressMailbox } from "../../contextMenu";
 import { strings } from "../../i18n";
 import { rememberListScroll, rememberedListScroll } from "../../listScroll";
+import { recordRender } from "../../devPerf";
 import {
   rememberedExpandedThreads,
   rememberExpandedThreads,
 } from "../../threadExpand";
 import { folderPathLabel } from "../../i18n/mail";
+import { ListEmptyState } from "./localLists";
 import {
   MESSAGE_DRAG_TYPE,
   beginMessageDrag,
   endMessageDrag,
   messageDragPayload,
+  setMessageDragChip,
 } from "../../messageDrag";
 import { HighlightedText } from "../HighlightedText";
 import { RowActions } from "./rowActions";
 import { highlightTerms } from "../../searchHighlight";
+import { ImportanceMark, MessageRow, MessageWhen } from "./messageRow";
 import { useAppStore } from "../../store";
 import { groupThreads, pinnedFirst } from "../../threads";
 import type { MessageSummary } from "../../types";
 
-function MessageWhen({
-  message,
-  now,
-  formatters,
-}: {
-  message: MessageSummary;
-  now: Date;
-  formatters: ListDateFormatters;
-}) {
-  const late = notableArrival(message.receivedAt, message.arrivedAt);
-  return (
-    <span className="message-when">
-      <time
-        className="message-date"
-        dateTime={message.receivedAt}
-        title={formatFullMessageDate(message.receivedAt, now, formatters)}
-      >
-        {formatMessageListWhen(message.receivedAt, now, formatters)}
-      </time>
-      <span className="message-size">{formatBytes(message.size)}</span>
-      {late ? (
-        <span className="message-arrived">{strings.mail.arrivedLater}</span>
-      ) : null}
-    </span>
-  );
+// Latest-callback wrapper: the returned function never changes identity,
+// so memoized rows do not re-render when the parent passes a new closure.
+function useStableCallback<A extends unknown[], R>(
+  fn: (...args: A) => R,
+): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
 }
 
-function ImportanceMark({ importance }: { importance?: string }) {
-  if (importance === "high") {
-    return (
-      <CircleAlert
-        className="message-mark importance-high"
-        aria-hidden="true"
-      />
-    );
-  }
-  if (importance === "low") {
-    return (
-      <ArrowDown className="message-mark importance-low" aria-hidden="true" />
-    );
-  }
-  return null;
+// Like useStableCallback, but keeps undefined so presence checks still work.
+function useOptionalStable<A extends unknown[], R>(
+  fn: ((...args: A) => R) | undefined,
+): ((...args: A) => R) | undefined {
+  const stable = useStableCallback((...args: A) => fn?.(...args));
+  return fn ? (stable as (...args: A) => R) : undefined;
+}
+
+// Whole-summary snapshot taken at render: the list can hand back the same
+// object after an in-place change, so identity alone would hide it.
+function rowStateKey(message: MessageSummary): string {
+  return JSON.stringify(message);
 }
 
 type VisibleOption = {
@@ -126,16 +110,40 @@ type VirtualItem =
     }
   | { kind: "option"; key: string; option: VisibleOption; groupEnd: boolean };
 
-// Estimates until measureElement reports real heights.
-const DAY_ESTIMATE = 36;
-const ROW_ESTIMATE = 84;
+interface RowEstimates {
+  day: number;
+  row: number;
+}
+
+// Keys that act on the selection, not the focused row, while selecting.
+const SELECTION_KEYS = new Set(["s", "u", "e", "#", "!", "Escape"]);
+
+// Estimates until measureElement reports real heights. Read from the live
+// tokens so each density starts close to its real pitch.
+function readRowEstimates(densityKey: string): RowEstimates {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;height:0;";
+  probe.dataset.densityKey = densityKey;
+  document.body.append(probe);
+  const px = (name: string, fallback: number) => {
+    probe.style.width = `var(--${name})`;
+    const width = probe.getBoundingClientRect().width;
+    return width > 0 ? width : fallback;
+  };
+  const estimates = {
+    day: px("list-day-height", 32),
+    row: px("message-row-height", 64),
+  };
+  probe.remove();
+  return estimates;
+}
 
 // Stacks every item by estimate; used until the list has a height.
-function estimatedRows(items: VirtualItem[]) {
+function estimatedRows(items: VirtualItem[], estimates: RowEstimates) {
   let start = 0;
   return items.map((item, index) => {
     const row = { index, key: item.key, start };
-    start += item.kind === "day" ? DAY_ESTIMATE : ROW_ESTIMATE;
+    start += item.kind === "day" ? estimates.day : estimates.row;
     return row;
   });
 }
@@ -168,11 +176,14 @@ export function MessageList({
   selecting,
   selectedIds,
   onToggleSelect,
+  onSelectionKey,
+  showSizes = false,
   onCheckFocused,
   onArchiveFocused,
   onTrashFocused,
   onJunkFocused,
   onReplyFocused,
+  onForwardFocused,
   onRangeSelect,
   onToggleStar,
   onToggleConversationStar,
@@ -202,6 +213,10 @@ export function MessageList({
   selecting?: boolean;
   selectedIds?: number[];
   onToggleSelect?: (id: number) => void;
+  /** Runs s, u, e, #, ! or Escape against the selection while selecting. */
+  onSelectionKey?: (key: string) => void;
+  /** Sorting by size shows each row's size in the visible line. */
+  showSizes?: boolean;
   /** Check or uncheck the focused row, or a whole loaded conversation. */
   onCheckFocused?: (ids: number[]) => void;
   /** Archive the focused row, or every loaded message in a conversation. */
@@ -210,6 +225,8 @@ export function MessageList({
   onTrashFocused?: (message: MessageSummary, conversation: boolean) => void;
   /** Mark the focused row as junk, or move it to Inbox when it is already junk. */
   onJunkFocused?: (message: MessageSummary, conversation: boolean) => void;
+  /** Forward the focused row without opening it first. */
+  onForwardFocused?: (message: MessageSummary) => void;
   /** Reply, or reply all, to the focused row without opening it first. */
   onReplyFocused?: (
     message: MessageSummary,
@@ -236,12 +253,16 @@ export function MessageList({
   /** Remembers the scroll place for this folder or list. */
   scrollKey?: string;
 }) {
+  recordRender("messageList");
   const groupThreadsSetting = useAppStore(
     (state) => state.settings.groupThreads,
   );
   const showMessagePreviews = useAppStore(
     (state) => state.settings.showMessagePreviews,
   );
+  // Density and text scale drive the row pitch; the store is the source.
+  const settingsDensity = useAppStore((state) => state.settings.density);
+  const settingsTextScale = useAppStore((state) => state.settings.textScale);
   const mailboxes = useAppStore((state) => state.mailboxes);
   const accounts = useAppStore((state) => state.accounts);
   function sentByYou(message: MessageSummary): boolean {
@@ -301,7 +322,9 @@ export function MessageList({
   // One batch of Intl formatters shared by every row and day label in this
   // render; labels still recompute from a fresh `now` each render.
   const dateFormatters = useMemo(() => createListDateFormatters(), []);
-  const listNow = new Date();
+  // Minute-stable: rows re-render only when the minute changes.
+  const minuteKey = Math.floor(Date.now() / 60_000);
+  const listNow = useMemo(() => new Date(minuteKey * 60_000), [minuteKey]);
   const listRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   useLayoutEffect(() => {
@@ -355,8 +378,12 @@ export function MessageList({
   }, [messages, searchQuery]);
 
   function toggleThread(key: string) {
+    const isOpen = effectiveExpanded.includes(key);
+    if (key === selectedThreadKey) {
+      setCollapsedSelectedThread(isOpen ? { key } : undefined);
+    }
     updateExpanded((prev) =>
-      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+      isOpen ? prev.filter((item) => item !== key) : [...prev, key],
     );
   }
 
@@ -396,8 +423,20 @@ export function MessageList({
           group.items.some((item) => item.id === selectedId),
       )?.key
     : undefined;
+  // The user may fold the open message's thread; reset when it changes.
+  const [collapsedSelectedThread, setCollapsedSelectedThread] = useState<{
+    key: string;
+  }>();
+  const [lastSelectedThreadKey, setLastSelectedThreadKey] =
+    useState(selectedThreadKey);
+  if (lastSelectedThreadKey !== selectedThreadKey) {
+    setLastSelectedThreadKey(selectedThreadKey);
+    setCollapsedSelectedThread(undefined);
+  }
   const effectiveExpanded =
-    selectedThreadKey && !expandedThreads.includes(selectedThreadKey)
+    selectedThreadKey &&
+    collapsedSelectedThread?.key !== selectedThreadKey &&
+    !expandedThreads.includes(selectedThreadKey)
       ? [...expandedThreads, selectedThreadKey]
       : expandedThreads;
   // Conversation headers expand, which listbox options cannot express. Use a
@@ -564,6 +603,9 @@ export function MessageList({
     if (first >= 0) pinnedIndexes.push(first, last);
   }
 
+  // Density and text scale change the tokens; the key re-reads them.
+  const densityKey = `${settingsDensity}|${settingsTextScale}`;
+  const estimates = useMemo(() => readRowEstimates(densityKey), [densityKey]);
   // The virtualizer is read during render; this component is not memoized.
   // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer: Virtualizer<HTMLDivElement, Element> = useVirtualizer<
@@ -573,7 +615,7 @@ export function MessageList({
     count: items.length,
     getScrollElement: () => listRef.current,
     estimateSize: (index) =>
-      items[index]?.kind === "day" ? DAY_ESTIMATE : ROW_ESTIMATE,
+      items[index]?.kind === "day" ? estimates.day : estimates.row,
     getItemKey: (index) => items[index]?.key ?? index,
     overscan: 8,
     initialRect: { width: 0, height: 800 },
@@ -604,7 +646,7 @@ export function MessageList({
   const laidOut = (virtualizer.scrollRect?.height ?? 0) > 0;
   const renderedRows = laidOut
     ? virtualizer.getVirtualItems()
-    : estimatedRows(items);
+    : estimatedRows(items, estimates);
   const pendingMounted =
     pendingFocusKey !== undefined && itemIndex.has(pendingFocusKey);
   useLayoutEffect(() => {
@@ -642,6 +684,27 @@ export function MessageList({
     else setPendingFocusKey(key);
   }, [selectedId, virtualizer]);
 
+  // Rows are memoized, so every handler they receive keeps one identity.
+  const stableChoose = useStableCallback(onChoose);
+  const stableSelectRow = useStableCallback((id: number, shift: boolean) => {
+    if (shift) onRangeSelect?.(id);
+    else pickRow(id);
+  });
+  const stableCheckRow = useStableCallback((id: number) => checkIds([id]));
+  const stableKeyDown = useStableCallback(handleOptionKeyDown);
+  const stableDragStart = useStableCallback(
+    (
+      event: DragEvent<HTMLButtonElement>,
+      message: MessageSummary,
+      optionKey: string,
+    ) => startDrag(event, message, false, optionKey),
+  );
+  const stableDragEnd = useStableCallback(endDrag);
+  const stableStar = useOptionalStable(onToggleStar);
+  const stableRead = useOptionalStable(onToggleRead);
+  const stableArchive = useOptionalStable(onArchiveFocused);
+  const stableTrash = useOptionalStable(onTrashFocused);
+
   if (loading && messages.length === 0)
     return (
       <div className="list-state" role="status">
@@ -651,8 +714,11 @@ export function MessageList({
   if (messages.length === 0) {
     if (searchQuery) {
       return (
-        <div className="list-state" role="status">
-          <p>{strings.mail.noSearchResults(searchQuery)}</p>
+        <ListEmptyState
+          icon={Search}
+          title={strings.mail.noSearchResults(searchQuery)}
+          hint={strings.mail.noSearchResultsHint}
+        >
           {onSearchAllFolders || onClearSearch ? (
             <div className="list-state-actions">
               {onSearchAllFolders ? (
@@ -675,13 +741,14 @@ export function MessageList({
               ) : null}
             </div>
           ) : null}
-        </div>
+        </ListEmptyState>
       );
     }
     return (
-      <div className="list-state" role="status" aria-live="polite">
-        {emptyLabel ?? strings.mail.emptyMailbox}
-      </div>
+      <ListEmptyState
+        title={emptyLabel ?? strings.mail.emptyMailbox}
+        hint={emptyLabel ? undefined : strings.mail.emptyMailboxHint}
+      />
     );
   }
 
@@ -746,6 +813,7 @@ export function MessageList({
         message={message}
         conversation={conversation}
         starred={starred}
+        flagColor={message.flagColor}
         unread={unread}
         fromArchive={role === "archive"}
         inTrash={role === "trash"}
@@ -776,6 +844,19 @@ export function MessageList({
     optionKey: string,
   ) {
     const option = visibleOptions.find((item) => item.key === optionKey);
+    if (
+      selecting &&
+      onSelectionKey &&
+      SELECTION_KEYS.has(event.key) &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelectionKey(event.key);
+      return;
+    }
     if (hasThreadedGroups) {
       if (
         event.key === "ArrowRight" &&
@@ -799,7 +880,7 @@ export function MessageList({
         if (
           option?.kind === "header" &&
           option.groupKey &&
-          expandedThreads.includes(option.groupKey)
+          effectiveExpanded.includes(option.groupKey)
         ) {
           event.preventDefault();
           event.stopPropagation();
@@ -833,6 +914,24 @@ export function MessageList({
           ? (threadsById.get(option.groupKey)?.newest ?? option.message)
           : option.message;
       onReplyFocused(message, event.key === "a" ? "replyAll" : "reply");
+      return;
+    }
+    if (
+      event.key === "f" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      option &&
+      onForwardFocused
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      onForwardFocused(
+        option.kind === "header" && option.groupKey
+          ? (threadsById.get(option.groupKey)?.newest ?? option.message)
+          : option.message,
+      );
       return;
     }
     if (
@@ -1001,6 +1100,28 @@ export function MessageList({
     );
   }
 
+  function startDrag(
+    event: DragEvent<HTMLButtonElement>,
+    message: MessageSummary,
+    wholeConversation: boolean,
+    optionKey: string,
+  ) {
+    event.dataTransfer.effectAllowed = "move";
+    const ids = dragIds(message, wholeConversation);
+    event.dataTransfer.setData(
+      MESSAGE_DRAG_TYPE,
+      messageDragPayload(message.accountId, ids),
+    );
+    setMessageDragChip(event.dataTransfer, ids.length);
+    beginMessageDrag();
+    setDragKey(optionKey);
+  }
+
+  function endDrag() {
+    endMessageDrag();
+    setDragKey(undefined);
+  }
+
   function messageDragProps(
     message: MessageSummary,
     wholeConversation: boolean,
@@ -1008,33 +1129,15 @@ export function MessageList({
   ) {
     return {
       draggable: true as const,
-      onDragStart: (event: DragEvent<HTMLButtonElement>) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData(
-          MESSAGE_DRAG_TYPE,
-          messageDragPayload(
-            message.accountId,
-            dragIds(message, wholeConversation),
-          ),
-        );
-        beginMessageDrag();
-        setDragKey(optionKey);
-      },
-      onDragEnd: () => {
-        endMessageDrag();
-        setDragKey(undefined);
-      },
+      onDragStart: (event: DragEvent<HTMLButtonElement>) =>
+        startDrag(event, message, wholeConversation, optionKey),
+      onDragEnd: endDrag,
     };
   }
 
-  function renderRow(
-    message: MessageSummary,
-    optionKey: string,
-    groupKey?: string,
-    treeLevel?: number,
-    groupEnd = false,
-  ) {
-    const checked = selecting && (selectedIds ?? []).includes(message.id);
+  // Selection state for one message row; shared by the row and its neighbour.
+  function rowStates(message: MessageSummary, groupKey?: string) {
+    const checked = !!selecting && (selectedIds ?? []).includes(message.id);
     const isNewestThreadChild =
       !selecting &&
       groupKey !== undefined &&
@@ -1044,156 +1147,60 @@ export function MessageList({
     const isSelected = selecting
       ? checked
       : selectedId === message.id && !isNewestThreadChild;
-    const folder = folderName(message);
-    const rowLabel = [
-      message.isRead ? strings.mail.read : strings.mail.unread,
-      message.isStarred ? strings.mail.starred : null,
-      message.pinned ? strings.mail.pinned : null,
-      correspondent(message),
-      senderAddressTitle(message),
-      message.subject || strings.common.noSubject,
-      folder ? strings.mail.inFolder(folder) : null,
-      formatFullMessageDate(message.receivedAt, listNow, dateFormatters),
-      formatBytes(message.size),
-      message.attachmentCount
-        ? strings.mail.draftFiles(message.attachmentCount)
-        : message.hasAttachments
-          ? strings.mail.hasAttachments
-          : null,
-      message.importance === "high"
-        ? strings.mail.highImportance
-        : message.importance === "low"
-          ? strings.mail.lowImportance
-          : null,
-      message.hasCalendar ? strings.mail.hasInvitation : null,
-      message.isAnswered ? strings.mail.replied : null,
-      message.isForwarded ? strings.mail.forwarded : null,
-      message.conversationMuted ? strings.mail.muted : null,
-      notableArrival(message.receivedAt, message.arrivedAt)
-        ? strings.mail.arrivedLater
-        : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    return { checked, isSelected };
+  }
+
+  function renderRow(
+    message: MessageSummary,
+    optionKey: string,
+    groupKey?: string,
+    treeLevel?: number,
+    groupEnd = false,
+    precedesSelection = false,
+  ) {
+    const { checked, isSelected } = rowStates(message, groupKey);
+    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
     return (
-      <div
-        className={`message-row-wrap${groupKey !== undefined ? " thread-child" : ""}${groupEnd ? " thread-end" : ""}${!selecting && isSelected ? " selected" : ""}`}
-      >
-        {selecting ? (
-          // A compact checkbox inside a full 44px click target. The listbox
-          // owns only options, so the visual checkbox stays out of the
-          // accessibility tree; the row button keeps aria-selected and all
-          // keyboard selection behavior.
-          <label className="message-select-hit" aria-hidden="true">
-            <input
-              type="checkbox"
-              className="message-select"
-              checked={checked}
-              tabIndex={-1}
-              aria-hidden="true"
-              onChange={(event) => {
-                // Preventing click would undo the native toggle in browsers.
-                const shift = (event.nativeEvent as MouseEvent).shiftKey;
-                if (shift) onRangeSelect?.(message.id);
-                else pickRow(message.id);
-              }}
-              aria-label={strings.mail.selectMessage(
-                message.subject || strings.common.noSubject,
-              )}
-            />
-          </label>
-        ) : null}
-        <button
-          type="button"
-          role={rowRole}
-          aria-selected={isSelected}
-          aria-level={rowRole === "treeitem" ? (treeLevel ?? 1) : undefined}
-          aria-posinset={optionPosition.get(optionKey)}
-          aria-setsize={visibleOptions.length}
-          data-option-key={optionKey}
-          data-context="message"
-          data-message-id={message.id}
-          tabIndex={activeOptionKey === optionKey ? 0 : -1}
-          aria-label={rowLabel}
-          className={`message-row ${message.isRead ? "read" : "unread"} ${!selecting && isSelected ? "selected" : ""} ${checked ? "checked" : ""}`}
-          {...messageDragProps(message, false, optionKey)}
-          onClick={(event) => {
-            if (!selecting) {
-              void onChoose(message);
-              return;
-            }
-            if (event.shiftKey) onRangeSelect?.(message.id);
-            else pickRow(message.id);
-          }}
-          onFocus={() => setFocusedOptionKey(optionKey)}
-          onKeyDown={(event) => handleOptionKeyDown(event, optionKey)}
-        >
-          <span className="unread-dot" aria-hidden="true" />
-          <span className="message-sender" title={senderAddressTitle(message)}>
-            <HighlightedText
-              text={correspondent(message)}
-              terms={marks.correspondent}
-            />
-          </span>
-          <MessageWhen
-            message={message}
-            now={listNow}
-            formatters={dateFormatters}
-          />
-          <span className="message-subject">
-            {message.isStarred ? (
-              <Star
-                className="message-mark star-mark"
-                fill="currentColor"
-                aria-hidden="true"
-              />
-            ) : null}
-            {folder ? <span className="message-folder">{folder}</span> : null}
-            {message.pinned ? (
-              <Pin className="message-mark pin-mark" aria-hidden="true" />
-            ) : null}
-            {message.conversationMuted ? (
-              <span className="message-muted">{strings.mail.muted}</span>
-            ) : null}
-            <span>
-              <HighlightedText
-                text={message.subject || strings.common.noSubject}
-                terms={marks.subject}
-              />
-            </span>
-            {message.attachmentCount ? (
-              <span className="message-file-count">
-                {strings.mail.draftFiles(message.attachmentCount)}
-              </span>
-            ) : message.hasAttachments ? (
-              <Paperclip aria-hidden="true" />
-            ) : null}
-            <ImportanceMark importance={message.importance} />
-            {message.hasCalendar ? (
-              <CalendarDays className="message-mark" aria-hidden="true" />
-            ) : null}
-            {message.isAnswered ? (
-              <Reply className="message-mark" aria-hidden="true" />
-            ) : null}
-            {message.isForwarded ? (
-              <Forward className="message-mark" aria-hidden="true" />
-            ) : null}
-          </span>
-          {showMessagePreviews || loadingMessageId === message.id ? (
-            <span className="message-preview">
-              {loadingMessageId === message.id ? (
-                strings.mail.downloadingMessage
-              ) : (
-                <HighlightedText
-                  text={message.preview || strings.mail.openToDownload}
-                  terms={message.preview ? marks.preview : []}
-                />
-              )}
-            </span>
-          ) : null}
-        </button>
-        {rowActions(message, false, message.isStarred, !message.isRead)}
-      </div>
+      <MessageRow
+        message={message}
+        stateKey={rowStateKey(message)}
+        optionKey={optionKey}
+        groupKey={groupKey}
+        treeLevel={treeLevel}
+        groupEnd={groupEnd}
+        rowRole={rowRole}
+        position={optionPosition.get(optionKey)}
+        setSize={visibleOptions.length}
+        selecting={selecting ?? false}
+        checked={checked}
+        isSelected={isSelected}
+        precedesSelection={precedesSelection}
+        tabStop={activeOptionKey === optionKey}
+        correspondent={correspondent(message)}
+        senderTitle={senderAddressTitle(message)}
+        folder={folderName(message)}
+        showSizes={showSizes}
+        showPreviews={showMessagePreviews}
+        loading={loadingMessageId === message.id}
+        fromArchive={role === "archive"}
+        inTrash={role === "trash"}
+        canStar={onToggleStar !== undefined}
+        canRead={onToggleRead !== undefined}
+        searchQuery={searchQuery ?? ""}
+        now={listNow}
+        formatters={dateFormatters}
+        onChoose={stableChoose}
+        onSelectRow={stableSelectRow}
+        onCheckRow={stableCheckRow}
+        onFocusRow={setFocusedOptionKey}
+        onKeyDownRow={stableKeyDown}
+        onDragStartRow={stableDragStart}
+        onDragEndRow={stableDragEnd}
+        onStarRow={stableStar}
+        onReadRow={stableRead}
+        onArchiveRow={stableArchive}
+        onTrashRow={stableTrash}
+      />
     );
   }
 
@@ -1228,6 +1235,7 @@ export function MessageList({
         : "";
     return (
       <div
+        role="none"
         className={`message-row-wrap thread-header-wrap${group.newest.id === selectedId ? " selected" : ""}${groupEnd ? " thread-end" : ""}`}
       >
         <button
@@ -1245,21 +1253,39 @@ export function MessageList({
           data-message-id={group.newest.id}
           aria-expanded={expanded}
           onClick={() => {
+            const alreadyNewest =
+              selectedId === undefined || group.newest.id === selectedId;
             void onChoose(group.newest);
-            toggleThread(group.key);
+            if (!expanded || alreadyNewest) {
+              toggleThread(group.key);
+            }
           }}
           aria-label={[
             strings.mail.conversation,
             conversationPeople(group),
-            senderAddressTitle(group.newest),
+            formatMessageListWhen(
+              group.newest.receivedAt,
+              listNow,
+              dateFormatters,
+            ),
+            conversationLate ? strings.mail.arrivedLater : null,
+            conversationMuted ? strings.mail.muted : null,
             group.newest.subject || strings.common.noSubject,
-            conversationStarred ? strings.mail.starred : null,
-            conversationPinned ? strings.mail.pinned : null,
             conversationFiles
               ? strings.mail.draftFiles(conversationFiles)
-              : conversationAttachment
-                ? strings.mail.hasAttachments
-                : null,
+              : null,
+            // Visible count before the unread text: axe label-content-name-mismatch.
+            String(group.items.length),
+            group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
+            showMessagePreviews
+              ? group.newest.preview || strings.mail.openToDownload
+              : null,
+            senderAddressTitle(group.newest),
+            conversationStarred ? strings.mail.starred : null,
+            conversationPinned ? strings.mail.pinned : null,
+            !conversationFiles && conversationAttachment
+              ? strings.mail.hasAttachments
+              : null,
             conversationImportance === "high"
               ? strings.mail.highImportance
               : conversationImportance === "low"
@@ -1268,10 +1294,7 @@ export function MessageList({
             conversationCalendar ? strings.mail.hasInvitation : null,
             conversationReplied ? strings.mail.replied : null,
             conversationForwarded ? strings.mail.forwarded : null,
-            conversationMuted ? strings.mail.muted : null,
-            conversationLate ? strings.mail.arrivedLater : null,
             strings.mail.threadMessages(group.items.length),
-            group.unread > 0 ? strings.mail.threadUnread(group.unread) : null,
             headerFolder ? strings.mail.inFolder(headerFolder) : null,
             formatFullMessageDate(
               group.newest.receivedAt,
@@ -1298,28 +1321,38 @@ export function MessageList({
               text={conversationPeople(group)}
               terms={marks.correspondent}
             />
-          </span>
+          </span>{" "}
           <MessageWhen
             message={group.newest}
             now={listNow}
             formatters={dateFormatters}
-          />
+          />{" "}
           <span className="message-subject">
             {conversationStarred ? (
-              <Star
+              <Flag
                 className="message-mark star-mark"
-                fill="currentColor"
                 aria-hidden="true"
+                fill="currentColor"
+                data-flag-color={
+                  group.newest.isStarred
+                    ? (group.newest.flagColor ?? 0)
+                    : (group.items.find((item) => item.isStarred)?.flagColor ??
+                      0)
+                }
               />
             ) : null}
             {headerFolder ? (
-              <span className="message-folder">{headerFolder}</span>
+              <>
+                <span className="message-folder">{headerFolder}</span>{" "}
+              </>
             ) : null}
             {conversationPinned ? (
               <Pin className="message-mark pin-mark" aria-hidden="true" />
             ) : null}
             {conversationMuted ? (
-              <span className="message-muted">{strings.mail.muted}</span>
+              <>
+                <span className="message-muted">{strings.mail.muted}</span>{" "}
+              </>
             ) : null}
             <span>
               <HighlightedText
@@ -1328,9 +1361,12 @@ export function MessageList({
               />
             </span>
             {conversationFiles ? (
-              <span className="message-file-count">
-                {strings.mail.draftFiles(conversationFiles)}
-              </span>
+              <>
+                {" "}
+                <span className="message-file-count">
+                  {strings.mail.draftFiles(conversationFiles)}
+                </span>
+              </>
             ) : conversationAttachment ? (
               <Paperclip aria-hidden="true" />
             ) : null}
@@ -1343,14 +1379,17 @@ export function MessageList({
             ) : null}
             {conversationForwarded ? (
               <Forward className="message-mark" aria-hidden="true" />
-            ) : null}
+            ) : null}{" "}
             <strong className="thread-count">{group.items.length}</strong>
             {group.unread > 0 ? (
-              <span className="thread-unread">
-                {strings.mail.threadUnread(group.unread)}
-              </span>
+              <>
+                {" "}
+                <span className="thread-unread">
+                  {strings.mail.threadUnread(group.unread)}
+                </span>
+              </>
             ) : null}
-          </span>
+          </span>{" "}
           {showMessagePreviews ? (
             <span className="message-preview">
               {group.newest.preview || strings.mail.openToDownload}
@@ -1362,7 +1401,11 @@ export function MessageList({
     );
   }
 
-  function renderOption(option: VisibleOption, groupEnd: boolean) {
+  function renderOption(
+    option: VisibleOption,
+    groupEnd: boolean,
+    precedesSelection: boolean,
+  ) {
     if (option.kind === "header") {
       const group = option.groupKey
         ? threadsById.get(option.groupKey)
@@ -1375,6 +1418,7 @@ export function MessageList({
       option.groupKey,
       option.groupKey !== undefined ? 2 : undefined,
       groupEnd,
+      precedesSelection,
     );
   }
 
@@ -1406,7 +1450,7 @@ export function MessageList({
             {dayCountLabel}
           </button>
         ) : (
-          <div className="list-day">
+          <div role="none" className="list-day">
             <span>{item.label}</span>
             {dayCountLabel}
           </div>
@@ -1417,7 +1461,7 @@ export function MessageList({
 
   return (
     <div
-      className="message-list"
+      className={`message-list${showSizes ? " show-sizes" : ""}`}
       ref={listRef}
       onPointerDown={() => {
         pointerPick.current = true;
@@ -1428,7 +1472,7 @@ export function MessageList({
       onScroll={() => {
         const top = listRef.current?.scrollTop ?? 0;
         if (scrollKey) rememberListScroll(scrollKey, top);
-        if (top < 48) setNewAtTop(false);
+        if (top < estimates.row / 2) setNewAtTop(false);
       }}
     >
       {newAtTop ? (
@@ -1447,18 +1491,23 @@ export function MessageList({
         role={hasThreadedGroups ? "tree" : "listbox"}
         aria-label={strings.mail.messages}
         aria-busy={loading}
-        aria-multiselectable={
-          !hasThreadedGroups && selecting ? true : undefined
-        }
+        aria-multiselectable={selecting ? true : undefined}
         className="message-list-items"
         style={{ height: virtualizer.getTotalSize() }}
       >
         {renderedRows.map((virtualRow) => {
           const item = items[virtualRow.index];
           if (!item) return null;
+          // The next line's selection hides this row's separator (no :has()).
+          const next = items[virtualRow.index + 1];
+          const precedesSelection =
+            next?.kind === "option" &&
+            next.option.kind === "message" &&
+            rowStates(next.option.message, next.option.groupKey).isSelected;
           return (
             <div
               key={virtualRow.key}
+              role="none"
               data-index={virtualRow.index}
               ref={virtualizer.measureElement}
               className="virtual-row"
@@ -1466,7 +1515,7 @@ export function MessageList({
             >
               {item.kind === "day"
                 ? renderDay(item)
-                : renderOption(item.option, item.groupEnd)}
+                : renderOption(item.option, item.groupEnd, precedesSelection)}
             </div>
           );
         })}

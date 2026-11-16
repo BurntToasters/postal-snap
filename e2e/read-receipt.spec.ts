@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. A new message does not request a receipt until the option is checked.
@@ -20,7 +23,10 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 test("a new message can request a read receipt", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Compose", exact: true }).click();
-  const box = page.getByRole("checkbox", { name: "Request a read receipt" });
+  await page.getByRole("button", { name: "Message options" }).click();
+  const box = page.getByRole("menuitemcheckbox", {
+    name: "Request a read receipt",
+  });
   await expect(box).not.toBeChecked();
   await box.click();
   await page

@@ -65,8 +65,8 @@ html[data-platform="windows"] .global-window-caption-controls {
 }
 
 .global-window-caption-controls svg {
-  width: 16px;
-  height: 16px;
+  width: var(--caption-icon-size);
+  height: var(--caption-icon-size);
 }
 
 .global-window-caption-controls button:is(:hover, .snap-hover) {
@@ -100,11 +100,16 @@ html:is([data-platform="macos"], [data-platform="windows"])
   display: block;
   height: var(--native-chrome-height);
   flex: 0 0 auto;
-  margin: 0 -10px 6px;
+  margin: 0 calc(-1 * var(--space-2)) var(--sidebar-drag-gap);
+}
+
+/* macOS: the strip matches the toolbar row beside it in every density. */
+html[data-platform="macos"] .sidebar-titlebar-drag {
+  height: var(--toolbar-height);
 }
 
 html[data-platform="macos"][data-window-fullscreen="true"] .folder-pane {
-  padding-top: 14px;
+  padding-top: var(--mac-fullscreen-folder-pad-top);
 }
 
 html[data-platform="macos"][data-window-fullscreen="true"]
@@ -116,9 +121,17 @@ html[data-platform="windows"] .app-toolbar {
   padding-right: var(--caption-controls-space);
 }
 
+@media (min-width: 760.02px) and (max-width: 899.98px) {
+  html[data-platform="macos"]:not([data-window-fullscreen="true"])
+    .app-toolbar {
+    padding-left: var(--mac-traffic-light-space);
+  }
+}
+
 @media (max-width: 760px) {
   html:is([data-platform="macos"], [data-platform="windows"]) .app-toolbar {
-    padding: calc(var(--native-chrome-height) + 6px) 10px 8px;
+    padding: calc(var(--native-chrome-height) + var(--toolbar-pad-block))
+      var(--toolbar-pad-inline) var(--space-2);
   }
 }
 
@@ -126,6 +139,11 @@ html[data-platform="windows"] .app-toolbar {
 .startup-recovery,
 .splash {
   padding-top: var(--native-chrome-height);
+}
+
+/* Setup inherits the body gradient, so the strip only drags. */
+html:not(:has(.mail-shell)) .window-drag-strip {
+  background: transparent;
 }
 
 .modal-layer {
@@ -141,7 +159,7 @@ html:has(.mail-shell):has(.modal-layer):not(
   background: transparent;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   html:has(.mail-shell):has(.modal-layer):has(
       .composer-window,
       .settings-window
@@ -172,54 +190,25 @@ html[data-platform="macos"][data-window-fullscreen="true"] .app-toolbar {
   padding-left: var(--toolbar-pad-inline);
 }
 
-@media (min-width: 761px) {
+@media (min-width: 760.02px) {
   /* Reader covers the title strip and is the drag surface. */
   html:has(.reader-pane[aria-modal="true"]) .window-drag-strip {
     background: transparent;
     pointer-events: none;
   }
 
+  /* Only the action bar sits under the traffic lights or caption buttons. */
   html[data-platform="macos"]:not([data-window-fullscreen="true"])
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
-    :is(
-      .reader-actions,
-      .message-header,
-      .remote-content-banner,
-      .message-find,
-      .plain-text-body,
-      .attachment-list,
-      .snooze-panel
-    ) {
+    .reader-actions {
     padding-left: var(--mac-traffic-light-space);
   }
 
-  html[data-platform="macos"]:not([data-window-fullscreen="true"])
-    .pane-hidden
-    .reader-pane:not(.reader-hidden):not(.empty-reader)
-    .invite-card {
-    margin-left: var(--mac-traffic-light-space);
-  }
-
   html[data-platform="windows"]
     .pane-hidden
     .reader-pane:not(.reader-hidden):not(.empty-reader)
-    :is(
-      .reader-actions,
-      .message-header,
-      .remote-content-banner,
-      .message-find,
-      .plain-text-body,
-      .attachment-list,
-      .snooze-panel
-    ) {
+    .reader-actions {
     padding-right: var(--caption-controls-space);
-  }
-
-  html[data-platform="windows"]
-    .pane-hidden
-    .reader-pane:not(.reader-hidden):not(.empty-reader)
-    .invite-card {
-    margin-right: var(--caption-controls-space);
   }
 }

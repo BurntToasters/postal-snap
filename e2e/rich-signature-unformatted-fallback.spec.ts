@@ -1,8 +1,8 @@
 import type { Page, TestInfo } from "@playwright/test";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. Unformatted rich HTML is dropped when its text differs from the fallback.
@@ -21,7 +21,7 @@ test.afterEach(async ({ page }, testInfo: TestInfo) => {
 async function openSignatureSettings(page: Page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
 }
 

@@ -1,6 +1,9 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here (docs/0.4.2-UI-FAILURE-INVENTORY.md):
 // R3-R4  Cluster shows before hover, or sticks on touch.
@@ -82,6 +85,7 @@ async function measure(wrap: Locator) {
       pointer: style?.pointerEvents ?? null,
       dateOpacity: date ? Number(getComputedStyle(date).opacity) : null,
       dateVisibility: date ? getComputedStyle(date).visibility : null,
+      dateColor: date ? getComputedStyle(date).color : null,
       buttons: [...node.querySelectorAll("button.row-action")].map((button) => {
         const r = button.getBoundingClientRect();
         return { width: r.width, height: r.height };
@@ -91,7 +95,11 @@ async function measure(wrap: Locator) {
 }
 
 function dateHidden(m: Awaited<ReturnType<typeof measure>>): boolean {
-  return m.dateOpacity === 0 || m.dateVisibility === "hidden";
+  return (
+    m.dateOpacity === 0 ||
+    m.dateVisibility === "hidden" ||
+    m.dateColor === "rgba(0, 0, 0, 0)"
+  );
 }
 
 test("the cluster is invisible and inert before hover", async ({ page }) => {
@@ -153,8 +161,10 @@ test("hover reveals four target-sized buttons inside the row without shifting it
 });
 
 for (const [label, query] of [
+  ["normal", "&density=normal"],
   ["compact", "&density=compact"],
-  ["200% text", "&scale=2"],
+  ["comfortable 200% text", "&density=comfortable&scale=2"],
+  ["normal 200% text", "&density=normal&scale=2"],
   ["compact 200%", "&density=compact&scale=2"],
   ["240px pane", "&messagePaneWidth=240"],
 ] as const) {
@@ -188,14 +198,11 @@ test("cluster buttons act without opening the row or taking focus", async ({
   await row.focus();
   await wrap.hover();
   await action(wrap, "star").click();
-  await expect(row).toHaveAccessibleName(/Starred/i);
+  await expect(row).toHaveAccessibleName(/Flagged/i);
   await expect(row).not.toHaveAttribute("aria-selected", "true");
   await expect(row).toBeFocused();
   await expect(action(wrap, "star")).toHaveAttribute("aria-pressed", "true");
-  await expect(action(wrap, "star")).toHaveAttribute(
-    "aria-label",
-    "Remove star",
-  );
+  await expect(action(wrap, "star")).toHaveAttribute("aria-label", "Unflag");
   await action(wrap, "read").click();
   await expect(row).toHaveAccessibleName(/Unread/i);
   await expect(row).not.toHaveAttribute("aria-selected", "true");
@@ -252,7 +259,7 @@ test("conversation rows use conversation labels", async ({ page }) => {
   await wrap.hover();
   await expect(action(wrap, "star")).toHaveAttribute(
     "aria-label",
-    "Star conversation",
+    "Flag conversation",
   );
   await expect(action(wrap, "read")).toHaveAttribute(
     "aria-label",
@@ -309,12 +316,21 @@ test("the cluster follows the selected row colors", async ({ page }) => {
   await expect(row).toHaveAttribute("aria-selected", "true");
   await wrap.hover();
   await expect.poll(async () => (await measure(wrap)).opacity).toBe(1);
-  const colors = await wrap.evaluate((node) => ({
-    row: getComputedStyle(node.querySelector(".message-row")!).backgroundColor,
-    cluster: getComputedStyle(node.querySelector(".row-actions")!)
-      .backgroundColor,
-  }));
-  expect(colors.cluster).toBe(colors.row);
+  // .message-row transitions background-color over 120ms, which can finish
+  // one frame after .row-actions opacity reaches 1 under parallel load.
+  await expect
+    .poll(() =>
+      wrap.evaluate((node) => {
+        const rowBg = getComputedStyle(
+          node.querySelector(".message-row")!,
+        ).backgroundColor;
+        const clusterBg = getComputedStyle(
+          node.querySelector(".row-actions")!,
+        ).backgroundColor;
+        return clusterBg === rowBg ? "match" : `${clusterBg} !== ${rowBg}`;
+      }),
+    )
+    .toBe("match");
 });
 
 test("right-clicking the cluster opens the row menu", async ({ page }) => {
@@ -417,9 +433,10 @@ test.describe("touch", () => {
 });
 
 for (const [label, query] of [
-  ["comfortable", ""],
+  ["comfortable", "&density=comfortable"],
+  ["normal", "&density=normal"],
   ["compact", "&density=compact"],
-  ["200% text", "&scale=2"],
+  ["comfortable 200% text", "&density=comfortable&scale=2"],
 ] as const) {
   test(`the cluster spans the full row height: ${label}`, async ({ page }) => {
     await page.goto(`${MIX}${query}`);

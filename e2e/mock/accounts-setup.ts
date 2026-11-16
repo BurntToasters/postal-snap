@@ -122,7 +122,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     Object.assign(mock.handlers, {
       test_saved_account(args: Record<string, unknown>) {
         if (!mock.accounts.some((item) => item.id === args.accountId))
-          throw new Error("Account not found.");
+          throw mock.mockError("notFound", "Account not found.");
         return undefined;
       },
       get_account_connection(args: Record<string, unknown>) {
@@ -326,6 +326,24 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         target.color = color ?? undefined;
         return { ...target, aliases: [...(target.aliases ?? [])] };
       },
+      set_account_notifications(args: Record<string, unknown>) {
+        const listed = params.has("multiAccount") ? accounts : [account];
+        const target = listed.find((item) => item.id === args.accountId);
+        if (!target)
+          throw {
+            code: "notFound",
+            message: "Account not found.",
+            retryable: false,
+          };
+        if (params.has("notifyFail"))
+          throw {
+            code: "operationFailed",
+            message: "The notification setting could not be saved.",
+            retryable: true,
+          };
+        target.notifyNewMail = Boolean(args.enabled);
+        return undefined;
+      },
       reorder_accounts(args: Record<string, unknown>) {
         const ids = args.accountIds;
         const listed = (params.has("multiAccount") ? accounts : [account]).map(
@@ -453,6 +471,41 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             contains: "jane@example.com",
             action: "move_junk",
             enabled: true,
+          });
+        }
+        if (params.has("legacyRule") && state.rules.length === 0) {
+          state.rules.push({
+            id: "rule-legacy",
+            accountId: account.id,
+            name: "Legacy archive",
+            field: "from",
+            contains: "legacy@example.test",
+            action: "move_archive",
+            targetMailbox: null,
+            enabled: true,
+          });
+        }
+        const v2Block = params.get("v2BlockedSender");
+        if (v2Block && state.rules.length === 0) {
+          const extra =
+            v2Block === "2" ? [{ field: "subject", value: "Weekend" }] : [];
+          state.rules.push({
+            id: "rule-v2-block",
+            accountId: account.id,
+            name: "Block sender",
+            field: "from",
+            contains: "jane@example.com",
+            action: "move_junk",
+            targetMailbox: null,
+            enabled: true,
+            matchMode: "all",
+            conditions: [
+              { field: "from", value: "jane@example.com" },
+              ...extra,
+            ],
+            actions: [
+              { kind: "move_junk", targetMailbox: null, flagColor: null },
+            ],
           });
         }
         return state.rules;

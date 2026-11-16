@@ -5,14 +5,19 @@ import {
   type Dispatch,
   type HTMLAttributes,
   type KeyboardEvent,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
+  CheckCheck,
   FileText,
   Maximize2,
   Minimize2,
   Minus,
   Ellipsis,
+  PenLine,
   TriangleAlert,
   Type,
   X,
@@ -23,6 +28,55 @@ import type { ComposerSeed } from "../../store";
 import type { BodyFormat, DraftSummary } from "../../types";
 import { moveMenuFocus } from "../toolbarNav";
 import { composerTitle } from "./composerSeed";
+
+/** Checkable message options, listed in the header's options menu. */
+export interface ComposerMessageOptions {
+  importance: "" | "high" | "low";
+  onImportanceChange: (value: "" | "high" | "low") => void;
+  requestReceipt: boolean;
+  onRequestReceiptChange: (value: boolean) => void;
+  /** Present only when the account has a signature. */
+  signature?: { included: boolean; onChange: (value: boolean) => void };
+}
+
+/** Non-default options as short chips and spoken states. */
+function activeOptionStates(options: ComposerMessageOptions | undefined) {
+  if (!options) return null;
+  const chips: Array<{ key: string; label: string; icon: ReactNode }> = [];
+  const states: string[] = [];
+  if (options.importance === "high") {
+    chips.push({
+      key: "high",
+      label: strings.composer.highImportance,
+      icon: <ArrowUp aria-hidden="true" />,
+    });
+    states.push(strings.composer.highImportanceState);
+  } else if (options.importance === "low") {
+    chips.push({
+      key: "low",
+      label: strings.composer.lowImportance,
+      icon: <ArrowDown aria-hidden="true" />,
+    });
+    states.push(strings.composer.lowImportanceState);
+  }
+  if (options.requestReceipt) {
+    chips.push({
+      key: "receipt",
+      label: strings.composer.receiptRequested,
+      icon: <CheckCheck aria-hidden="true" />,
+    });
+    states.push(strings.composer.receiptOnState);
+  }
+  if (options.signature && !options.signature.included) {
+    chips.push({
+      key: "signature",
+      label: strings.composer.noSignature,
+      icon: <PenLine aria-hidden="true" />,
+    });
+    states.push(strings.composer.signatureOffState);
+  }
+  return chips.length === 0 ? null : { chips, states };
+}
 
 export interface ComposerHeaderProps {
   dragHandlers?: HTMLAttributes<HTMLElement>;
@@ -36,6 +90,7 @@ export interface ComposerHeaderProps {
   bodyFormat: BodyFormat;
   onToggleBodyFormat: () => void;
   hideFormat?: boolean;
+  messageOptions?: ComposerMessageOptions;
   setMinimized: Dispatch<SetStateAction<boolean>>;
   setMaximized: Dispatch<SetStateAction<boolean>>;
   requestClose: () => void | Promise<void>;
@@ -53,6 +108,7 @@ export function ComposerHeader({
   bodyFormat,
   onToggleBodyFormat,
   hideFormat = false,
+  messageOptions,
   setMinimized,
   setMaximized,
   requestClose,
@@ -64,7 +120,9 @@ export function ComposerHeader({
   useEffect(() => {
     if (!menuOpen) return;
     menuRef.current
-      ?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+      ?.querySelector<HTMLElement>(
+        '[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])',
+      )
       ?.focus();
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
@@ -84,6 +142,10 @@ export function ComposerHeader({
   }
 
   const plain = bodyFormat === "plain";
+  const active = activeOptionStates(messageOptions);
+  const optionsName = active
+    ? strings.composer.messageOptionsState(active.states)
+    : strings.composer.messageOptions;
   return (
     <>
       {/* Floating: drag moves the composer. Maximized: the app window. */}
@@ -106,6 +168,16 @@ export function ComposerHeader({
                 : ""}
           </small>
         </span>
+        {active ? (
+          <div className="composer-option-chips">
+            {active.chips.map((chip) => (
+              <span className="composer-option-chip" key={chip.key}>
+                {chip.icon}
+                {chip.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="composer-window-controls">
           {hideFormat ? null : (
             <button
@@ -116,10 +188,10 @@ export function ComposerHeader({
               disabled={sending}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              aria-label={strings.composer.messageOptions}
-              title={strings.composer.messageOptions}
+              aria-label={optionsName}
+              title={optionsName}
             >
-              <Ellipsis />
+              <Ellipsis aria-hidden="true" />
             </button>
           )}
           <button
@@ -130,7 +202,7 @@ export function ComposerHeader({
             aria-label={strings.composer.minimize}
             title={strings.composer.minimize}
           >
-            <Minus />
+            <Minus aria-hidden="true" />
           </button>
           <button
             className="icon-button"
@@ -144,7 +216,11 @@ export function ComposerHeader({
               maximized ? strings.composer.restore : strings.composer.maximize
             }
           >
-            {maximized ? <Minimize2 /> : <Maximize2 />}
+            {maximized ? (
+              <Minimize2 aria-hidden="true" />
+            ) : (
+              <Maximize2 aria-hidden="true" />
+            )}
           </button>
           <button
             className="icon-button"
@@ -154,10 +230,10 @@ export function ComposerHeader({
             aria-label={strings.composer.saveClose}
             title={strings.composer.saveClose}
           >
-            <X />
+            <X aria-hidden="true" />
           </button>
         </div>
-        {menuOpen && !hideFormat ? (
+        {menuOpen && !hideFormat && messageOptions ? (
           <div
             className="composer-options-menu app-menu"
             ref={menuRef}
@@ -188,6 +264,64 @@ export function ComposerHeader({
               )}
               {plain ? strings.composer.richText : strings.composer.plainText}
             </button>
+            <div role="separator" />
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={messageOptions.importance === "high"}
+              title={strings.composer.highImportanceHelp}
+              onClick={() =>
+                messageOptions.onImportanceChange(
+                  messageOptions.importance === "high" ? "" : "high",
+                )
+              }
+            >
+              <ArrowUp aria-hidden="true" />
+              {strings.composer.highImportance}
+            </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={messageOptions.importance === "low"}
+              title={strings.composer.lowImportanceHelp}
+              onClick={() =>
+                messageOptions.onImportanceChange(
+                  messageOptions.importance === "low" ? "" : "low",
+                )
+              }
+            >
+              <ArrowDown aria-hidden="true" />
+              {strings.composer.lowImportance}
+            </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={messageOptions.requestReceipt}
+              title={strings.composer.requestReceiptHelp}
+              onClick={() =>
+                messageOptions.onRequestReceiptChange(
+                  !messageOptions.requestReceipt,
+                )
+              }
+            >
+              <CheckCheck aria-hidden="true" />
+              {strings.composer.requestReceipt}
+            </button>
+            {messageOptions.signature ? (
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={messageOptions.signature.included}
+                onClick={() =>
+                  messageOptions.signature?.onChange(
+                    !messageOptions.signature.included,
+                  )
+                }
+              >
+                <PenLine aria-hidden="true" />
+                {strings.composer.includeSignature}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </header>

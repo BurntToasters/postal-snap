@@ -1,8 +1,13 @@
 .folder-pane {
+  /* Sidebar-only metrics, so the pane tracks text size with rem. */
+  --sidebar-hairline: 0.125rem;
+  --sidebar-dot: 0.4375rem;
+  --sidebar-badge-pad: 0.125rem 0.4375rem;
+  --sidebar-focus-ring: 0.125rem;
   grid-area: folders;
   display: flex;
   flex-direction: column;
-  padding: 14px 10px 12px;
+  padding: var(--folder-pane-padding);
   overflow: hidden;
   /* Edge-to-edge sidebar a step darker than content (macOS 27). */
   border-right: 1px solid var(--border);
@@ -12,17 +17,17 @@
 .account-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   min-height: var(--bar-height-sm);
-  margin: 0 2px 4px;
-  padding: 4px 8px;
+  margin: 0 var(--sidebar-hairline) var(--space-1);
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
 }
 
 .account-heading > span:last-child {
   display: grid;
   min-width: 0;
-  gap: 2px;
+  gap: var(--sidebar-hairline);
 }
 
 .account-heading strong,
@@ -34,13 +39,13 @@
 
 .account-heading small {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-xs);
 }
 
 .account-switcher {
   position: relative;
   z-index: 20;
-  margin: 0 2px 4px;
+  margin: 0 var(--sidebar-hairline) var(--space-1);
 }
 
 .account-switcher-trigger {
@@ -61,12 +66,12 @@
   display: grid;
   min-width: 0;
   flex: 1;
-  gap: 2px;
+  gap: var(--sidebar-hairline);
 }
 
 .account-switcher-trigger > svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
+  width: var(--icon-md);
+  height: var(--icon-md);
   flex: 0 0 auto;
   color: var(--text-muted);
   transition: transform 120ms ease;
@@ -79,9 +84,9 @@
 .account-switcher-menu {
   position: absolute;
   z-index: 30;
-  top: calc(100% + 4px);
+  top: calc(100% + var(--space-1));
   left: 0;
-  width: min(300px, calc(100vw - 24px));
+  width: min(18.75rem, 100vw - 1.5rem);
 }
 
 /* Account rows hold an avatar and two lines, so they keep a taller grid. */
@@ -89,13 +94,18 @@
   display: grid;
   min-height: var(--target-size);
   grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 6px 9px 6px 6px;
+  padding: 0.375rem 0.5625rem 0.375rem 0.375rem;
   white-space: normal;
 }
 
 .account-switcher-menu > [aria-current="true"],
 .account-switcher-menu > [aria-checked="true"] {
-  background: var(--surface-hover);
+  background: var(--selection-inactive);
+}
+
+.account-switcher:focus-within .account-switcher-menu > [aria-checked="true"] {
+  background: var(--selection-emphasized);
+  color: var(--accent-contrast);
 }
 
 @media (forced-colors: active) {
@@ -109,7 +119,7 @@
 .account-switcher-copy {
   display: grid;
   min-width: 0;
-  gap: 1px;
+  gap: 0.0625rem;
 }
 
 .account-switcher-copy strong,
@@ -121,18 +131,18 @@
 
 .account-switcher-copy small {
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: var(--fs-xs);
 }
 
 .account-status-label {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 0.3125rem;
 }
 
 .account-status-dot {
-  width: 7px;
-  height: 7px;
+  width: var(--sidebar-dot);
+  height: var(--sidebar-dot);
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--success);
@@ -152,12 +162,12 @@
 }
 
 .account-unread {
-  min-width: 24px;
-  padding: 2px 7px;
+  min-width: 1.5rem;
+  padding: var(--sidebar-badge-pad);
   border-radius: var(--radius-pill);
   color: var(--accent-contrast);
-  background: var(--accent);
-  font-size: 0.75rem;
+  background: var(--accent-fill);
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -169,47 +179,14 @@
   }
 }
 
-.account-select-label {
-  display: grid;
-  gap: 4px;
-  padding: 0 5px 8px;
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-}
-
-.account-select-wrap {
-  position: relative;
-  display: block;
-}
-
-.account-select-wrap select {
-  padding-right: var(--account-select-arrow-space);
-  appearance: none;
-  color: var(--text);
-  font-size: 0.95rem;
-  font-weight: 650;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-.account-select-wrap svg {
-  position: absolute;
-  top: 13px;
-  right: 9px;
-  width: 1.0625rem;
-  height: 1.0625rem;
-  pointer-events: none;
-}
-
 /* Same inset and icon column as mailbox rows, so labels line up. */
 .add-account-button {
+  min-height: var(--target-size);
   justify-content: flex-start;
   text-align: left;
-  margin: 0 0 8px;
-  padding-inline: 10px;
-  gap: calc(8px + 0.25rem);
+  margin: 0 0 var(--space-1);
+  padding-inline: var(--space-2);
+  gap: var(--space-2);
   border-color: transparent;
   background: transparent;
 }
@@ -218,11 +195,11 @@
   min-width: 0;
   max-width: none;
   flex: 0 0 auto;
-  margin: 0 2px;
+  margin: 0 var(--sidebar-hairline);
 }
 
 .mailbox-find-empty {
-  margin: 4px 10px 8px;
+  margin: 0.25rem 0.625rem var(--space-2);
   color: var(--text-muted);
 }
 
@@ -238,35 +215,110 @@
   overflow: auto;
 }
 
+.sidebar-section {
+  display: grid;
+  min-width: 0;
+  gap: var(--sidebar-gap);
+}
+
+.sidebar-section-body {
+  display: grid;
+  min-width: 0;
+  gap: var(--sidebar-gap);
+}
+
+.sidebar-section-body[hidden] {
+  display: none;
+}
+
 .sidebar-section-heading {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  margin: 14px 10px 5px;
+  margin: var(--sidebar-section-gap);
 }
 
 .sidebar-section-heading .sidebar-section-title {
   margin: 0;
+  min-width: 0;
+}
+
+.sidebar-section-heading .sidebar-section-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-section-heading > .unread-folders-toggle {
+  flex: 0 0 auto;
+}
+
+.sidebar-section-toggle {
+  display: inline-flex;
+  min-height: var(--target-size);
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.sidebar-section-toggle:hover {
+  background: var(--fill);
+}
+
+.sidebar-section-chevron {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: 0 0 auto;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.sidebar-section-toggle:is(:hover, :focus-visible) .sidebar-section-chevron {
+  opacity: 1;
+}
+
+.sidebar-section-toggle[aria-expanded="false"] .sidebar-section-chevron {
+  transform: rotate(-90deg);
+}
+
+@media (forced-colors: active) {
+  .sidebar-section-chevron {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-section-chevron {
+    transition: none;
+  }
 }
 
 .folder-tree-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin: var(--space-2) var(--space-3);
+  margin: var(--space-1) var(--space-3);
 }
 
 .unread-folders-toggle {
-  min-height: var(--target-size-inset);
+  min-height: var(--target-size);
   padding-inline: var(--space-3);
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
 }
@@ -289,11 +341,10 @@
 }
 
 .sidebar-section-title {
-  margin: 14px 10px 5px;
+  margin: var(--sidebar-section-gap);
   color: var(--text-muted);
-  font-size: 0.75rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .folder {
@@ -301,10 +352,10 @@
   width: 100%;
   min-height: var(--target-size);
   /* minmax(0, …) lets long names truncate instead of widening the pane. */
-  grid-template-columns: 1.4375rem minmax(0, 1fr) auto;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: var(--row-pad-block) 10px;
+  gap: var(--space-1);
+  padding: var(--row-pad-block) var(--space-2);
   text-align: left;
   border: 0;
   border-radius: var(--radius-sm);
@@ -316,10 +367,15 @@
   background: var(--surface-hover);
 }
 
+/* Dark hover uses the lighter fill so it never reads as the selection. */
+:root[data-resolved-theme="dark"] .folder:hover:not(.active) {
+  background: var(--fill);
+}
+
 .folder.drop-target {
   background: var(--accent-soft);
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: var(--sidebar-focus-ring) solid var(--accent);
+  outline-offset: calc(var(--sidebar-focus-ring) * -1);
 }
 
 .folder-row {
@@ -327,7 +383,13 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
+}
+
+/* Reserve the end of the row for Rename/Delete on hover or focus, so the
+   overlays never cover the unread count. Only rows with actions reserve it. */
+.folder-row:has(.folder-action):is(:hover, :focus-within) .folder {
+  padding-inline-end: calc(var(--target-size) * 2 + var(--space-1));
 }
 
 .folder > span {
@@ -374,7 +436,7 @@
 
 .folder-row .folder-action:hover {
   color: var(--text);
-  background: var(--sidebar-selection);
+  background: var(--selection-inactive);
 }
 
 .folder-tree-row {
@@ -407,18 +469,18 @@
 .folder-expand::after {
   content: "";
   position: absolute;
-  inset-block: -6px;
-  inset-inline-start: -16px;
+  inset-block: -0.375rem;
+  inset-inline-start: -1rem;
   inset-inline-end: 0;
 }
 
 .folder-expand:hover {
-  background: var(--sidebar-selection);
+  background: var(--selection-inactive);
 }
 
 .folder-expand svg {
-  width: 0.875rem;
-  height: 0.875rem;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
   transition: transform 120ms ease;
 }
 
@@ -432,8 +494,8 @@
 
 .folder-dialog {
   display: grid;
-  gap: 8px;
-  padding: 8px 5px;
+  gap: var(--space-2);
+  padding: var(--space-2) 0.3125rem;
 }
 
 .folder-dialog-parent {
@@ -442,21 +504,43 @@
   overflow-wrap: anywhere;
 }
 
-/* Neutral selection with accent icons, as in macOS 27 Mail. The raised edge
-   matches the Settings sidebar so every sidebar selection reads the same. */
+/* Neutral selection with accent icons, as in macOS 27 Mail. The pane
+   emphasizes it with white text while it holds focus. */
 .folder.active {
   color: var(--text);
-  background: var(--sidebar-selection);
-  font-weight: 650;
-  box-shadow:
-    inset 0 1px 0 var(--surface-highlight),
-    var(--shadow-control);
+  background: var(--selection-inactive);
+  font-weight: 600;
+}
+
+/* Forced colors drop the fill, so the selection needs a drawn edge. */
+@media (forced-colors: active) {
+  .folder.active {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+.folder-pane:focus-within .folder.active {
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
+  transition: none;
+}
+
+.folder-pane:focus-within .folder.active svg,
+.folder-pane:focus-within .folder.active strong {
+  color: var(--accent-contrast);
 }
 
 .folder svg {
-  width: 1.1875rem;
-  height: 1.1875rem;
+  width: var(--folder-icon-size);
+  height: var(--folder-icon-size);
   color: var(--accent);
+}
+
+@media (forced-colors: active) {
+  .folder svg {
+    color: CanvasText;
+  }
 }
 
 .folder.warning:not(.active) svg {
@@ -469,11 +553,11 @@
 /* Counts are plain secondary numbers, not pills (macOS 27 Mail). */
 .folder strong {
   min-width: 1.5rem;
-  padding: 0 2px;
+  padding: 0 var(--sidebar-hairline);
   text-align: right;
   color: var(--text-muted);
-  font-size: 0.85rem;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -484,11 +568,11 @@
 .sync-indicator {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 0.4375rem;
   margin-top: auto;
-  padding: 11px 6px 2px;
+  padding: var(--space-2) var(--space-1) 0;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
 }
 
 .sync-indicator-content {
@@ -498,8 +582,8 @@
 }
 
 .sync-indicator > span:first-child {
-  width: 8px;
-  height: 8px;
+  width: 0.5rem;
+  height: 0.5rem;
   border-radius: 50%;
   background: var(--success);
 }

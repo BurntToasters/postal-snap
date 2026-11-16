@@ -95,6 +95,75 @@ pub(crate) async fn read_regular_file(
     read_bounded(&mut file, admitted_len, limit).await
 }
 
+/// Open a regular file synchronously without following symlinks/reparse points
+/// or blocking on non-regular files, returning the descriptor and byte length.
+pub(crate) fn open_regular_file_sync(
+    path: &Path,
+) -> Result<(std::fs::File, u64), BoundedFileError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| BoundedFileError::Unavailable)?;
+    #[cfg(windows)]
+    {
+        windows_identity_matches_sync(path, &file)?;
+    }
+    let opened = file.metadata().map_err(|_| BoundedFileError::Unavailable)?;
+    if opened.file_type().is_symlink() || !opened.is_file() {
+        return Err(BoundedFileError::Unavailable);
+    }
+    Ok((file, opened.len()))
+}
+
+/// Open a regular file for streaming. Symlinks and special files are refused,
+/// and the file size is validated after opening the verified handle.
+pub(crate) fn open_regular_for_stream(
+    path: &Path,
+    limit: u64,
+) -> Result<std::fs::File, BoundedFileError> {
+    let (file, len) = open_regular_file_sync(path)?;
+    if len > limit {
+        return Err(BoundedFileError::TooLarge);
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn windows_identity_matches_sync(
+    path: &Path,
+    content: &std::fs::File,
+) -> Result<(), BoundedFileError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+
+    let mut attr_opts = std::fs::OpenOptions::new();
+    attr_opts.access_mode(FILE_READ_ATTRIBUTES.0);
+    attr_opts.share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0);
+    attr_opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0);
+    let attr = attr_opts
+        .open(path)
+        .map_err(|_| BoundedFileError::Unavailable)?;
+    let content_std = content
+        .try_clone()
+        .map_err(|_| BoundedFileError::Unavailable)?;
+    let content_id =
+        same_file::Handle::from_file(content_std).map_err(|_| BoundedFileError::Unavailable)?;
+    let attr_id = same_file::Handle::from_file(attr).map_err(|_| BoundedFileError::Unavailable)?;
+    if content_id != attr_id {
+        return Err(BoundedFileError::Unavailable);
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 async fn windows_identity_matches(
     path: &Path,
@@ -272,6 +341,39 @@ mod tests {
             .await
             .expect("a nonregular FIFO must not hang");
         assert_eq!(result.unwrap_err(), BoundedFileError::Unavailable);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stream_open_rejects_fifo_and_symlinks_without_blocking() {
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.mbox");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let fifo_path = fifo.clone();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || super::open_regular_for_stream(&fifo_path, 128)),
+        )
+        .await
+        .expect("a FIFO stream open must not hang")
+        .unwrap();
+        assert_eq!(result.unwrap_err(), BoundedFileError::Unavailable);
+
+        let target = dir.path().join("target.mbox");
+        let link = dir.path().join("link.mbox");
+        std::fs::write(&target, b"From a@b").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert_eq!(
+            super::open_regular_for_stream(&link, 128).unwrap_err(),
+            BoundedFileError::Unavailable
+        );
     }
 
     #[cfg(unix)]

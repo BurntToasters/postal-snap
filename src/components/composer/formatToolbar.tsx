@@ -1,4 +1,4 @@
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import type { Editor } from "@tiptap/core";
 import {
   TextAlignCenter,
@@ -23,51 +23,36 @@ import {
   Undo2,
 } from "lucide-react";
 import { strings } from "../../i18n";
-import { moveToolbarFocus } from "../toolbarNav";
+import { moveToolbarFocus, useRovingToolbar } from "../toolbarNav";
 import { highlightColor } from "./composerSeed";
 
 export interface FormatToolbarProps {
   editor: Editor | null;
   formattingOpen: boolean;
-  setFormattingOpen: Dispatch<SetStateAction<boolean>>;
   moreFormattingOpen: boolean;
   setMoreFormattingOpen: Dispatch<SetStateAction<boolean>>;
   adjustIndent: (delta: number) => void;
   addLink: () => void;
-  /** Option toggles that share the formatting row. */
-  children?: ReactNode;
 }
 
 export function FormatToolbar({
   editor,
   formattingOpen,
-  setFormattingOpen,
   moreFormattingOpen,
   setMoreFormattingOpen,
   adjustIndent,
   addLink,
-  children,
 }: FormatToolbarProps) {
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useRovingToolbar(toolbarRef, [
+    formattingOpen,
+    moreFormattingOpen,
+    Boolean(editor),
+  ]);
   return (
     <>
-      <div className="composer-toggle-row">
-        <button
-          type="button"
-          className="toolbar-button format-toggle"
-          aria-expanded={formattingOpen}
-          aria-controls="composer-formatting"
-          onClick={() => setFormattingOpen((value) => !value)}
-        >
-          <span className="format-aa" aria-hidden="true">
-            Aa
-          </span>
-          {formattingOpen
-            ? strings.composer.hideFormatting
-            : strings.composer.showFormatting}
-        </button>
-        {children}
-      </div>
       <div
+        ref={toolbarRef}
         id="composer-formatting"
         className="format-toolbar"
         role="toolbar"
@@ -82,7 +67,7 @@ export function FormatToolbar({
             aria-label={strings.composer.undo}
             title={strings.composer.undo}
           >
-            <Undo2 />
+            <Undo2 aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -90,7 +75,7 @@ export function FormatToolbar({
             aria-label={strings.composer.redo}
             title={strings.composer.redo}
           >
-            <Redo2 />
+            <Redo2 aria-hidden="true" />
           </button>
         </div>
 
@@ -145,7 +130,7 @@ export function FormatToolbar({
             aria-pressed={Boolean(editor?.isActive("bold"))}
             title={strings.composer.bold}
           >
-            <Bold />
+            <Bold aria-hidden="true" />
           </button>
           <button
             className={editor?.isActive("italic") ? "active" : ""}
@@ -155,7 +140,7 @@ export function FormatToolbar({
             aria-pressed={Boolean(editor?.isActive("italic"))}
             title={strings.composer.italic}
           >
-            <Italic />
+            <Italic aria-hidden="true" />
           </button>
           <button
             className={editor?.isActive("underline") ? "active" : ""}
@@ -165,7 +150,7 @@ export function FormatToolbar({
             aria-pressed={Boolean(editor?.isActive("underline"))}
             title={strings.composer.underline}
           >
-            <UnderlineIcon />
+            <UnderlineIcon aria-hidden="true" />
           </button>
           <button
             className={editor?.isActive("strike") ? "active" : ""}
@@ -175,7 +160,7 @@ export function FormatToolbar({
             aria-pressed={Boolean(editor?.isActive("strike"))}
             title={strings.composer.strike}
           >
-            <Strikethrough />
+            <Strikethrough aria-hidden="true" />
           </button>
           <label className="color-control" title={strings.composer.textColor}>
             <input
@@ -210,7 +195,7 @@ export function FormatToolbar({
             aria-pressed={Boolean(editor?.isActive("highlight"))}
             title={strings.composer.highlight}
           >
-            <Highlighter />
+            <Highlighter aria-hidden="true" />
           </button>
         </div>
 
@@ -224,7 +209,7 @@ export function FormatToolbar({
             title={strings.composer.moreFormatting}
             onClick={() => setMoreFormattingOpen((value) => !value)}
           >
-            <Ellipsis />
+            <Ellipsis aria-hidden="true" />
           </button>
         </div>
 
@@ -244,7 +229,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "left" }))}
               title={strings.composer.alignLeft}
             >
-              <TextAlignStart />
+              <TextAlignStart aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -258,7 +243,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "center" }))}
               title={strings.composer.alignCenter}
             >
-              <TextAlignCenter />
+              <TextAlignCenter aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -272,7 +257,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive({ textAlign: "right" }))}
               title={strings.composer.alignRight}
             >
-              <TextAlignEnd />
+              <TextAlignEnd aria-hidden="true" />
             </button>
           </div>
 
@@ -285,7 +270,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive("bulletList"))}
               title={strings.composer.bullets}
             >
-              <List />
+              <List aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -295,7 +280,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive("orderedList"))}
               title={strings.composer.numbers}
             >
-              <ListOrdered />
+              <ListOrdered aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -305,7 +290,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive("blockquote"))}
               title={strings.composer.quote}
             >
-              <Quote />
+              <Quote aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -313,7 +298,7 @@ export function FormatToolbar({
               aria-label={strings.composer.indentLess}
               title={strings.composer.indentLess}
             >
-              <ListIndentDecrease />
+              <ListIndentDecrease aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -321,7 +306,7 @@ export function FormatToolbar({
               aria-label={strings.composer.indentMore}
               title={strings.composer.indentMore}
             >
-              <ListIndentIncrease />
+              <ListIndentIncrease aria-hidden="true" />
             </button>
           </div>
 
@@ -334,7 +319,7 @@ export function FormatToolbar({
               aria-pressed={Boolean(editor?.isActive("link"))}
               title={strings.composer.insertLink}
             >
-              <LinkIcon />
+              <LinkIcon aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -348,7 +333,7 @@ export function FormatToolbar({
               aria-label={strings.composer.insertTable}
               title={strings.composer.insertTable}
             >
-              <Table2 />
+              <Table2 aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -356,7 +341,7 @@ export function FormatToolbar({
               aria-label={strings.composer.insertRule}
               title={strings.composer.insertRule}
             >
-              <Minus />
+              <Minus aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -366,7 +351,7 @@ export function FormatToolbar({
               aria-label={strings.composer.clearFormatting}
               title={strings.composer.clearFormatting}
             >
-              <RemoveFormatting />
+              <RemoveFormatting aria-hidden="true" />
             </button>
           </div>
         </div>

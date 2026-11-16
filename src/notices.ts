@@ -23,6 +23,8 @@ export interface Notice {
    */
   maxVisibleMs?: number;
   source?: string;
+  /** Extra class on the notice item, for surfaces that keep a legacy hook. */
+  className?: string;
   onEnd?: (reason: NoticeEndReason) => void;
 }
 

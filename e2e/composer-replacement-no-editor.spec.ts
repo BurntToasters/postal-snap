@@ -1,11 +1,6 @@
 import { expect, test } from "./coverage-fixture";
-import {
-  attachIpcLog,
-  emitTauriEvent,
-  recordIpc,
-  recordedCalls,
-} from "./ipc-recorder";
 import { installMockIpc } from "./mock-ipc";
+import { attachIpcLog, emitTauriEvent, ipcCalls } from "./ipc";
 
 // Failure modes covered here:
 // 1. The composer chunk is still loading, so an open composer has no editor.
@@ -17,7 +12,6 @@ test("a replacement with no editor yet opens at once without a save", async ({
   page,
 }, testInfo) => {
   await installMockIpc(page);
-  await recordIpc(page);
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));
   let requested = 0;
@@ -46,7 +40,7 @@ test("a replacement with no editor yet opens at once without a save", async ({
   await expect(
     page.getByRole("textbox", { name: "Subject", exact: true }),
   ).toHaveValue("Replacement");
-  const saves = (await recordedCalls(page)).filter(
+  const saves = (await ipcCalls(page)).filter(
     (call) => call.command === "save_draft",
   );
   expect(saves).toHaveLength(0);

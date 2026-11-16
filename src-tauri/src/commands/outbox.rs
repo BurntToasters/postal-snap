@@ -139,6 +139,7 @@ async fn archive_source_after_delivery(
                 message_id: remote_id.as_deref(),
                 dedupe_existing,
                 replay_flags: None,
+                junk_keyword: None,
             },
         )
         .await

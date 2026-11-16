@@ -12,6 +12,7 @@ import { registerDraftFlush } from "../../draftFlush";
 import type { ComposeDraft, DraftSummary } from "../../types";
 import { announceLocalMailChanged } from "./composerSeed";
 import { hasDraftContent } from "./composerValidate";
+import { errorText } from "../../errors";
 
 type SaveState = "unsaved" | "saving" | "saved";
 interface Options {
@@ -37,6 +38,7 @@ interface Options {
   isDiscardingRef: RefObject<boolean>;
   draftRevisionRef: RefObject<number>;
   saveInFlightRef: RefObject<boolean>;
+  closePromptOpenRef?: RefObject<boolean>;
   pendingCloseRef: RefObject<boolean>;
   closedByComposerRef: RefObject<boolean>;
   session: number;
@@ -63,6 +65,7 @@ export function useComposerDraftPersistence({
   isDiscardingRef,
   draftRevisionRef,
   saveInFlightRef,
+  closePromptOpenRef,
   pendingCloseRef,
   closedByComposerRef,
   session,
@@ -86,6 +89,7 @@ export function useComposerDraftPersistence({
         !sending &&
         !isSendingRef.current &&
         !isDiscardingRef.current &&
+        !closePromptOpenRef?.current &&
         saveStateRef.current === "unsaved" &&
         !saveInFlightRef.current &&
         hasDraftContent(draft, currentBodyText())
@@ -113,7 +117,7 @@ export function useComposerDraftPersistence({
           .catch((cause) => {
             if (isDiscardingRef.current) return;
             setSaveState("unsaved");
-            setError(String(cause));
+            setError(errorText(cause));
           })
           .finally(() => {
             saveInFlightRef.current = false;
@@ -159,6 +163,7 @@ export function useComposerDraftPersistence({
     draftRevisionRef,
     isDiscardingRef,
     isSendingRef,
+    closePromptOpenRef,
     pendingCloseRef,
     saveInFlightRef,
     savePromiseRef,
@@ -171,13 +176,11 @@ export function useComposerDraftPersistence({
 
   const saveDraft = useCallback(
     async (showStatus = true) => {
-      if (
-        sending ||
-        isSendingRef.current ||
-        isDiscardingRef.current ||
-        saveInFlightRef.current
-      )
+      if (sending || isSendingRef.current || isDiscardingRef.current) return;
+      if (saveInFlightRef.current) {
+        if (showStatus) pendingCloseRef.current = true;
         return;
+      }
       const draft = buildDraft();
       if (!hasDraftContent(draft, currentBodyText())) {
         if (showStatus) close();
@@ -209,7 +212,7 @@ export function useComposerDraftPersistence({
       } catch (cause) {
         if (isDiscardingRef.current) return;
         setSaveState("unsaved");
-        setError(String(cause));
+        setError(errorText(cause));
       } finally {
         saveInFlightRef.current = false;
         if (pendingCloseRef.current) {

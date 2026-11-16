@@ -70,27 +70,50 @@ struct Parked {
 
 struct Pool {
     parked: HashMap<String, Parked>,
+    /// Absent means 0, which no live lease holds (see [`ensure_generation`]).
     generation: HashMap<String, u64>,
+    /// Never reused, so a pruned account cannot match an old lease.
+    next_generation: u64,
 }
 
 static POOL: LazyLock<Mutex<Pool>> = LazyLock::new(|| {
     Mutex::new(Pool {
         parked: HashMap::new(),
         generation: HashMap::new(),
+        next_generation: 0,
     })
 });
+
+/// Current generation, creating a fresh one when the account is untracked.
+fn ensure_generation(pool: &mut Pool, account_id: &str) -> u64 {
+    if let Some(generation) = pool.generation.get(account_id) {
+        return *generation;
+    }
+    fresh_generation(pool, account_id)
+}
+
+fn fresh_generation(pool: &mut Pool, account_id: &str) -> u64 {
+    pool.next_generation = pool.next_generation.saturating_add(1);
+    pool.generation
+        .insert(account_id.to_string(), pool.next_generation);
+    pool.next_generation
+}
 
 #[cfg(test)]
 fn generation_of(account_id: &str) -> u64 {
     POOL.lock()
         .ok()
-        .and_then(|pool| pool.generation.get(account_id).copied())
+        .map(|mut pool| ensure_generation(&mut pool, account_id))
         .unwrap_or(0)
 }
 
 #[cfg(test)]
 fn can_repark(account_id: &str, generation: u64) -> bool {
-    generation_of(account_id) == generation
+    POOL.lock()
+        .ok()
+        .and_then(|pool| pool.generation.get(account_id).copied())
+        .unwrap_or(0)
+        == generation
 }
 
 #[cfg(test)]
@@ -98,6 +121,13 @@ fn is_parked(account_id: &str) -> bool {
     POOL.lock()
         .ok()
         .is_some_and(|pool| pool.parked.contains_key(account_id))
+}
+
+#[cfg(test)]
+fn tracks_generation(account_id: &str) -> bool {
+    POOL.lock()
+        .ok()
+        .is_some_and(|pool| pool.generation.contains_key(account_id))
 }
 
 /// Exclusive use of an account's IMAP session. Call [`Lease::release`] after
@@ -197,7 +227,7 @@ pub async fn checkout(account: &AccountRecord, password: &str) -> Result<Lease, 
     let server = server_key(account);
     let (parked, generation) = match POOL.lock() {
         Ok(mut pool) => {
-            let generation = pool.generation.get(&account_id).copied().unwrap_or(0);
+            let generation = ensure_generation(&mut pool, &account_id);
             (pool.parked.remove(&account_id), generation)
         }
         Err(_) => (None, 0),
@@ -299,7 +329,7 @@ fn parked_age(monotonic: Duration, wall: Option<Duration>) -> Duration {
 pub fn generation(account_id: &str) -> u64 {
     POOL.lock()
         .ok()
-        .and_then(|pool| pool.generation.get(account_id).copied())
+        .map(|mut pool| ensure_generation(&mut pool, account_id))
         .unwrap_or(0)
 }
 
@@ -315,8 +345,16 @@ pub fn discard_parked(account_id: &str) {
 pub fn forget(account_id: &str) {
     if let Ok(mut pool) = POOL.lock() {
         pool.parked.remove(account_id);
-        let generation = pool.generation.entry(account_id.to_string()).or_insert(0);
-        *generation = generation.saturating_add(1);
+        fresh_generation(&mut pool, account_id);
+    }
+}
+
+/// Drop all pool state for a removed account. Its leases hold a generation
+/// of at least 1, so after pruning they can no longer re-park.
+pub fn remove_account(account_id: &str) {
+    if let Ok(mut pool) = POOL.lock() {
+        pool.parked.remove(account_id);
+        pool.generation.remove(account_id);
     }
 }
 
@@ -374,7 +412,27 @@ mod tests {
         discard_parked(id);
         assert_eq!(super::generation_of(id), generation);
         forget(id);
-        assert_eq!(super::generation_of(id), generation + 1);
+        assert!(super::generation_of(id) > generation);
+    }
+
+    #[test]
+    fn remove_account_prunes_its_generation_entry() {
+        // Failure mode: removed accounts keep a generation entry forever.
+        let id = "acc-remove-prunes";
+        forget(id);
+        assert!(super::tracks_generation(id));
+        super::remove_account(id);
+        assert!(!super::tracks_generation(id));
+    }
+
+    #[test]
+    fn lease_taken_before_removal_cannot_repark_after_it() {
+        // Failure mode: pruning resets the generation to the default 0, so a
+        // lease checked out before removal re-parks a session for a dead account.
+        let id = "acc-remove-lease";
+        let generation = super::generation_of(id);
+        super::remove_account(id);
+        assert!(!super::can_repark(id, generation));
     }
 
     #[test]

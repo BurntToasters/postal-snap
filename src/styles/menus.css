@@ -1,133 +1,226 @@
+/* Popup surfaces. Translucent material on macOS; solid on Windows, under
+   reduced transparency or more contrast, and in forced colors (see below). */
+:root {
+  --menu-surface: var(--menu-material);
+}
+
+html[data-platform="windows"],
+html[data-reduce-transparency="true"] {
+  --menu-surface: var(--menu-solid);
+  --menu-blur: none;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root {
+    --menu-surface: var(--menu-solid);
+    --menu-blur: none;
+  }
+}
+
 /* Shared menu surface. Every popup menu (context, mailbox More, reader More,
    send options, account switcher, recipient suggestions) adds .app-menu. */
 .app-menu {
   display: grid;
   gap: 1px;
-  padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  isolation: isolate;
+  padding: var(--space-1);
+  border: 0.5px solid var(--menu-border);
+  border-radius: var(--radius-lg);
   color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-soft);
-  font-size: 0.92rem;
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  font-size: var(--fs-ui);
 }
 
-/* Compact rows: menus are a pointer/keyboard surface, so rows sit below the
-   44px toolbar target while text scaling still grows them. */
-.search-recent-row {
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-}
-
-.search-recent-row [role="menuitem"] {
-  flex: 1;
-  min-width: 0;
-}
-
-.search-recent-forget {
-  flex: none;
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--text);
+/* The blur lives on a child layer. A backdrop-filter on the menu itself
+   would make it the containing block for fixed submenu panels. */
+.app-menu::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  -webkit-backdrop-filter: var(--menu-blur);
+  backdrop-filter: var(--menu-blur);
+  pointer-events: none;
 }
 
 .app-menu [role="menuitem"],
-.app-menu [role="menuitemradio"] {
+.app-menu [role="menuitemradio"],
+.app-menu [role="menuitemcheckbox"] {
   display: flex;
   width: 100%;
-  min-height: 2.25rem;
+  min-height: var(--menu-row-height);
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 4px 10px 4px 8px;
+  gap: 0.625em;
+  padding: 0.25em 0.625em 0.25em var(--space-2);
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--text);
   background: transparent;
   text-align: left;
-  line-height: 1.3;
+  line-height: 1.45;
 }
 
-.app-menu [role="menuitem"]:hover:not(:disabled),
-.app-menu [role="menuitem"]:focus-visible,
-.app-menu [role="menuitemradio"]:hover,
-.app-menu [role="menuitemradio"]:focus-visible {
-  background: var(--surface-hover);
+/* Hover, keyboard focus, and an open submenu fill with the emphasized
+   accent and white text. */
+.app-menu [role="menuitem"]:is(:hover, :focus-visible):not(:disabled),
+.app-menu [role="menuitemradio"]:is(:hover, :focus-visible),
+.app-menu [role="menuitemcheckbox"]:is(:hover, :focus-visible):not(:disabled),
+.app-menu .popup-submenu-trigger[aria-expanded="true"] {
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
 }
 
-.app-menu [role="menuitemradio"][aria-checked="true"] {
-  font-weight: 650;
+/* Icons, shortcut hints and chevrons follow the highlighted text color. */
+.app-menu
+  [role^="menuitem"]:is(:hover, :focus-visible, [aria-expanded="true"])
+  :is(svg, kbd, .context-menu-icon, .popup-submenu-chevron) {
+  color: inherit;
+}
+
+.app-menu [role^="menuitem"]:focus-visible {
+  outline-color: var(--focus-on-accent);
+}
+
+.app-menu [role="menuitemradio"][aria-checked="true"],
+.app-menu [role="menuitemcheckbox"][aria-checked="true"] {
+  font-weight: 600;
 }
 
 .app-menu [role="menuitem"]:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
+}
+
+/* Scrolling menus fade out at the bottom while more rows sit below. A mask
+   would also clip submenu panels, so the fade is an overlay row instead. */
+.app-menu[data-scroll-cue="more"]::after {
+  content: "";
+  display: block;
+  position: sticky;
+  bottom: 0;
+  height: var(--menu-row-height);
+  margin-top: calc(var(--menu-row-height) * -1);
+  background: linear-gradient(to bottom, transparent, var(--menu-surface));
+  pointer-events: none;
+}
+
+.app-menu kbd {
+  margin-inline-start: auto;
+  padding-inline-start: 0.5em;
+  color: var(--text-muted);
+  font: inherit;
+  white-space: nowrap;
+}
+
+/* Submenus: a row with a trailing chevron that opens a fixed panel beside it. */
+.popup-submenu {
+  display: grid;
+}
+
+.popup-submenu-trigger {
+  width: 100%;
+}
+
+.popup-submenu-chevron {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--text-muted);
+}
+
+/* Beats the shared icon margin so the chevron sits on the trailing edge. */
+.app-menu [role="menuitem"] > .popup-submenu-chevron {
+  margin-inline: auto 0.0625em;
+}
+
+.app-menu.popup-submenu-panel {
+  position: fixed;
+  z-index: 1200;
+  min-width: var(--context-menu-min-width);
+  max-width: min(24em, calc(100vw - 2 * var(--space-4)));
+  max-height: min(70vh, 34rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* Icons use em so they grow with text size. */
 .app-menu [role="menuitem"] > svg,
-.app-menu [role="menuitemradio"] > svg {
+.app-menu [role="menuitemradio"] > svg,
+.app-menu [role="menuitemcheckbox"] > svg {
   flex: none;
-  width: 1.1em;
-  height: 1.1em;
-  margin-inline: 1px;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  margin-inline: 0.0625em;
   color: var(--text-muted);
 }
 
 .app-menu [role="separator"] {
   height: 1px;
-  margin: 4px 8px;
+  margin: var(--space-1) var(--space-2);
   background: var(--border);
 }
 
-.mailbox-more-menu {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 6px);
-  right: 0;
+/* Fixed placement escapes the pane's overflow; the layout effect sets top/left. */
+.app-menu.mailbox-more-menu {
+  position: fixed;
+  z-index: 60;
   min-width: var(--mailbox-more-menu-min-width);
+  max-width: calc(100vw - 2 * var(--space-4));
+  max-height: min(70vh, 34rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .mailbox-filter-menu {
   position: fixed;
   z-index: 30;
   min-width: var(--mailbox-filter-menu-min-width);
-  max-width: calc(100vw - 16px);
+  max-width: calc(100vw - 2 * var(--space-4));
   overflow-y: auto;
 }
 
 .reader-more-menu {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  /* Above the reader pane, whose message frame would otherwise cover it. */
+  z-index: 60;
+  top: 0;
+  left: 0;
   min-width: var(--reader-more-menu-min-width);
   /* Long folder lists scroll inside the menu instead of off screen. The
      toolbar also pins the menu with inline fixed coordinates, so cap the
      width here as well to keep labels inside narrow viewports. */
-  max-width: min(28rem, calc(100vw - 16px));
+  max-width: min(28rem, calc(100vw - 2 * var(--space-4)));
   max-height: min(70vh, 34rem);
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.reader-more-menu kbd {
-  margin-inline-start: auto;
-  color: var(--text-muted);
-  font: inherit;
-  white-space: nowrap;
+/* Placed by placeAnchoredMenu: the sidebar clips absolute menus. */
+.app-menu.account-switcher-menu {
+  position: fixed;
+  z-index: 60;
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
 }
 
 .recipient-suggestions {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 4px);
+  top: calc(100% + var(--space-1));
   left: 0;
   right: 0;
   margin: 0;
+  padding: var(--space-1);
+  border: 0.5px solid var(--menu-border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
   list-style: none;
   max-height: 16.5rem;
   overflow: auto;
@@ -138,18 +231,19 @@
   gap: 1px;
   min-height: var(--target-size);
   align-content: center;
-  padding: 6px 10px;
-  border-radius: var(--radius-xs);
+  padding: 0.375em var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
 .recipient-suggestions li.active,
 .recipient-suggestions li:hover {
-  background: var(--surface-hover);
+  color: var(--accent-contrast);
+  background: var(--selection-emphasized);
 }
 
-.recipient-suggestions li.active .suggestion-address {
-  color: var(--text);
+.recipient-suggestions li:is(.active, :hover) .suggestion-address {
+  color: inherit;
 }
 
 .recipient-suggestions .suggestion-name {
@@ -161,7 +255,7 @@
 
 .recipient-suggestions .suggestion-address {
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -170,23 +264,23 @@
 .send-menu {
   position: absolute;
   z-index: 20;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + var(--space-1));
   left: 0;
   min-width: var(--menu-search-min-width);
 }
 
 .schedule-form {
   display: grid;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 8px 10px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border);
 }
 
 .schedule-form label {
   display: grid;
-  gap: 4px;
-  font-size: 0.84rem;
+  gap: var(--space-1);
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -196,8 +290,8 @@
   display: block;
   min-width: var(--context-menu-min-width);
   /* em-based so the menu widens with text size instead of clipping labels. */
-  max-width: min(24em, calc(100vw - 16px));
-  max-height: min(80vh, calc(100dvh - 16px));
+  max-width: min(24em, calc(100vw - 2 * var(--space-4)));
+  max-height: min(70vh, 34rem);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -212,8 +306,8 @@
 }
 
 .context-menu-icon svg {
-  width: 1.1em;
-  height: 1.1em;
+  width: var(--icon-md);
+  height: var(--icon-md);
 }
 
 .context-menu-label {
@@ -221,14 +315,69 @@
   overflow-wrap: anywhere;
 }
 
-.context-menu [role="menuitem"].danger,
-.context-menu [role="menuitem"].danger .context-menu-icon {
+.app-menu [role="menuitem"].danger,
+.app-menu [role="menuitem"].danger .context-menu-icon {
   color: var(--danger-ink);
 }
 
 .context-menu-heading {
-  padding: 6px 10px 2px calc(18px + 1.25em);
+  padding: var(--space-2) var(--space-3) 0.125em calc(1.125rem + 1.25em);
   color: var(--text-muted);
-  font-size: 0.76rem;
-  font-weight: 650;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* Solid surfaces: system colors in forced colors, Highlight on the active row. */
+@media (forced-colors: active) {
+  :root {
+    --menu-surface: Canvas;
+  }
+
+  .app-menu,
+  .recipient-suggestions {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .app-menu::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .app-menu [role^="menuitem"],
+  .recipient-suggestions li {
+    color: CanvasText;
+    background: transparent;
+  }
+
+  .app-menu
+    [role^="menuitem"]:is(:hover, :focus-visible, [aria-expanded="true"]):not(
+      :disabled
+    ),
+  .recipient-suggestions li:is(.active, :hover) {
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  .app-menu [role^="menuitem"]:focus-visible {
+    outline-color: HighlightText;
+  }
+
+  .app-menu
+    [role^="menuitem"]:is(:hover, :focus-visible, [aria-expanded="true"]):not(
+      :disabled
+    )
+    :is(svg, kbd, .context-menu-icon, .popup-submenu-chevron) {
+    color: inherit;
+  }
+
+  .app-menu [role="menuitem"].danger,
+  .app-menu [role="menuitem"].danger .context-menu-icon {
+    color: CanvasText;
+  }
+
+  .app-menu [role="separator"] {
+    background: CanvasText;
+  }
 }

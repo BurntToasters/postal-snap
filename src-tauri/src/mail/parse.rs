@@ -116,6 +116,17 @@ fn header_suggests_attachments(fetch: &async_imap::types::Fetch) -> bool {
 }
 
 pub(crate) fn header_bytes_top_media_type(raw: &[u8]) -> Option<String> {
+    let media = header_bytes_media(raw);
+    if media.is_empty() {
+        None
+    } else {
+        Some(media)
+    }
+}
+
+/// Lowercase top-level media type from the header block, without parameters.
+/// Empty when the header has no Content-Type.
+fn header_bytes_media(raw: &[u8]) -> String {
     let text = header_block_text(raw);
     let mut content_type = String::new();
     let mut in_content_type = false;
@@ -135,17 +146,12 @@ pub(crate) fn header_bytes_top_media_type(raw: &[u8]) -> Option<String> {
             }
         }
     }
-    let media = content_type
+    content_type
         .split(';')
         .next()
         .unwrap_or_default()
         .trim()
-        .to_ascii_lowercase();
-    if media.is_empty() {
-        None
-    } else {
-        Some(media)
-    }
+        .to_ascii_lowercase()
 }
 
 /// Signed/related/encrypted multiparts may hide attachments until the body is cached.
@@ -163,31 +169,7 @@ pub(crate) fn header_attachment_uncertain_for_search(
 }
 
 fn header_bytes_suggest_attachments(raw: &[u8]) -> bool {
-    let text = header_block_text(raw);
-    let mut content_type = String::new();
-    let mut in_content_type = false;
-    for line in text.lines() {
-        if line.starts_with([' ', '\t']) {
-            if in_content_type {
-                content_type.push(' ');
-                content_type.push_str(line.trim());
-            }
-            continue;
-        }
-        in_content_type = false;
-        if let Some((name, value)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("content-type") {
-                content_type = value.trim().to_string();
-                in_content_type = true;
-            }
-        }
-    }
-    let media = content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
+    let media = header_bytes_media(raw);
     media == "multipart/mixed"
         || (!media.is_empty() && !media.starts_with("text/") && !media.starts_with("multipart/"))
 }
@@ -326,6 +308,22 @@ pub(crate) fn system_flags(item: &async_imap::types::Fetch) -> (bool, bool) {
             async_imap::types::Flag::Flagged => (seen, true),
             _ => (seen, flagged),
         })
+}
+
+/// Flag color from `$MailFlagBit0..2`. Unflagged messages read as 0.
+pub(crate) fn flag_color_of(item: &async_imap::types::Fetch) -> u8 {
+    let (_, flagged) = system_flags(item);
+    if !flagged {
+        return 0;
+    }
+    let names: Vec<String> = item
+        .flags()
+        .filter_map(|flag| match flag {
+            async_imap::types::Flag::Custom(name) => Some(name.to_string()),
+            _ => None,
+        })
+        .collect();
+    super::keywords::color_from_keyword_names(names.iter().map(String::as_str))
 }
 
 /// `\Answered` and `$Forwarded` (keywords are case-insensitive atoms).

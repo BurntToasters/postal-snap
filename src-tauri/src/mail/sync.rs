@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
@@ -12,10 +13,11 @@ use async_imap::types::Mailbox;
 
 use super::connect::connect_imap;
 use super::failure::{FailureKind, MailError};
+use super::keywords::keywords_allowed;
 use super::list_status::{self, ListStatusError, ListedName};
 use super::parse::{
-    internal_date, parse_envelope, parse_message, parse_partial_message, received_at_fallback,
-    reply_flags, system_flags,
+    flag_color_of, internal_date, parse_envelope, parse_message, parse_partial_message,
+    received_at_fallback, reply_flags, system_flags,
 };
 use super::pool::{self, Lease};
 use super::qresync::{
@@ -83,6 +85,71 @@ const BACKFILL_BATCHES_PER_PASS: u32 = 4;
 /// visible to a full flag scan, so rescan at least this often.
 const FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
 
+/// Without CONDSTORE, a full flag scan runs at most this often per folder.
+const FULL_FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::hours(24);
+
+/// Newest cached UIDs refreshed by an interval or unread-change flag scan.
+pub(crate) const FLAG_WINDOW_UIDS: usize = 5_000;
+
+/// How a folder without CONDSTORE refreshes flags in one pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlagScan {
+    Skip,
+    /// Only the newest `FLAG_WINDOW_UIDS` cached UIDs.
+    Window,
+    /// Every cached UID.
+    Full,
+}
+
+/// `due` means the scan interval elapsed or the unread count changed.
+/// `explicit` means the user asked for Get Mail.
+pub(crate) fn plan_flag_scan(
+    due: bool,
+    explicit: bool,
+    last_full: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> FlagScan {
+    if explicit {
+        return FlagScan::Full;
+    }
+    if !due {
+        return FlagScan::Skip;
+    }
+    let full_due = last_full.is_none_or(|last| now - last >= FULL_FLAG_SCAN_INTERVAL);
+    if full_due {
+        FlagScan::Full
+    } else {
+        FlagScan::Window
+    }
+}
+
+/// The newest `limit` UIDs of an ascending list.
+pub(crate) fn flag_scan_window(uids: &[u32], limit: usize) -> &[u32] {
+    &uids[uids.len().saturating_sub(limit)..]
+}
+
+/// Last full flag scan per (account, folder). Memory only: a restart costs one
+/// extra full scan per folder.
+type FullScanMap = HashMap<(String, String), DateTime<Utc>>;
+
+static FULL_FLAG_SCANS: LazyLock<Mutex<FullScanMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn last_full_flag_scan(account_id: &str, folder: &str) -> Option<DateTime<Utc>> {
+    let scans = FULL_FLAG_SCANS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scans
+        .get(&(account_id.to_string(), folder.to_string()))
+        .copied()
+}
+
+fn record_full_flag_scan(account_id: &str, folder: &str, at: DateTime<Utc>) {
+    let mut scans = FULL_FLAG_SCANS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scans.insert((account_id.to_string(), folder.to_string()), at);
+}
+
 /// Hooks the account worker gives a sync pass: it lets user actions preempt
 /// background work between folders and batches, and reports progress.
 pub trait SyncHooks: Send {
@@ -96,6 +163,12 @@ pub trait SyncHooks: Send {
     /// Get Mail: fetch new envelopes and flags only. Backfill and body
     /// downloads are left to the worker's next pass.
     fn quick(&self) -> bool {
+        false
+    }
+
+    /// An explicit user Get Mail: refresh every flag on servers without
+    /// CONDSTORE instead of the bounded window.
+    fn explicit_refresh(&self) -> bool {
         false
     }
 
@@ -596,15 +669,12 @@ async fn sync_folder<H: SyncHooks>(
             return Err("Mailbox changed during sync.".into());
         }
     }
-    let mailbox_id = db.upsert_mailbox_with_source(
+    let mailbox_id = db.prepare_mailbox_for_sync(
         account_id,
         &folder.name,
         &folder.role,
         folder.role_source,
         status.uid_validity,
-        status.uid_next,
-        status.unseen,
-        status.exists,
     )?;
     db.set_mailbox_listing(mailbox_id, folder.delimiter.as_deref())?;
     let purged = previous.as_ref().is_some_and(|meta| {
@@ -614,15 +684,24 @@ async fn sync_folder<H: SyncHooks>(
     let cutoff = policy.cutoff();
     let backfill_active = meta.backfill_state == "active"
         || (meta.backfill_state == "cutoff" && policy.mode == "full");
-    let flag_scan_due = !condstore
-        && (previous
-            .as_ref()
-            .is_none_or(|meta| meta.server_unread != status.unseen)
-            || meta
-                .last_flag_scan_at
-                .as_deref()
-                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                .is_none_or(|last| Utc::now() - last.with_timezone(&Utc) > FLAG_SCAN_INTERVAL));
+    let flag_interval_due = previous
+        .as_ref()
+        .is_none_or(|meta| meta.server_unread != status.unseen)
+        || meta
+            .last_flag_scan_at
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_none_or(|last| Utc::now() - last.with_timezone(&Utc) > FLAG_SCAN_INTERVAL);
+    let flag_scan = if condstore {
+        FlagScan::Skip
+    } else {
+        plan_flag_scan(
+            flag_interval_due,
+            hooks.explicit_refresh(),
+            last_full_flag_scan(account_id, &folder.name),
+            Utc::now(),
+        )
+    };
     let unchanged = !purged
         && previous.as_ref().is_some_and(|meta| {
             meta.uid_next == status.uid_next
@@ -637,7 +716,15 @@ async fn sync_folder<H: SyncHooks>(
             .is_empty();
     // Work a quick pass leaves for the worker.
     let deferred = quick && (backfill_active || wants_prefetch);
-    if unchanged && !flag_scan_due && (quick || (!backfill_active && !wants_prefetch)) {
+    if unchanged && flag_scan == FlagScan::Skip && (quick || (!backfill_active && !wants_prefetch))
+    {
+        db.update_mailbox_status(
+            mailbox_id,
+            status.uid_validity,
+            status.uid_next,
+            status.unseen,
+            status.exists,
+        )?;
         return Ok((deferred, false));
     }
     if status.exists == 0 {
@@ -645,6 +732,13 @@ async fn sync_folder<H: SyncHooks>(
             .as_ref()
             .is_some_and(|meta| meta.server_total.is_some_and(|total| total > 0));
         reconcile_empty_mailbox(db, mailbox_id)?;
+        db.update_mailbox_status(
+            mailbox_id,
+            status.uid_validity,
+            status.uid_next,
+            status.unseen,
+            0,
+        )?;
         db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
         return Ok((false, changed));
     }
@@ -658,6 +752,7 @@ async fn sync_folder<H: SyncHooks>(
     if selected.uid_validity != status.uid_validity {
         return Err("Mailbox changed during sync.".into());
     }
+    db.set_mailbox_allows_keywords(mailbox_id, keywords_allowed(&selected.permanent_flags))?;
     let Some(uid_validity) = selected.uid_validity else {
         return Err("Mailbox identity is unavailable.".into());
     };
@@ -753,11 +848,37 @@ async fn sync_folder<H: SyncHooks>(
         }
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
     } else if condstore {
-        full_flag_scan(lease, db, mailbox_id).await?;
+        full_flag_scan(
+            lease,
+            db,
+            account_id,
+            &folder.name,
+            mailbox_id,
+            FlagScan::Full,
+        )
+        .await?;
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
-    } else if flag_scan_due || expunge_suspected {
-        full_flag_scan(lease, db, mailbox_id).await?;
+    } else if flag_scan != FlagScan::Skip || expunge_suspected {
+        // Only a full scan can find an expunge anywhere in the folder.
+        let scope = if expunge_suspected {
+            FlagScan::Full
+        } else {
+            flag_scan
+        };
+        full_flag_scan(lease, db, account_id, &folder.name, mailbox_id, scope).await?;
     }
+    let committed_uid_next = if catch_up_incomplete {
+        None
+    } else {
+        status.uid_next
+    };
+    db.update_mailbox_status(
+        mailbox_id,
+        Some(uid_validity),
+        committed_uid_next,
+        status.unseen,
+        status.exists,
+    )?;
 
     let changed = new_fetched > 0 || !unchanged;
     if quick {
@@ -871,6 +992,7 @@ async fn cache_envelopes(
     .map_err(|_| "Message list download timed out.".to_string())?
     .map_err(|error| redact_error(&error, "Message list download"))?;
     let mut parsed_rows = Vec::new();
+    let mut colors: Vec<(u32, u8)> = Vec::new();
     let mut age_marks: Vec<(u32, bool)> = Vec::new();
     loop {
         let next = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, fetched.try_next())
@@ -885,6 +1007,7 @@ async fn cache_envelopes(
             continue;
         };
         (parsed.is_answered, parsed.is_forwarded) = reply_flags(&item);
+        colors.push((parsed.uid, flag_color_of(&item)));
         let is_old = cutoff.is_some_and(|cutoff| {
             item.internal_date()
                 .map(|date| date.with_timezone(&Utc) < *cutoff)
@@ -912,6 +1035,7 @@ async fn cache_envelopes(
     let owner = account_id.to_string();
     tokio::task::spawn_blocking(move || {
         writer.upsert_envelopes(&owner, mailbox_id, &parsed_rows)?;
+        writer.reconcile_flag_colors(mailbox_id, &colors)?;
         let _ = writer.repair_thread_roots(&owner, &threaded);
         Ok::<(), String>(())
     })
@@ -1051,6 +1175,13 @@ fn flag_rows(rows: &[async_imap::types::Fetch]) -> (Vec<FlagRow>, Vec<FlagRow>) 
     (changed, replies)
 }
 
+/// Flag color per UID for one UID FLAGS batch.
+fn flag_colors(rows: &[async_imap::types::Fetch]) -> Vec<(u32, u8)> {
+    rows.iter()
+        .filter_map(|item| item.uid.map(|uid| (uid, flag_color_of(item))))
+        .collect()
+}
+
 /// Fetch flag changes since `since`. With QRESYNC, the same command reports
 /// expunged UIDs (VANISHED) and they are applied here; the returned plan tells
 /// the caller whether `reconcile_expunges` can be skipped.
@@ -1086,17 +1217,32 @@ async fn sync_changed_flags(
         plan_vanished(&ranges, drained)
     });
     let (changed, replies) = flag_rows(&rows);
+    let colors = flag_colors(&rows);
     db.reconcile_reply_flags(mailbox_id, &replies)?;
     db.reconcile_flags(mailbox_id, &changed, &[])?;
+    db.reconcile_flag_colors(mailbox_id, &colors)?;
     if let Some(VanishedPlan::Apply(uids)) = &plan {
         db.apply_vanished(mailbox_id, uids)?;
     }
     Ok(plan)
 }
 
-/// Refresh flags for every cached UID and drop rows the server no longer has.
-async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Result<(), String> {
-    for chunk in db.cached_uids(mailbox_id)?.chunks(250) {
+/// Refresh flags for cached UIDs (all, or the newest window) and drop rows the
+/// server no longer has within the scanned UIDs.
+async fn full_flag_scan(
+    lease: &mut Lease,
+    db: &Database,
+    account_id: &str,
+    folder: &str,
+    mailbox_id: i64,
+    scope: FlagScan,
+) -> Result<(), String> {
+    let cached = db.cached_uids(mailbox_id)?;
+    let uids = match scope {
+        FlagScan::Window => flag_scan_window(&cached, FLAG_WINDOW_UIDS),
+        _ => &cached[..],
+    };
+    for chunk in uids.chunks(250) {
         let (Some(low), Some(high)) = (chunk.first(), chunk.last()) else {
             continue;
         };
@@ -1111,10 +1257,16 @@ async fn full_flag_scan(lease: &mut Lease, db: &Database, mailbox_id: i64) -> Re
         .map_err(|_| "Flag sync timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Flag sync"))?;
         let (seen, replies) = flag_rows(&rows);
+        let colors = flag_colors(&rows);
         db.reconcile_reply_flags(mailbox_id, &replies)?;
         db.reconcile_flags(mailbox_id, &seen, chunk)?;
+        db.reconcile_flag_colors(mailbox_id, &colors)?;
     }
-    db.mark_flag_scan(mailbox_id)
+    db.mark_flag_scan(mailbox_id)?;
+    if scope == FlagScan::Full {
+        record_full_flag_scan(account_id, folder, Utc::now());
+    }
+    Ok(())
 }
 
 /// Remove cached rows that were expunged on the server, using the server's
@@ -1346,23 +1498,28 @@ async fn download_body_batch(
     let mut continuing_parse = HashSet::new();
     if !partial.is_empty() {
         // A rejected prefix is fetched whole in the same batch.
-        whole.extend(
-            fetch_body_group(
-                lease,
-                db,
-                mailbox_id,
-                uid_validity,
-                &partial,
-                BodyFetch::Partial,
-                &rows,
-                &mut state,
-                &mut continuing_parse,
-            )
-            .await?,
-        );
+        match fetch_body_group(
+            lease,
+            db,
+            mailbox_id,
+            uid_validity,
+            &partial,
+            BodyFetch::Partial,
+            &rows,
+            &mut state,
+            &mut continuing_parse,
+        )
+        .await
+        {
+            Ok(rejected) => whole.extend(rejected),
+            Err(error) => {
+                let _ = settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse);
+                return Err(error);
+            }
+        }
     }
     if !whole.is_empty() {
-        fetch_body_group(
+        if let Err(error) = fetch_body_group(
             lease,
             db,
             mailbox_id,
@@ -1373,8 +1530,13 @@ async fn download_body_batch(
             &mut state,
             &mut continuing_parse,
         )
-        .await?;
+        .await
+        {
+            let _ = settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse);
+            return Err(error);
+        }
     }
+    settle_abandoned_continuing_parses(db, mailbox_id, &mut continuing_parse)?;
     if !state.repair_ids.is_empty() {
         let _ = db.repair_thread_roots_batch(&parsed_account(db, mailbox_id)?, &state.repair_ids);
     }
@@ -1384,6 +1546,17 @@ async fn download_body_batch(
         }
     }
     Ok(state.consumed)
+}
+
+fn settle_abandoned_continuing_parses(
+    db: &Database,
+    mailbox_id: i64,
+    continuing_parse: &mut HashSet<u32>,
+) -> Result<(), String> {
+    for uid in continuing_parse.drain() {
+        db.end_parse(mailbox_id, uid)?;
+    }
+    Ok(())
 }
 
 /// Fetch and store one group of bodies. Returns the UIDs whose prefix was
@@ -1591,6 +1764,7 @@ pub async fn refresh_mailbox_envelopes(
         {
             return Err("Mailbox changed during sync.".into());
         }
+        db.set_mailbox_allows_keywords(mailbox_id, keywords_allowed(&selected.permanent_flags))?;
         if let Some((previous_validity, ..)) =
             db.mailbox_sync_state(&account.summary.id, mailbox)?
         {
@@ -1598,16 +1772,16 @@ pub async fn refresh_mailbox_envelopes(
                 db.purge_stale_mailbox(&account.summary.id, mailbox, mailbox_id)?;
             }
         }
-        db.update_mailbox_status(
-            mailbox_id,
-            selected.uid_validity,
-            selected.uid_next,
-            status.unseen,
-            status.exists,
-        )?;
         let max_uid = db.max_uid(mailbox_id)?;
         if selected.exists == 0 {
             reconcile_empty_mailbox(db, mailbox_id)?;
+            db.update_mailbox_status(
+                mailbox_id,
+                selected.uid_validity,
+                selected.uid_next,
+                status.unseen,
+                0,
+            )?;
             return Ok(());
         }
         if max_uid == 0 {
@@ -1646,6 +1820,13 @@ pub async fn refresh_mailbox_envelopes(
             )
             .await?;
         }
+        db.update_mailbox_status(
+            mailbox_id,
+            selected.uid_validity,
+            selected.uid_next,
+            status.unseen,
+            status.exists,
+        )?;
         Ok::<(), String>(())
     }
     .await;
@@ -1954,17 +2135,20 @@ async fn search_mailbox(
         .await
         .map_err(|_| "Server search timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Server search"))?;
+        let mut colors = Vec::with_capacity(fetched.len());
         let parsed = fetched
             .iter()
             .filter_map(|item| {
                 let (seen, flagged) = system_flags(item);
                 parse_envelope(item, seen, flagged).ok().map(|mut parsed| {
                     (parsed.is_answered, parsed.is_forwarded) = reply_flags(item);
+                    colors.push((parsed.uid, flag_color_of(item)));
                     parsed
                 })
             })
             .collect::<Vec<_>>();
         db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+        db.reconcile_flag_colors(mailbox_id, &colors)?;
         for item in &fetched {
             let Some(uid) = item.uid else {
                 continue;
@@ -2318,6 +2502,7 @@ mod tests {
 
     fn summary(has_attachments: bool) -> crate::models::MessageSummary {
         crate::models::MessageSummary {
+            flag_color: 0,
             id: 1,
             account_id: "account-1".into(),
             mailbox_id: 1,
@@ -2463,6 +2648,7 @@ mod scope_tests {
         };
         AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: BodyFormat::Html,
                 id: "scope-account".into(),
                 provider: ProviderKind::Manual,
@@ -2583,5 +2769,96 @@ mod scope_tests {
                 crate::mail::MAX_MESSAGE_BYTES + 1
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod flag_scan_tests {
+    use super::{flag_scan_window, plan_flag_scan, FlagScan, FLAG_WINDOW_UIDS};
+    use chrono::{DateTime, Duration, Utc};
+
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-11-08T12:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn nothing_due_skips_the_flag_scan() {
+        let last_full = Some(now() - Duration::hours(1));
+        assert_eq!(
+            plan_flag_scan(false, false, last_full, now()),
+            FlagScan::Skip
+        );
+    }
+
+    #[test]
+    fn first_due_scan_of_a_folder_is_full() {
+        assert_eq!(plan_flag_scan(true, false, None, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn due_scan_inside_a_day_is_windowed() {
+        let last_full = Some(now() - Duration::hours(1));
+        assert_eq!(
+            plan_flag_scan(true, false, last_full, now()),
+            FlagScan::Window
+        );
+        let just_under = Some(now() - Duration::hours(24) + Duration::seconds(1));
+        assert_eq!(
+            plan_flag_scan(true, false, just_under, now()),
+            FlagScan::Window
+        );
+    }
+
+    #[test]
+    fn due_scan_after_a_day_is_full() {
+        let exactly = Some(now() - Duration::hours(24));
+        assert_eq!(plan_flag_scan(true, false, exactly, now()), FlagScan::Full);
+        let old = Some(now() - Duration::hours(25));
+        assert_eq!(plan_flag_scan(true, false, old, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn explicit_get_mail_is_full_even_when_nothing_else_is_due() {
+        let last_full = Some(now() - Duration::minutes(1));
+        assert_eq!(
+            plan_flag_scan(false, true, last_full, now()),
+            FlagScan::Full
+        );
+        assert_eq!(plan_flag_scan(true, true, last_full, now()), FlagScan::Full);
+    }
+
+    #[test]
+    fn future_full_scan_stamp_from_clock_skew_does_not_force_full_scans() {
+        let future = Some(now() + Duration::hours(3));
+        assert_eq!(plan_flag_scan(true, false, future, now()), FlagScan::Window);
+    }
+
+    #[test]
+    fn window_keeps_the_newest_uids_in_ascending_order() {
+        let uids: Vec<u32> = (1..=10).collect();
+        assert_eq!(flag_scan_window(&uids, 3), &[8, 9, 10]);
+    }
+
+    #[test]
+    fn window_returns_everything_when_the_folder_is_small() {
+        let uids: Vec<u32> = (1..=5).collect();
+        assert_eq!(flag_scan_window(&uids, 5), &[1, 2, 3, 4, 5]);
+        assert_eq!(flag_scan_window(&uids, 50), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn window_is_empty_for_an_empty_folder_or_zero_limit() {
+        assert!(flag_scan_window(&[], 10).is_empty());
+        assert!(flag_scan_window(&[1, 2, 3], 0).is_empty());
+    }
+
+    #[test]
+    fn default_window_matches_the_documented_size() {
+        let uids: Vec<u32> = (1..=(FLAG_WINDOW_UIDS as u32 + 7)).collect();
+        let window = flag_scan_window(&uids, FLAG_WINDOW_UIDS);
+        assert_eq!(window.len(), FLAG_WINDOW_UIDS);
+        assert_eq!(window.first(), Some(&8));
     }
 }

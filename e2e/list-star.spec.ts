@@ -1,6 +1,9 @@
 import type { TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifactsAfterEach } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 // Failure modes covered here:
 // 1. Clicking the star opens the message instead of starring it.
@@ -31,7 +34,7 @@ test("a listed message can be starred without opening it", async ({ page }) => {
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     wrap.locator('button.row-action[data-action="star"]'),
-  ).toHaveAttribute("aria-label", "Remove star");
-  await expect(row).toHaveAccessibleName(/Starred/i);
+  ).toHaveAttribute("aria-label", "Unflag");
+  await expect(row).toHaveAccessibleName(/Flagged/i);
   await expect(row.locator(".message-subject .star-mark")).toBeVisible();
 });

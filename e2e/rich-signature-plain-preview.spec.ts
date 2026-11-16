@@ -4,8 +4,8 @@ import type { TestInfo } from "@playwright/test";
 import { join } from "node:path";
 
 import { expect, test } from "./coverage-fixture";
-import { attachArtifacts } from "./ipc-artifact";
 import { installMockIpc } from "./mock-ipc";
+import { attachArtifacts } from "./ipc";
 
 // Failure modes covered here:
 // 1. Plain-text composition previews the rich signature instead of its fallback.
@@ -15,6 +15,8 @@ import { installMockIpc } from "./mock-ipc";
 
 const variants = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },
@@ -31,7 +33,7 @@ for (const { density, scale } of variants) {
     await page.goto(`/?density=${density}&scale=${scale}`);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-    await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+    await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
 
     const editor = page.getByRole("textbox", { name: "Rich signature" });
@@ -84,7 +86,7 @@ for (const { density, scale } of variants) {
     await page.getByRole("button", { name: "Close settings" }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-    await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+    await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
     const reopenedFallback = page.getByRole("textbox", {
       name: "Email signature",

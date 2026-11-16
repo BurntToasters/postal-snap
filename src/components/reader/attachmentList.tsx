@@ -7,16 +7,19 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api";
 import { accountSyncPhase } from "../../accountStatus";
 import { formatBytes } from "../../format";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
+import { emitOpenedMessage } from "../../openedMessage";
 import type { Attachment, AttachmentPreview, MessageDetail } from "../../types";
+import { isMessageAttachment, isPageImage } from "./attachmentKinds";
 import { useDialogFocus } from "../useDialogFocus";
 import { useInertBackground } from "../useInertBackground";
+import { errorText } from "../../errors";
 
 const PREVIEW_ZOOM = [1, 1.5, 2, 3];
 
@@ -64,16 +67,26 @@ export function AttachmentPreviewDialog({
   onDownload: () => void;
   onClose: () => void;
 }) {
-  const dialogRef = useDialogFocus(onClose);
-  useInertBackground();
-  const previewKey = `${preview.filename}\0${preview.imageDataUrl ?? ""}`;
+  const dialogRef = useRef<HTMLElement>(null);
+  useInertBackground(dialogRef);
+  useDialogFocus(onClose, { ref: dialogRef });
+  const previewKey = [
+    preview.filename,
+    preview.contentType,
+    preview.size,
+    preview.text ?? "",
+    preview.pages?.length ?? 0,
+    preview.imageDataUrl ?? "",
+    preview.pages?.[0] ?? "",
+  ].join("\0");
   const [zoomState, setZoomState] = useState({ key: previewKey, zoom: 1 });
-  if (zoomState.key !== previewKey) {
-    setZoomState({ key: previewKey, zoom: 1 });
-  }
   const zoom = zoomState.key === previewKey ? zoomState.zoom : 1;
   function setZoom(next: number) {
     setZoomState({ key: previewKey, zoom: next });
+  }
+  function stepFile(navigate: () => void) {
+    setZoomState({ key: "", zoom: 1 });
+    navigate();
   }
   return createPortal(
     <div className="modal-layer attachment-preview-layer">
@@ -92,11 +105,11 @@ export function AttachmentPreviewDialog({
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft" && onPrevious) {
             event.preventDefault();
-            onPrevious();
+            stepFile(onPrevious);
           }
           if (event.key === "ArrowRight" && onNext) {
             event.preventDefault();
-            onNext();
+            stepFile(onNext);
           }
           if (
             preview.imageDataUrl &&
@@ -140,6 +153,24 @@ export function AttachmentPreviewDialog({
                   : undefined
               }
             />
+          ) : preview.pages && preview.pages.length > 0 ? (
+            <div className="pdf-pages">
+              {preview.pages.map((url, index) =>
+                isPageImage(url) ? (
+                  <img
+                    key={index}
+                    src={url}
+                    alt={strings.reader.pdfPageAlt(
+                      index + 1,
+                      preview.pageCount ?? preview.pages?.length ?? 0,
+                    )}
+                  />
+                ) : null,
+              )}
+              {preview.pagesTruncated ? (
+                <p role="note">{strings.reader.pagesTruncated}</p>
+              ) : null}
+            </div>
           ) : (
             <pre>{preview.text ?? ""}</pre>
           )}
@@ -169,13 +200,17 @@ export function AttachmentPreviewDialog({
             <button
               type="button"
               className="secondary-button"
-              onClick={onPrevious}
+              onClick={() => stepFile(onPrevious)}
             >
               <ChevronLeft aria-hidden="true" /> {strings.reader.previousFile}
             </button>
           ) : null}
           {onNext ? (
-            <button type="button" className="secondary-button" onClick={onNext}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => stepFile(onNext)}
+            >
               {strings.reader.nextFile} <ChevronRight aria-hidden="true" />
             </button>
           ) : null}
@@ -270,9 +305,22 @@ export function AttachmentList({
         store.selectMessage(detail);
       }
     } catch (cause) {
-      setError(String(cause));
+      setError(errorText(cause));
     } finally {
       setFullDownload(undefined);
+    }
+  }
+
+  async function viewMessage(attachment: Attachment) {
+    try {
+      const opened = await api.viewAttachmentMessage(
+        message.accountId,
+        message.id,
+        attachment.id,
+      );
+      emitOpenedMessage(opened);
+    } catch (cause) {
+      setError(errorText(cause));
     }
   }
 
@@ -291,6 +339,14 @@ export function AttachmentList({
           (item) => !item.inline,
         );
         const partial = message.bodyPartial === true;
+        const attachmentDetail = (
+          attachment: (typeof regularAttachments)[number],
+        ) =>
+          `${fileKind(attachment.contentType)}${
+            partial && attachment.size === 0
+              ? ""
+              : ` · ${formatBytes(attachment.size)}`
+          }`;
         if (regularAttachments.length === 0 && !partial) return null;
         const fileBytes = regularAttachments.reduce(
           (total, item) => total + item.size,
@@ -394,6 +450,21 @@ export function AttachmentList({
                     <Eye aria-hidden="true" />
                   </button>
                 ) : null}
+                {isMessageAttachment(attachment) ? (
+                  <button
+                    type="button"
+                    className="secondary-button attachment-view-button"
+                    disabled={
+                      downloadingAttachmentId !== undefined || partialOffline
+                    }
+                    onClick={() => void viewMessage(attachment)}
+                    aria-label={strings.reader.viewNamedMessage(
+                      attachment.filename,
+                    )}
+                  >
+                    {strings.reader.viewMessage}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="attachment-download-button"
@@ -403,17 +474,12 @@ export function AttachmentList({
                   onClick={() =>
                     void onDownload(attachment.id, attachment.filename)
                   }
-                  aria-label={`${strings.reader.downloadFile}: ${attachment.filename}`}
+                  aria-label={`${strings.reader.downloadFile}: ${attachment.filename} ${attachmentDetail(attachment)}`}
                 >
                   <Download aria-hidden="true" />
                   <span>
-                    <strong>{attachment.filename}</strong>
-                    <small>
-                      {fileKind(attachment.contentType)}
-                      {partial && attachment.size === 0
-                        ? ""
-                        : ` · ${formatBytes(attachment.size)}`}
-                    </small>
+                    <strong>{attachment.filename}</strong>{" "}
+                    <small>{attachmentDetail(attachment)}</small>
                   </span>
                 </button>
               </div>

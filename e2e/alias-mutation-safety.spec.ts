@@ -5,7 +5,9 @@ import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 import { installMockIpc } from "./mock-ipc";
-import { recordIpc, recordedCalls } from "./ipc-recorder";
+import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
+
+test.afterEach(attachArtifactsAfterEach);
 
 test.use({ trace: "off" });
 
@@ -36,13 +38,17 @@ async function openIdentity(page: Page, density: string, scale: number) {
   await page.goto(`/?density=${density}&scale=${scale}`);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-  await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
   await page.getByRole("button", { name: "Identity", exact: true }).click();
+  // SignatureEditor loads via Suspense above the alias controls; wait for it so
+  // Detect and Remove buttons cannot shift under clicks.
+  await expect(
+    page.getByRole("textbox", { name: "Rich signature" }),
+  ).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
   await installMockIpc(page);
-  await recordIpc(page);
   await page.context().tracing.start({
     screenshots: true,
     snapshots: true,
@@ -53,7 +59,7 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }, testInfo) => {
   const slug = artifactSlug(testInfo);
   await mkdir(artifactDirectory, { recursive: true });
-  const calls = page.isClosed() ? [] : await recordedCalls(page);
+  const calls = page.isClosed() ? [] : await ipcCalls(page);
   const jsonPath = resolve(artifactDirectory, `${slug}.json`);
   const screenshotPath = resolve(artifactDirectory, `${slug}.png`);
   const tracePath = resolve(artifactDirectory, `${slug}.zip`);
@@ -85,6 +91,8 @@ test.afterEach(async ({ page }, testInfo) => {
 
 const matrix = [
   { density: "comfortable", scale: 1 },
+  { density: "normal", scale: 1 },
+  { density: "normal", scale: 2 },
   { density: "compact", scale: 1 },
   { density: "comfortable", scale: 2 },
   { density: "compact", scale: 2 },
@@ -244,8 +252,11 @@ for (const { density, scale } of matrix) {
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "Accounts", exact: true }).click();
-    await page.getByRole("button", { name: "Manage Sam", exact: true }).click();
+    await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
     await page.getByRole("button", { name: "Identity", exact: true }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Rich signature" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", {
         name: "Remove custom@mydomain.com",

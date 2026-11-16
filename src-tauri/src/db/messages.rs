@@ -7,9 +7,39 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
 
 use crate::models::{
-    MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage, MessageSummary,
-    RecipientSuggestion, SearchQuery,
+    Attachment, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
+    MessageSummary, RecipientSuggestion, SearchQuery,
 };
+
+/// Message fields for ownership, subject, and file checks. No body.
+#[derive(Clone, Debug)]
+pub struct MessageMeta {
+    pub summary: MessageSummary,
+    pub attachments: Vec<Attachment>,
+    /// Stored receipt choice: `sent`, `declined`, or empty.
+    pub receipt_choice: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SANITIZE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SANITIZE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Sanitize stored HTML. Callers must not hold a database guard.
+fn sanitize_stored_html(html: &str) -> crate::html_sanitize::SanitizedHtml {
+    #[cfg(test)]
+    {
+        SANITIZE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        SANITIZE_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+    }
+    crate::html_sanitize::sanitize_received_html(html)
+}
 
 fn suggestion_domain_ok(domain: &str) -> bool {
     let labels = domain.split('.').collect::<Vec<_>>();
@@ -107,6 +137,40 @@ const THREAD_REPAIR_ROUNDS: usize = 2000;
 
 database_operations! {
 impl Database {
+    /// Server flag colors from one FLAGS batch. Rows whose color is unchanged
+    /// are not written, so a color-only server change is still detected.
+    pub fn reconcile_flag_colors(
+        &self,
+        mailbox_id: i64,
+        colors: &[(u32, u8)],
+    ) -> Result<(), String> {
+        if colors.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        for (uid, color) in colors {
+            transaction
+                .execute(
+                    "UPDATE messages SET flag_color=?3 WHERE mailbox_id=?1 AND uid=?2 AND flag_color<>?3",
+                    params![mailbox_id, uid, i64::from(*color)],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)
+    }
+
+    /// Records whether the mailbox accepts keywords, from the last SELECT.
+    pub fn set_mailbox_allows_keywords(&self, mailbox_id: i64, allows: bool) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET allows_keywords=?2 WHERE id=?1 AND allows_keywords<>?2",
+                params![mailbox_id, i64::from(allows)],
+            )
+            .map(|_| ())
+            .map_err(db_error)
+    }
+
     pub fn reconcile_flags(
         &self,
         mailbox_id: i64,
@@ -635,7 +699,7 @@ impl Database {
         mailbox_id: i64,
         uid: u32,
     ) -> Result<Option<MessageSummary>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 &format!(
                     "{} WHERE m.mailbox_id=?1 AND m.uid=?2 AND m.pending_move_to IS NULL",
@@ -661,62 +725,75 @@ impl Database {
     }
 
     /// Newest unread Inbox arrival cached after `after`, by arrival order.
+    #[cfg(test)]
     pub fn newest_unread_inbox_after(
         &self,
         account_id: &str,
         after: Option<i64>,
     ) -> Result<Option<MessageSummary>, String> {
-        let conn = self.read_conn()?;
-        conn.query_row(
-            &format!("{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC LIMIT 1", MESSAGE_SUMMARY_SELECT),
-            params![account_id, after], map_message_summary,
-        ).optional().map_err(db_error)
+        self.newest_unread_inbox_after_excluding(account_id, after, &[])
     }
 
+    /// Newest unread Inbox arrival cached after `after`, skipping already-notified ids.
+    pub fn newest_unread_inbox_after_excluding(
+        &self,
+        account_id: &str,
+        after: Option<i64>,
+        exclude_ids: &[i64],
+    ) -> Result<Option<MessageSummary>, String> {
+        let conn = self.read_conn()?;
+        let excluded: std::collections::HashSet<i64> = exclude_ids.iter().copied().collect();
+        let mut statement = conn
+            .prepare(&format!(
+                "{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC",
+                MESSAGE_SUMMARY_SELECT
+            ))
+            .map_err(db_error)?;
+        let mut rows = statement
+            .query(params![account_id, after])
+            .map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let summary = map_message_summary(row).map_err(db_error)?;
+            if !excluded.contains(&summary.id) {
+                return Ok(Some(summary));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Full message for display. Sanitizes the body after the reader guard
+    /// drops, and skips the recency touch while the writer is busy.
     pub fn message_detail(&self, id: i64, account_id: &str) -> Result<MessageDetail, String> {
-        // Eviction recency. When sync holds the writer, record it on a
-        // background thread so the read does not wait.
         const TOUCH: &str =
             "UPDATE messages SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?1 AND account_id = ?2";
         if let Some(conn) = self.try_conn() {
             let _ = conn.execute(TOUCH, params![id, account_id]);
-        } else {
-            let db = self.clone();
-            let account_id = account_id.to_string();
-            std::thread::spawn(move || {
-                if let Ok(conn) = db.conn() {
-                    let _ = conn.execute(TOUCH, params![id, account_id]);
-                }
-            });
         }
-        // Sanitizing a large body runs here, so keep it off the writer.
-        let conn = self.read_conn()?;
-        let mut detail = conn
-            .query_row(
-                &format!(
-                    "{} WHERE m.id = ?1 AND m.account_id = ?2",
-                    MESSAGE_DETAIL_SELECT
-                ),
-                params![id, account_id],
-                |row| {
-                    let html_body: Option<String> = row.get(19)?;
-                    let sanitized = html_body
-                        .as_deref()
-                        .map(crate::html_sanitize::sanitize_received_html);
-                    let list_unsubscribe: Option<String> = row.get("list_unsubscribe")?;
-                    let list_unsubscribe_post: Option<String> = row.get("list_unsubscribe_post")?;
+        let (mut detail, raw_html, raw) = {
+            let conn = self.read_conn()?;
+            let (detail, raw_html) = conn
+                .query_row(
+                    &format!(
+                        "{} WHERE m.id = ?1 AND m.account_id = ?2",
+                        MESSAGE_DETAIL_SELECT
+                    ),
+                    params![id, account_id],
+                    |row| {
+                        let raw_html: Option<String> = row.get(19)?;
+                        let list_unsubscribe: Option<String> = row.get("list_unsubscribe")?;
+                    let list_unsubscribe_post: Option<String> =
+                        row.get("list_unsubscribe_post")?;
                     let calendar_json: Option<String> = row.get("calendar_json")?;
-                    Ok(MessageDetail {
+                    let detail = MessageDetail {
                         summary: map_message_summary(row)?,
                         to: json_or_default(row.get::<_, String>(15)?),
                         cc: json_or_default(row.get::<_, String>(16)?),
                         bcc: json_or_default(row.get::<_, String>("bcc_json")?),
                         reply_to: row.get(17)?,
                         text_body: row.get(18)?,
-                        remote_images_blocked: sanitized.as_ref().is_some_and(|item| {
-                            item.blocked_images > 0 || has_remote_images(&item.html)
-                        }),
-                        html_body: sanitized.map(|item| item.html),
+                        // Set after the reader guard drops.
+                        remote_images_blocked: false,
+                        html_body: None,
                         attachments: json_or_default(row.get::<_, String>(20)?),
                         references: Vec::new(),
                         body_status: "available".into(),
@@ -740,25 +817,56 @@ impl Database {
                             _ => String::new(),
                         },
                         body_partial: row.get("body_partial")?,
-                    })
+                    };
+                    Ok((detail, raw_html))
                 },
             )
             .optional()
             .map_err(db_error)?
             .ok_or_else(|| "Message not found in the local cache.".to_string())?;
-        let raw: Option<Vec<u8>> = conn
-            .query_row(
-                // substr() of an empty or NULL blob is NULL; coalesce to an empty blob.
-                "SELECT COALESCE(substr(raw_message, 1, 16384), X'') FROM messages WHERE id=?1 AND account_id=?2",
-                params![id, account_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
+            let raw: Option<Vec<u8>> = conn
+                .query_row(
+                    // substr() of an empty or NULL blob is NULL; coalesce to an empty blob.
+                    "SELECT COALESCE(substr(raw_message, 1, 16384), X'') FROM messages WHERE id=?1 AND account_id=?2",
+                    params![id, account_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            (detail, raw_html, raw)
+        };
+        let sanitized = raw_html.as_deref().map(sanitize_stored_html);
+        detail.remote_images_blocked = sanitized
+            .as_ref()
+            .is_some_and(|item| item.blocked_images > 0 || has_remote_images(&item.html));
+        detail.html_body = sanitized.map(|item| item.html);
         if let Some(raw) = raw {
             detail.list_post = crate::mail::list_unsubscribe::list_post_address(&raw);
         }
         Ok(detail)
+    }
+
+    /// Ownership, subject, and file list only. No body and no sanitizing.
+    pub fn message_meta(&self, id: i64, account_id: &str) -> Result<MessageMeta, String> {
+        let conn = self.read_conn()?;
+        // Summary columns come first, so the extra columns go before FROM.
+        let select = MESSAGE_SUMMARY_SELECT.trim_end_matches(" FROM messages m");
+        conn.query_row(
+            &format!(
+                "{select}, m.attachments_json, m.receipt_choice FROM messages m WHERE m.id = ?1 AND m.account_id = ?2"
+            ),
+            params![id, account_id],
+            |row| {
+                Ok(MessageMeta {
+                    summary: map_message_summary(row)?,
+                    attachments: json_or_default(row.get::<_, String>("attachments_json")?),
+                    receipt_choice: row.get("receipt_choice")?,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| "Message not found in the local cache.".to_string())
     }
 
     /// Record a read-receipt choice once. A later choice does not replace it.
@@ -839,7 +947,7 @@ impl Database {
         if header_id.is_empty() {
             return Ok(None);
         }
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 &format!(
                     "{MESSAGE_SUMMARY_SELECT} WHERE m.account_id=?1 AND m.mailbox_id=?2 \
@@ -892,7 +1000,7 @@ impl Database {
     }
 
     pub fn message_content_cached(&self, id: i64, account_id: &str) -> Result<bool, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT LENGTH(raw_message) > 0 FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
@@ -1324,7 +1432,7 @@ impl Database {
     }
 
     pub fn message_rfc_id(&self, id: i64) -> Result<Option<String>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT message_id FROM messages WHERE id=?1", [id], |row| {
                 row.get(0)
             })
@@ -1339,7 +1447,7 @@ impl Database {
         mailbox: &str,
     ) -> Result<Option<u32>, String> {
         let value: Option<Option<u32>> = self
-            .conn()?
+            .read_conn()?
             .prepare_cached("SELECT uid_validity FROM mailboxes WHERE account_id=?1 AND name=?2")
             .map_err(db_error)?
             .query_row(params![account_id, mailbox], |row| row.get(0))
@@ -1354,7 +1462,7 @@ impl Database {
         mailbox: &str,
     ) -> Result<Option<MailboxSyncState>, String> {
         let value: Option<MailboxSyncState> = self
-            .conn()?
+            .read_conn()?
             .query_row(
                 "SELECT uid_validity, uid_next, server_total, server_unread FROM mailboxes WHERE account_id=?1 AND name=?2",
                 params![account_id, mailbox],
@@ -1370,7 +1478,7 @@ impl Database {
         account_id: &str,
         mailbox: &str,
     ) -> Result<Option<i64>, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row(
                 "SELECT id FROM mailboxes WHERE account_id=?1 AND name=?2",
                 params![account_id, mailbox],
@@ -1404,14 +1512,14 @@ impl Database {
         &self,
         id: i64,
     ) -> Result<(String, i64, String, u32, u64), String> {
-        self.conn()?.query_row(
+        self.read_conn()?.query_row(
             "SELECT m.account_id, m.mailbox_id, f.name, m.uid, m.size FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
             [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i64>(4)?.max(0) as u64)),
         ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
     }
 
     pub fn latest_message_rowid(&self) -> Result<i64, String> {
-        self.conn()?
+        self.read_conn()?
             .query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
                 row.get(0)
             })
@@ -1489,6 +1597,10 @@ impl Database {
         }
         if parsed.flagged {
             sql.push_str(" AND m.is_starred=1");
+        }
+        if let Some(color) = parsed.flag_color {
+            // A plain integer from the closed color list, never user text.
+            sql.push_str(&format!(" AND m.flag_color={color}"));
         }
         let identity_json = if parsed.from_self || parsed.to_self || parsed.cc_self {
             let json = serde_json::to_string(&identities).unwrap_or_else(|_| "[]".into());
@@ -1653,7 +1765,7 @@ impl Database {
         text: &str,
         limit: u32,
     ) -> Result<Vec<MessageSummary>, String> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let terms = fts_query(text);
         if terms.is_empty() {
             return Ok(Vec::new());
@@ -1684,7 +1796,7 @@ impl Database {
         if ids.len() > 200 {
             return Err("Choose up to 200 messages.".into());
         }
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut mailbox_id: Option<i64> = None;
         let mut mailbox_name = String::new();
         let mut uid_validity = 0u32;
@@ -1824,7 +1936,6 @@ impl Database {
                 let Some(validity) = self.mailbox_uid_validity(account_id, &hit.mailbox)? else {
                     continue;
                 };
-                self.set_flags(hit.id, Some(true), None)?;
                 let flag = serde_json::json!({
                     "messageId": hit.id,
                     "uid": hit.uid,
@@ -1833,11 +1944,13 @@ impl Database {
                     "isRead": true,
                     "isStarred": null,
                 });
-                self.queue_operation(
+                self.record_colored_flag_change(
                     account_id,
-                    "flags",
-                    &flag,
-                    Some(&format!("flags:{}:true:false", hit.id)),
+                    hit.id,
+                    Some(true),
+                    None,
+                    None,
+                    Some(&flag),
                 )?;
                 if let Some(rfc_id) = hit.message_id.as_deref() {
                     remember_reply_id(self, account_id, rfc_id, hit.thread_parent.as_deref())?;
@@ -2307,7 +2420,7 @@ struct MuteHit {
 }
 
 fn muted_inbox_hits(db: &Database, account_id: &str) -> Result<Vec<MuteHit>, String> {
-    let conn = db.conn()?;
+    let conn = db.read_conn()?;
     let mut statement = conn
         .prepare(
             "SELECT m.id, m.uid, m.message_id, m.thread_parent, box.name
@@ -2413,6 +2526,7 @@ mod tests {
         let database = Database::memory();
         let account = AccountRecord {
             summary: AccountSummary {
+                notify_new_mail: true,
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,

@@ -11,6 +11,8 @@ interface SyncStatusProps {
   sync: SyncState | undefined;
   progress?: SyncProgress | undefined;
   onOpenSettings?: (tab?: "accounts", accountId?: string) => void;
+  /** Render phrasing status only for embedding inside a summary button. */
+  passive?: boolean;
 }
 
 export function SyncStatus({
@@ -18,6 +20,7 @@ export function SyncStatus({
   sync,
   progress: progressProp,
   onOpenSettings,
+  passive = false,
 }: SyncStatusProps) {
   const storedProgress = useAppStore((state) => state.syncProgress);
   const progress =
@@ -72,6 +75,22 @@ export function SyncStatus({
     (phase === "syncing" || phase === "connecting") &&
     progress != null &&
     progress.envelopesTotal > 0;
+
+  if (passive) {
+    return (
+      <span className={`sync-indicator ${phase}`}>
+        <span aria-hidden="true" />
+        <span className="sync-indicator-content">
+          <span>{detail}</span>
+          {quietUntil ? (
+            <span className="quiet-hours-status">
+              {strings.mail.quietHoursUntil(quietUntil)}
+            </span>
+          ) : null}
+        </span>
+      </span>
+    );
+  }
 
   return (
     <div className={`sync-indicator ${phase}`} role="status">
