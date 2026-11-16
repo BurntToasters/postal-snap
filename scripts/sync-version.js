@@ -120,6 +120,57 @@ export function replaceChangelogDownloadVersions(changelog, version) {
   return `${updatedHeader}${rest}`;
 }
 
+const BETA_BANNER_LINES = [
+  "> [!IMPORTANT]",
+  "> Unstable releases (like this one) are released rapidly one after another to test new features. You should never install the unstable releases unless you know what you're doing.",
+];
+
+function lineEnding(text) {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+// Show the unstable banner for prereleases; comment it out for stable.
+export function syncChangelogBetaBanner(changelog, version) {
+  const eol = lineEnding(changelog);
+  const [first, second] = BETA_BANNER_LINES;
+  const active = [first, second].join(eol);
+  const hidden = [`<!-- ${first}`, second, "-->"].join(eol);
+  const next = version.includes("-") ? active : hidden;
+  for (const current of [active, hidden]) {
+    if (
+      changelog.startsWith(current) &&
+      /^(\r?\n|$)/.test(changelog.slice(current.length))
+    ) {
+      return next + changelog.slice(current.length);
+    }
+  }
+  throw new Error("CHANGELOG.md beta banner not found at the top of the file.");
+}
+
+// Add an empty section for this release above the previous notes.
+export function ensureChangelogReleaseHeading(changelog, version) {
+  const eol = lineEnding(changelog);
+  const heading = `## Changes in \`v${version}:\``;
+  if (changelog.split(/\r?\n/).some((line) => line.trimEnd() === heading)) {
+    return changelog;
+  }
+  const first = changelog.search(/^## Changes in /m);
+  if (first === -1) {
+    throw new Error("CHANGELOG.md is missing a Changes in section.");
+  }
+  return `${changelog.slice(0, first)}${heading}${eol}${eol}${changelog.slice(first)}`;
+}
+
+export function syncChangelog(changelog, version) {
+  return syncChangelogBetaBanner(
+    ensureChangelogReleaseHeading(
+      replaceChangelogDownloadVersions(changelog, version),
+      version,
+    ),
+    version,
+  );
+}
+
 export function replaceReleasingTagExamples(markdown, version) {
   const pattern =
     /`git tag -s v[^`]+ -m "Postal Snap v[^"]+"`, `git push origin v[^`]+`, then `git tag -v v[^`]+`/;
@@ -132,12 +183,19 @@ export function replaceReleasingTagExamples(markdown, version) {
   );
 }
 
-async function writeReplacedText(path, replace, version) {
-  const current = await readFile(path, "utf8");
-  await writeFile(path, replace(current, version));
-}
-
 export async function syncWorkspaceVersions(workspaceRoot, version) {
+  // Compute markdown rewrites first so marker drift aborts before any write.
+  const changelogPath = join(workspaceRoot, "CHANGELOG.md");
+  const changelog = syncChangelog(
+    await readFile(changelogPath, "utf8"),
+    version,
+  );
+  const releasingPath = join(workspaceRoot, "docs/RELEASING.md");
+  const releasing = replaceReleasingTagExamples(
+    await readFile(releasingPath, "utf8"),
+    version,
+  );
+
   const packageLockPath = join(workspaceRoot, "package-lock.json");
   const packageLock = await json(packageLockPath);
   await writeJson(
@@ -177,16 +235,8 @@ export async function syncWorkspaceVersions(workspaceRoot, version) {
       utcIsoDate(),
     ),
   );
-  await writeReplacedText(
-    join(workspaceRoot, "CHANGELOG.md"),
-    replaceChangelogDownloadVersions,
-    version,
-  );
-  await writeReplacedText(
-    join(workspaceRoot, "docs/RELEASING.md"),
-    replaceReleasingTagExamples,
-    version,
-  );
+  await writeFile(changelogPath, changelog);
+  await writeFile(releasingPath, releasing);
 }
 
 async function main() {

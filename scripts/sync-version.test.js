@@ -7,8 +7,11 @@ import { root } from "./lib/paths.js";
 import {
   cargoTomlPackageName,
   replaceCargoLockPackageVersion,
+  ensureChangelogReleaseHeading,
   replaceChangelogDownloadVersions,
   replaceMetainfoReleaseVersion,
+  syncChangelog,
+  syncChangelogBetaBanner,
   utcIsoDate,
   replacePackageLockVersion,
   replaceReleasingTagExamples,
@@ -136,6 +139,92 @@ test("replaceChangelogDownloadVersions rewrites only the download table", () => 
   );
 });
 
+// Failure modes: stable keeps the banner shown, prerelease keeps it hidden,
+// CRLF is lost, a missing or edited banner is silently skipped, or the later
+// signature [!IMPORTANT] block gets commented out.
+const BANNER_ACTIVE =
+  "> [!IMPORTANT]\n> Unstable releases (like this one) are released rapidly one after another to test new features. You should never install the unstable releases unless you know what you're doing.";
+const BANNER_HIDDEN = BANNER_ACTIVE.replace(/^/, "<!-- ") + "\n-->";
+const bannerDoc = (banner) =>
+  `${banner}\n\n# ⬇️ Downloads\n\n> [!IMPORTANT]\n> The \`.sig\` files...\n`;
+
+test("syncChangelogBetaBanner shows the banner only for prereleases", () => {
+  assert.equal(
+    syncChangelogBetaBanner(bannerDoc(BANNER_HIDDEN), "0.6.0-beta.1"),
+    bannerDoc(BANNER_ACTIVE),
+  );
+  assert.equal(
+    syncChangelogBetaBanner(bannerDoc(BANNER_ACTIVE), "0.6.0-beta.1"),
+    bannerDoc(BANNER_ACTIVE),
+  );
+  assert.equal(
+    syncChangelogBetaBanner(bannerDoc(BANNER_ACTIVE), "0.6.0"),
+    bannerDoc(BANNER_HIDDEN),
+  );
+  assert.equal(
+    syncChangelogBetaBanner(bannerDoc(BANNER_HIDDEN), "0.6.0"),
+    bannerDoc(BANNER_HIDDEN),
+  );
+});
+
+test("syncChangelogBetaBanner keeps CRLF line endings", () => {
+  const crlf = (text) => text.replace(/\n/g, "\r\n");
+  assert.equal(
+    syncChangelogBetaBanner(crlf(bannerDoc(BANNER_ACTIVE)), "0.6.0"),
+    crlf(bannerDoc(BANNER_HIDDEN)),
+  );
+  assert.equal(
+    syncChangelogBetaBanner(crlf(bannerDoc(BANNER_HIDDEN)), "0.6.0-beta.2"),
+    crlf(bannerDoc(BANNER_ACTIVE)),
+  );
+});
+
+test("syncChangelogBetaBanner fails closed when the banner is missing or edited", () => {
+  assert.throws(
+    () => syncChangelogBetaBanner("# ⬇️ Downloads\n", "0.6.0"),
+    /beta banner not found/,
+  );
+  assert.throws(
+    () =>
+      syncChangelogBetaBanner(
+        "> [!IMPORTANT]\n> Something else.\n\n# ⬇️ Downloads\n",
+        "0.6.0",
+      ),
+    /beta banner not found/,
+  );
+  assert.throws(
+    () => syncChangelogBetaBanner(`# Title\n\n${BANNER_ACTIVE}\n`, "0.6.0"),
+    /beta banner not found/,
+  );
+});
+
+// Failure modes: the heading is duplicated, lands below older notes, drops
+// the prerelease suffix, or breaks CRLF files.
+test("ensureChangelogReleaseHeading adds an empty newest-first section once", () => {
+  const changelog =
+    "# Downloads\n\n### ℹ️ Enjoying Postal Snap?\n\n## Changes in `v0.5.2:`\n\n- old\n";
+  const expected =
+    "# Downloads\n\n### ℹ️ Enjoying Postal Snap?\n\n## Changes in `v0.6.0-beta.1:`\n\n## Changes in `v0.5.2:`\n\n- old\n";
+  assert.equal(
+    ensureChangelogReleaseHeading(changelog, "0.6.0-beta.1"),
+    expected,
+  );
+  assert.equal(
+    ensureChangelogReleaseHeading(expected, "0.6.0-beta.1"),
+    expected,
+  );
+  assert.equal(ensureChangelogReleaseHeading(changelog, "0.5.2"), changelog);
+  const crlf = (text) => text.replace(/\n/g, "\r\n");
+  assert.equal(
+    ensureChangelogReleaseHeading(crlf(changelog), "0.6.0-beta.1"),
+    crlf(expected),
+  );
+  assert.throws(
+    () => ensureChangelogReleaseHeading("# Downloads\n", "0.6.0"),
+    /missing a Changes in section/,
+  );
+});
+
 test("replaceReleasingTagExamples rewrites the current signed-tag command", () => {
   const docs =
     'Tag it: `git tag -s v0.1.8 -m "Postal Snap v0.1.8"`, `git push origin v0.1.8`, then `git tag -v v0.1.8` done.';
@@ -190,9 +279,6 @@ test("committed package versions stay aligned for locked cargo commands", async 
     replaceMetainfoReleaseVersion(metainfo, pkg.version, "2099-01-01"),
     metainfo,
   );
-  assert.equal(
-    replaceChangelogDownloadVersions(changelog, pkg.version),
-    changelog,
-  );
+  assert.equal(syncChangelog(changelog, pkg.version), changelog);
   assert.equal(replaceReleasingTagExamples(releasing, pkg.version), releasing);
 });
