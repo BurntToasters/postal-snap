@@ -1,4 +1,6 @@
-use super::{db_error, map_message_summary, Database, MESSAGE_SUMMARY_SELECT};
+use super::{
+    db_error, mailboxes::effective_role_sql, map_message_summary, Database, MESSAGE_SUMMARY_SELECT,
+};
 use rusqlite::{params, OptionalExtension};
 
 use crate::models::{rule_lists, FilterMatchPreview, FilterRule, MessageSummary};
@@ -168,7 +170,7 @@ impl Database {
 
     /// Unread Inbox candidates for one rule. Bounded so a broad match cannot
     /// flood the offline queue. `newer_than_id` limits evaluation to rows
-    /// cached by the current sync pass.
+    /// durably recorded as a catch-up arrival. `None` is a retroactive apply.
     pub fn find_rule_matches(
         &self,
         account_id: &str,
@@ -180,12 +182,13 @@ impl Database {
         };
         bound.push((":account_id".into(), Box::new(account_id.to_string())));
         bound.push((":newer_than_id".into(), Box::new(newer_than_id)));
+        let effective_role = effective_role_sql("f");
         let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
-                 WHERE m.account_id=:account_id AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
-                 AND (:newer_than_id IS NULL OR m.id > :newer_than_id)
+                 WHERE m.account_id=:account_id AND {effective_role}='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
+                 AND (:newer_than_id IS NULL OR (m.notification_state & 1) != 0)
                  AND {clause}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
@@ -231,11 +234,12 @@ impl Database {
             });
         };
         bound.push((":account_id".into(), Box::new(account_id.to_string())));
+        let effective_role = effective_role_sql("f");
         let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT m.subject FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
-                 WHERE m.account_id=:account_id AND f.role='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
+                 WHERE m.account_id=:account_id AND {effective_role}='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
                  AND {clause}
                  ORDER BY m.uid DESC LIMIT 100"
             ))
@@ -772,6 +776,8 @@ mod tests {
             "Lunch",
             "amy@friends.example.com",
         );
+        db.record_new_mail_arrival("account-1", older).unwrap();
+        db.record_new_mail_arrival("account-1", newest).unwrap();
         for _ in 0..2 {
             db.create_filter_rule(&rule(
                 "account-1",
@@ -784,6 +790,34 @@ mod tests {
         let mut notices = Vec::new();
         apply_filter_rules_notifying(&db, &account, Some(older - 1), &mut |id| notices.push(id));
         assert_eq!(notices, vec![newest]);
+    }
+
+    #[test]
+    fn cache_insertion_is_not_an_arrival_until_sync_marks_it_as_one() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = inbox(&db, "account-1");
+        let id = put(
+            &db,
+            "account-1",
+            mailbox,
+            1,
+            "Server history",
+            "old@example.test",
+        );
+        assert!(db.consume_new_mail_arrival("account-1").unwrap().is_none());
+        db.record_new_mail_arrival("account-1", id).unwrap();
+        assert_eq!(
+            db.consume_new_mail_arrival("account-1")
+                .unwrap()
+                .unwrap()
+                .id,
+            id
+        );
+        assert!(db.consume_new_mail_arrival("account-1").unwrap().is_none());
+        db.record_new_mail_arrival("account-1", id).unwrap();
+        assert!(db.consume_new_mail_arrival("account-1").unwrap().is_none());
     }
 
     #[test]

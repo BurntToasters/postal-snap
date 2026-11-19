@@ -23,7 +23,7 @@ use crate::{
     },
     models::{
         IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
-        MessageSummary, SearchQuery,
+        MessageSummary, SearchQuery, ServerSearchResult,
     },
 };
 
@@ -981,17 +981,14 @@ fn validate_undo_token(token: &str) -> Result<(), String> {
 
 /// Local bookkeeping after the server committed a live move. The copies are
 /// removed and their snoozes follow to the destination, like replayed moves.
-/// Best effort: a database error must not report a completed move as failed.
+/// Best effort: this local finalization either fully commits or can be retried.
 pub(crate) fn record_live_moves(
     db: &crate::db::Database,
     account_id: &str,
     row_ids: &[i64],
-    destination_mailbox_id: i64,
+    _destination_mailbox_id: i64,
     destination: &str,
 ) {
-    for &row_id in row_ids {
-        let _ = db.mark_pending_move(row_id, destination_mailbox_id);
-    }
     let _ = db.remove_moved_messages(account_id, row_ids, destination);
 }
 
@@ -1670,7 +1667,7 @@ pub async fn search_cached_messages(
 pub async fn search_server_messages(
     query: SearchQuery,
     state: State<'_, AppState>,
-) -> CommandResult<Vec<MessageSummary>> {
+) -> CommandResult<ServerSearchResult> {
     // Search progress is shown by the search UI. It must not overwrite the
     // account's sync state, which may be reporting "Sign-in failed".
     let actor = state.actor(&query.account_id)?;
@@ -1679,6 +1676,8 @@ pub async fn search_server_messages(
     let mut hooks = SearchHooks {
         actor,
         guard: Some(guard),
+        db: state.db.clone(),
+        account_id: query.account_id.clone(),
     };
     let account = state.db.account(&query.account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
@@ -1690,9 +1689,15 @@ pub async fn search_server_messages(
 struct SearchHooks {
     actor: std::sync::Arc<super::AccountActor>,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    db: crate::db::Database,
+    account_id: String,
 }
 
 impl mail::SyncHooks for SearchHooks {
+    fn validate_connection(&self, previous: &crate::models::AccountRecord) -> Result<(), String> {
+        super::sync::validate_connection_identity(&self.db, &self.account_id, previous)
+    }
+
     fn contended(&self) -> bool {
         self.actor.contended()
     }
@@ -1810,6 +1815,32 @@ mod download_parse_settle_tests {
                 username: "sam@example.com".into(),
             },
         }
+    }
+
+    #[test]
+    fn yielded_search_rejects_a_revoked_bridge_pin() {
+        let db = Database::memory();
+        let account = test_account();
+        db.insert_account(&account).unwrap();
+        assert!(crate::commands::sync::validate_connection_identity(
+            &db,
+            &account.summary.id,
+            &account,
+        )
+        .is_ok());
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET bridge_certificate='revoked-pin' WHERE id=?1",
+                [&account.summary.id],
+            )
+            .unwrap();
+        assert!(crate::commands::sync::validate_connection_identity(
+            &db,
+            &account.summary.id,
+            &account,
+        )
+        .is_err());
     }
 
     #[test]

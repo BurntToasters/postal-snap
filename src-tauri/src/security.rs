@@ -180,6 +180,147 @@ pub fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+const MAX_IMAGE_SIDE: u64 = 16_384;
+const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+
+/// Header-only decode budget. Unknown types and unparseable headers fail closed.
+pub fn image_within_pixel_limit(bytes: &[u8], mime: &str) -> bool {
+    let Some((width, height)) = image_dimensions(bytes, mime) else {
+        return false;
+    };
+    let (width, height) = (u64::from(width), u64::from(height));
+    width > 0
+        && height > 0
+        && width <= MAX_IMAGE_SIDE
+        && height <= MAX_IMAGE_SIDE
+        && width * height <= MAX_IMAGE_PIXELS
+}
+
+fn image_dimensions(bytes: &[u8], mime: &str) -> Option<(u32, u32)> {
+    match mime {
+        "image/png" => png_dimensions(bytes),
+        "image/gif" => gif_dimensions(bytes),
+        "image/jpeg" => jpeg_dimensions(bytes),
+        "image/webp" => webp_dimensions(bytes),
+        _ => None,
+    }
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(
+        bytes.get(at..)?.get(..2)?.try_into().ok()?,
+    ))
+}
+
+fn le_u24(bytes: &[u8], at: usize) -> Option<u32> {
+    let raw = bytes.get(at..)?.get(..3)?;
+    Some(u32::from(raw[0]) | (u32::from(raw[1]) << 8) | (u32::from(raw[2]) << 16))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        bytes.get(at..)?.get(..4)?.try_into().ok()?,
+    ))
+}
+
+fn be_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        bytes.get(at..)?.get(..2)?.try_into().ok()?,
+    ))
+}
+
+fn be_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        bytes.get(at..)?.get(..4)?.try_into().ok()?,
+    ))
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    Some((be_u32(bytes, 16)?, be_u32(bytes, 20)?))
+}
+
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !(bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
+        return None;
+    }
+    Some((u32::from(le_u16(bytes, 6)?), u32::from(le_u16(bytes, 8)?)))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut pos = 2;
+    // Each pass advances by at least two bytes, so the loop is bounded.
+    while pos < bytes.len() {
+        if bytes[pos] != 0xff {
+            return None;
+        }
+        // Skip fill bytes before the marker code.
+        while bytes.get(pos + 1) == Some(&0xff) {
+            pos += 1;
+        }
+        let marker = *bytes.get(pos + 1)?;
+        pos += 2;
+        match marker {
+            0x00 | 0xd9 | 0xda => return None,
+            0x01 | 0xd0..=0xd7 => continue,
+            0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => {
+                // SOF: length, precision, height, width.
+                if be_u16(bytes, pos)? < 8 {
+                    return None;
+                }
+                let height = u32::from(be_u16(bytes, pos + 3)?);
+                let width = u32::from(be_u16(bytes, pos + 5)?);
+                return Some((width, height));
+            }
+            _ => {
+                let length = usize::from(be_u16(bytes, pos)?);
+                if length < 2 {
+                    return None;
+                }
+                pos = pos.checked_add(length)?;
+            }
+        }
+    }
+    None
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
+        return None;
+    }
+    let chunk = bytes.get(12..)?;
+    let data = chunk.get(8..)?;
+    match chunk.get(0..4)? {
+        b"VP8 " => {
+            // Frame tag, start code, then 14-bit width and height.
+            if !matches!(data.get(3..6), Some([0x9d, 0x01, 0x2a])) {
+                return None;
+            }
+            let width = u32::from(le_u16(data, 6)? & 0x3fff);
+            let height = u32::from(le_u16(data, 8)? & 0x3fff);
+            Some((width, height))
+        }
+        b"VP8L" => {
+            // Signature byte, then 14-bit width-1 and height-1.
+            if *data.first()? != 0x2f {
+                return None;
+            }
+            let bits = le_u32(data, 1)?;
+            Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+        }
+        b"VP8X" => {
+            // Flags and reserved bytes, then 24-bit canvas width-1 and height-1.
+            Some((le_u24(data, 4)? + 1, le_u24(data, 7)? + 1))
+        }
+        _ => None,
+    }
+}
+
 async fn fetch_public_image_inner(
     raw_url: &str,
     policy: ProtectionPolicy,
@@ -265,7 +406,7 @@ async fn fetch_public_image_inner(
         }
         let sniffed = detect_image_mime(&bytes)
             .ok_or_else(|| "The remote resource is not a supported image.".to_string())?;
-        if sniffed != content_type {
+        if sniffed != content_type || !image_within_pixel_limit(&bytes, sniffed) {
             return Err("The remote resource is not a supported image.".into());
         }
         return Ok(RemoteImageResult::Loaded {
@@ -673,6 +814,241 @@ mod tests {
         );
         assert_eq!(detect_image_mime(b"<html>not an image"), None);
         assert_eq!(detect_image_mime(b"GIF89a...."), Some("image/gif"));
+    }
+
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes
+    }
+
+    fn gif_header(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = b"GIF89a".to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&[0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0x3b]);
+        bytes
+    }
+
+    fn jpeg_with_sof(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+        bytes.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        bytes.extend_from_slice(&[0xff, 0xc0, 0x00, 0x11, 8]);
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&[3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        bytes.extend_from_slice(&[0xff, 0xd9]);
+        bytes
+    }
+
+    fn webp_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut bytes = kind.to_vec();
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(data);
+        let mut riff = b"RIFF".to_vec();
+        riff.extend_from_slice(&(4 + bytes.len() as u32).to_le_bytes());
+        riff.extend_from_slice(b"WEBP");
+        riff.extend_from_slice(&bytes);
+        riff
+    }
+
+    fn webp_vp8(width: u16, height: u16) -> Vec<u8> {
+        let mut data = vec![0, 0, 0, 0x9d, 0x01, 0x2a];
+        data.extend_from_slice(&width.to_le_bytes());
+        data.extend_from_slice(&height.to_le_bytes());
+        webp_chunk(b"VP8 ", &data)
+    }
+
+    fn webp_vp8l(width: u32, height: u32) -> Vec<u8> {
+        let bits = (width - 1) | ((height - 1) << 14);
+        let mut data = vec![0x2f];
+        data.extend_from_slice(&bits.to_le_bytes());
+        webp_chunk(b"VP8L", &data)
+    }
+
+    fn webp_vp8x(width: u32, height: u32) -> Vec<u8> {
+        let mut data = vec![0x10, 0, 0, 0];
+        data.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
+        data.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
+        webp_chunk(b"VP8X", &data)
+    }
+
+    #[test]
+    fn png_dimensions_are_bounded_before_decode() {
+        assert!(image_within_pixel_limit(&png_header(16, 16), "image/png"));
+        assert!(image_within_pixel_limit(
+            &png_header(16_384, 2_441),
+            "image/png"
+        ));
+        assert!(!image_within_pixel_limit(
+            &png_header(16_384, 2_442),
+            "image/png"
+        ));
+        assert!(!image_within_pixel_limit(
+            &png_header(16_385, 1),
+            "image/png"
+        ));
+        assert!(!image_within_pixel_limit(
+            &png_header(100_000, 100_000),
+            "image/png"
+        ));
+        assert!(!image_within_pixel_limit(
+            &png_header(u32::MAX, u32::MAX),
+            "image/png"
+        ));
+        assert!(!image_within_pixel_limit(&png_header(0, 16), "image/png"));
+        assert!(!image_within_pixel_limit(&png_header(16, 0), "image/png"));
+    }
+
+    #[test]
+    fn png_truncated_or_wrong_chunk_is_rejected() {
+        let full = png_header(16, 16);
+        assert!(!image_within_pixel_limit(&full[..8], "image/png"));
+        assert!(!image_within_pixel_limit(&full[..20], "image/png"));
+        let mut idat = full.clone();
+        idat[12..16].copy_from_slice(b"IDAT");
+        assert!(!image_within_pixel_limit(&idat, "image/png"));
+    }
+
+    #[test]
+    fn gif_logical_screen_is_bounded() {
+        assert!(image_within_pixel_limit(&gif_header(320, 240), "image/gif"));
+        assert!(!image_within_pixel_limit(
+            &gif_header(65_535, 65_535),
+            "image/gif"
+        ));
+        assert!(!image_within_pixel_limit(&gif_header(0, 240), "image/gif"));
+        assert!(!image_within_pixel_limit(&gif_header(320, 0), "image/gif"));
+        assert!(!image_within_pixel_limit(b"GIF89a\x10", "image/gif"));
+    }
+
+    #[test]
+    fn jpeg_sof_is_bounded_and_required() {
+        assert!(image_within_pixel_limit(
+            &jpeg_with_sof(16, 16),
+            "image/jpeg"
+        ));
+        assert!(!image_within_pixel_limit(
+            &jpeg_with_sof(60_000, 60_000),
+            "image/jpeg"
+        ));
+        assert!(!image_within_pixel_limit(
+            &jpeg_with_sof(0, 16),
+            "image/jpeg"
+        ));
+        // Fill bytes before a marker are legal.
+        let mut filled = vec![0xff, 0xd8, 0xff, 0xff];
+        filled.extend_from_slice(&jpeg_with_sof(16, 16)[2..]);
+        assert!(image_within_pixel_limit(&filled, "image/jpeg"));
+    }
+
+    #[test]
+    fn jpeg_without_sof_or_with_bad_segments_is_rejected() {
+        // SOI, DQT, EOI: no frame header.
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x03, 0x00, 0xff, 0xd9],
+            "image/jpeg"
+        ));
+        // SOS before SOF.
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02],
+            "image/jpeg"
+        ));
+        // DHT (C4) is not a frame marker, even when its payload looks like SOF0.
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xc4, 0x00, 0x04, 0xff, 0xc0, 0xff, 0xd9],
+            "image/jpeg"
+        ));
+        // Segment length zero or past the end of the buffer.
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00],
+            "image/jpeg"
+        ));
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xe0, 0xff, 0xff],
+            "image/jpeg"
+        ));
+        // SOF segment shorter than its fixed fields.
+        assert!(!image_within_pixel_limit(
+            &[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x04, 8, 0, 16, 0, 16],
+            "image/jpeg"
+        ));
+        // Truncated inside the SOF header.
+        let sof = jpeg_with_sof(16, 16);
+        assert!(!image_within_pixel_limit(&sof[..25], "image/jpeg"));
+        assert!(!image_within_pixel_limit(&[0xff, 0xd8], "image/jpeg"));
+        assert!(!image_within_pixel_limit(&[0xff, 0xd8, 0xff], "image/jpeg"));
+    }
+
+    #[test]
+    fn webp_vp8_lossy_is_bounded() {
+        assert!(image_within_pixel_limit(&webp_vp8(16, 16), "image/webp"));
+        assert!(!image_within_pixel_limit(
+            &webp_vp8(16_383, 16_383),
+            "image/webp"
+        ));
+        let mut bad_start = webp_vp8(16, 16);
+        bad_start[23] = 0x00;
+        assert!(!image_within_pixel_limit(&bad_start, "image/webp"));
+        let short = webp_vp8(16, 16);
+        assert!(!image_within_pixel_limit(&short[..24], "image/webp"));
+    }
+
+    #[test]
+    fn webp_vp8l_lossless_is_bounded() {
+        assert!(image_within_pixel_limit(&webp_vp8l(16, 16), "image/webp"));
+        assert!(!image_within_pixel_limit(
+            &webp_vp8l(16_384, 16_384),
+            "image/webp"
+        ));
+        let mut bad_signature = webp_vp8l(16, 16);
+        bad_signature[20] = 0x00;
+        assert!(!image_within_pixel_limit(&bad_signature, "image/webp"));
+        let short = webp_vp8l(16, 16);
+        assert!(!image_within_pixel_limit(&short[..21], "image/webp"));
+    }
+
+    #[test]
+    fn webp_vp8x_extended_canvas_is_bounded() {
+        assert!(image_within_pixel_limit(&webp_vp8x(100, 100), "image/webp"));
+        assert!(!image_within_pixel_limit(
+            &webp_vp8x(1 << 24, 1),
+            "image/webp"
+        ));
+        assert!(!image_within_pixel_limit(
+            &webp_vp8x(1 << 24, 1 << 24),
+            "image/webp"
+        ));
+        let short = webp_vp8x(100, 100);
+        assert!(!image_within_pixel_limit(&short[..26], "image/webp"));
+    }
+
+    #[test]
+    fn webp_unknown_chunks_and_truncated_riff_are_rejected() {
+        assert!(!image_within_pixel_limit(
+            &webp_chunk(b"ALPH", &[0; 10]),
+            "image/webp"
+        ));
+        assert!(!image_within_pixel_limit(
+            &webp_chunk(b"XYZW", &[0; 10]),
+            "image/webp"
+        ));
+        assert!(!image_within_pixel_limit(
+            b"RIFF\x04\0\0\0WEBP",
+            "image/webp"
+        ));
+        assert!(!image_within_pixel_limit(b"RIFF", "image/webp"));
+    }
+
+    #[test]
+    fn dimension_check_requires_matching_mime_and_known_type() {
+        assert!(!image_within_pixel_limit(&png_header(16, 16), "image/jpeg"));
+        assert!(!image_within_pixel_limit(&png_header(16, 16), "image/bmp"));
+        assert!(!image_within_pixel_limit(&gif_header(16, 16), "image/png"));
     }
 
     #[tokio::test]

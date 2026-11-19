@@ -16,6 +16,7 @@ const MAX_REPLAY_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from
 #[derive(Debug, Clone)]
 pub struct MailboxOperationError {
     pub terminal: bool,
+    pub needs_attention: bool,
     pub message: String,
 }
 
@@ -23,6 +24,7 @@ impl MailboxOperationError {
     pub(crate) fn transient(message: String) -> Self {
         Self {
             terminal: false,
+            needs_attention: false,
             message,
         }
     }
@@ -30,6 +32,15 @@ impl MailboxOperationError {
     pub(crate) fn terminal(message: String) -> Self {
         Self {
             terminal: true,
+            needs_attention: false,
+            message,
+        }
+    }
+
+    pub(crate) fn needs_attention(message: String) -> Self {
+        Self {
+            terminal: false,
+            needs_attention: true,
             message,
         }
     }
@@ -367,29 +378,36 @@ pub async fn copy_remote(
         ));
     }
     if options.dedupe_existing {
-        if let Some(search) = options.message_id.and_then(header_message_id_search) {
-            match matching_destination_content(
-                &mut session,
-                &wire_source,
-                &wire_destination,
-                uid,
-                expected_uid_validity,
-                &search,
-                "Copy",
-            )
-            .await?
-            {
-                ReplayContentMatch::ExistingCopy { .. } => {
-                    session.release();
-                    return Ok(());
-                }
-                ReplayContentMatch::SourceMissing => {
-                    return Err(MailboxOperationError::terminal(
-                        "This message is no longer available on the server.".to_string(),
-                    ));
-                }
-                ReplayContentMatch::NoMatch => {}
+        let search = options
+            .message_id
+            .and_then(header_message_id_search)
+            .ok_or_else(|| {
+                MailboxOperationError::needs_attention(
+                    "Copy replay cannot be verified; the offline change needs attention."
+                        .to_string(),
+                )
+            })?;
+        match matching_destination_content(
+            &mut session,
+            &wire_source,
+            &wire_destination,
+            uid,
+            expected_uid_validity,
+            &search,
+            "Copy",
+        )
+        .await?
+        {
+            ReplayContentMatch::ExistingCopy { .. } => {
+                session.release();
+                return Ok(());
             }
+            ReplayContentMatch::SourceMissing => {
+                return Err(MailboxOperationError::terminal(
+                    "This message is no longer available on the server.".to_string(),
+                ));
+            }
+            ReplayContentMatch::NoMatch => {}
         }
     }
     tokio::time::timeout(
@@ -822,6 +840,19 @@ async fn move_remote_inner(
     // Checked once per connection by the pool; saves a round trip per move.
     let can_move = session.capabilities.mv;
     let has_uidplus = session.capabilities.uidplus;
+    if options.dedupe_existing
+        && uids.len() == 1
+        && !can_move
+        && options
+            .message_id
+            .and_then(header_message_id_search)
+            .is_none()
+    {
+        return Err(MailboxOperationError::needs_attention(
+            "Fallback move replay cannot be verified; the offline change needs attention."
+                .to_string(),
+        ));
+    }
     let set = uids
         .iter()
         .map(ToString::to_string)

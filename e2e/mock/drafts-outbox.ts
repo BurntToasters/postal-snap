@@ -36,6 +36,48 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
       sentCopyRetryCount: number;
       detail: string;
     }) => localStorage.setItem(archiveWarningKey, JSON.stringify(value));
+    function serverSearchHits(args: Record<string, unknown>) {
+      const search = args.query as
+        { allFolders?: boolean; text?: string } | undefined;
+      if (search?.text?.includes("bodyonly"))
+        return [{ ...summary, id: 77, uid: 77, subject: "Server body match" }];
+      const text = search?.text?.toLowerCase() ?? "";
+      if (text.includes("elsewhere")) return [];
+      // Importance is stored locally, so the server has nothing to add.
+      if (text.includes("on:")) {
+        return [
+          {
+            ...summary,
+            id: 79,
+            uid: 79,
+            subject: "Server august",
+          },
+        ];
+      }
+      if (text.includes("body:")) {
+        return [
+          {
+            ...summary,
+            id: 78,
+            uid: 78,
+            subject: "Server receipt",
+          },
+        ];
+      }
+      if (
+        text.includes("is:important") ||
+        text.includes("is:low") ||
+        text.includes("is:pinned")
+      )
+        return [];
+      return [
+        {
+          ...summary,
+          subject: search?.allFolders ? "Across account" : "Current mailbox",
+        },
+      ];
+    }
+
     Object.assign(mock.handlers, {
       list_drafts() {
         if (!location.search.includes("localMail") || discardedDraft) return [];
@@ -531,47 +573,7 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         ];
       },
       search_server_messages(args: Record<string, unknown>) {
-        const search = args.query as
-          { allFolders?: boolean; text?: string } | undefined;
-        if (search?.text?.includes("bodyonly"))
-          return [
-            { ...summary, id: 77, uid: 77, subject: "Server body match" },
-          ];
-        const text = search?.text?.toLowerCase() ?? "";
-        if (text.includes("elsewhere")) return [];
-        // Importance is stored locally, so the server has nothing to add.
-        if (text.includes("on:")) {
-          return [
-            {
-              ...summary,
-              id: 79,
-              uid: 79,
-              subject: "Server august",
-            },
-          ];
-        }
-        if (text.includes("body:")) {
-          return [
-            {
-              ...summary,
-              id: 78,
-              uid: 78,
-              subject: "Server receipt",
-            },
-          ];
-        }
-        if (
-          text.includes("is:important") ||
-          text.includes("is:low") ||
-          text.includes("is:pinned")
-        )
-          return [];
-        return [
-          {
-            ...summary,
-            subject: search?.allFolders ? "Across account" : "Current mailbox",
-          },
-        ];
+        return { messages: serverSearchHits(args), complete: true };
       },
       save_draft(args: Record<string, unknown>) {
         const draft = args.draft as { id?: string | null } | undefined;

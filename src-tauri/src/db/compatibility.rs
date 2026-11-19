@@ -2,7 +2,7 @@ use super::{db_error, Database};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
-pub const ASSIGNABLE_ROLES: [&str; 5] = ["sent", "drafts", "archive", "junk", "trash"];
+pub const ASSIGNABLE_ROLES: [&str; 6] = ["inbox", "sent", "drafts", "archive", "junk", "trash"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

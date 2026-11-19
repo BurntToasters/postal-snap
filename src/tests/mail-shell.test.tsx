@@ -811,7 +811,7 @@ describe("mail shell", () => {
       },
     );
     mockedSearchCached.mockResolvedValue([]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
 
@@ -855,7 +855,7 @@ describe("mail shell", () => {
     };
     mockedSearchServer.mockImplementation(async () => {
       await searchPending;
-      return [staleResult];
+      return { messages: [staleResult], complete: true };
     });
 
     renderShell();
@@ -4427,7 +4427,10 @@ describe("mail shell", () => {
     const cached = { ...firstMessage, subject: "Cached match" };
     const server = { ...secondMessage, subject: "Server match" };
     mockedSearchCached.mockResolvedValue([cached]);
-    mockedSearchServer.mockResolvedValue([server]);
+    mockedSearchServer.mockResolvedValue({
+      messages: [server],
+      complete: true,
+    });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
 
@@ -4762,7 +4765,7 @@ describe("mail shell", () => {
 
   it("searches the whole account for mail from the sender", async () => {
     mockedSearchCached.mockResolvedValue([]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
     window.dispatchEvent(
@@ -4803,7 +4806,7 @@ describe("mail shell", () => {
       hasMore: false,
     });
     mockedSearchCached.mockResolvedValue([]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     renderShell();
     await screen.findByRole("option", { name: /Picnic plans/i });
     window.dispatchEvent(
@@ -4830,7 +4833,7 @@ describe("mail shell", () => {
 
   it("writes to an address and searches mail sent to it", async () => {
     mockedSearchCached.mockResolvedValue([]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
     window.dispatchEvent(
@@ -4877,7 +4880,7 @@ describe("mail shell", () => {
       subject: "Filed away",
     });
     mockedSearchCached.mockResolvedValue([filed]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     mockedGetMessage.mockImplementation(async (_accountId, messageId) => {
       if (messageId === filed.id) return toDetail(filed);
       const summary = messages.find((item) => item.id === messageId);
@@ -6220,7 +6223,7 @@ describe("mail shell", () => {
     });
     mockedListMailboxes.mockResolvedValue([inbox, trash, junk]);
     mockedSearchCached.mockResolvedValue([]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     mockedMoveMessagesToMailbox.mockResolvedValue({
       updated: 1,
       queued: 0,
@@ -6510,7 +6513,7 @@ describe("mail shell", () => {
     mockedSearchCached.mockResolvedValue([
       { ...firstMessage, subject: "Search hit" },
     ]);
-    mockedSearchServer.mockResolvedValue([]);
+    mockedSearchServer.mockResolvedValue({ messages: [], complete: true });
     renderShell();
     await screen.findByRole("option", { name: /First message/i });
 

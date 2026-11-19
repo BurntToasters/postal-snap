@@ -241,7 +241,7 @@ export const mail = {
   noOutboxMatch: "No queued messages match this search.",
   outboxEmptyBody: "This message has no text yet.",
   offlineChangesDropped:
-    "Some offline changes could not be applied and were undone.",
+    "Some offline changes could not be applied. Review the affected mail before trying again.",
   noSnoozed: "Nothing snoozed.",
   noSnoozedHint: "Snoozed messages return to your inbox when their time comes.",
   noSnoozedMatch: "No snoozed messages match this search.",
@@ -318,6 +318,9 @@ export const mail = {
   // The detail is server text: keep only its first sentence.
   partialSearch: (detail: string) =>
     `Server search unavailable. Showing cached results. ${detail.split(/(?<=[.!?])\s/)[0] ?? ""}`.trimEnd(),
+  serverSearchStopped:
+    "Server search stopped early. Some folders were not fully searched.",
+  searchMoreFolders: "Search more folders",
   noSearchResultsHint: "Check the spelling, or search all mailboxes.",
   noSearchResults: (query: string) =>
     `No messages matching "${query}". Check your spelling or try All Folders.`,

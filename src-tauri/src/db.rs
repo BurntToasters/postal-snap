@@ -49,7 +49,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 43;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 45;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
@@ -269,14 +269,6 @@ impl Database {
         Ok(lock_connection(&self.connection))
     }
 
-    /// Copy the live frontend session before taking a database read lock.
-    pub(crate) fn current_undo_session(&self) -> Result<String, String> {
-        Ok(self
-            .undo_session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone())
-    }
 }
 }
 

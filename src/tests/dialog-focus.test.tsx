@@ -123,7 +123,7 @@ describe("dialog focus trap", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("wraps Tab through dialog controls and native caption buttons", async () => {
+  it("wraps Tab only through dialog controls", async () => {
     const caption = document.createElement("div");
     caption.className = "global-window-caption-controls";
     const minimize = document.createElement("button");
@@ -139,21 +139,20 @@ describe("dialog focus trap", () => {
     fireEvent.keyDown(document, { key: "Tab" });
     expect(last).toHaveFocus();
     fireEvent.keyDown(document, { key: "Tab" });
-    expect(minimize).toHaveFocus();
-    fireEvent.keyDown(document, { key: "Tab" });
     expect(first).toHaveFocus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
-    expect(minimize).toHaveFocus();
+    expect(last).toHaveFocus();
 
     const outside = document.createElement("button");
     outside.textContent = "Outside";
     document.body.append(outside);
     outside.focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
-    expect(minimize).toHaveFocus();
+    expect(last).toHaveFocus();
     outside.focus();
     fireEvent.keyDown(document, { key: "Tab" });
     expect(first).toHaveFocus();
+    expect(minimize).not.toHaveFocus();
 
     outside.remove();
     caption.remove();

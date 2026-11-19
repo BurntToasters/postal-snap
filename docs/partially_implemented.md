@@ -42,7 +42,7 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Colored flags need server keywords**: a server that does not allow `$MailFlagBit0/1/2` keeps a plain `\Flagged` flag. The color is not stored there and does not sync to Apple Mail.
 - **Junk training needs server keywords**: `$Junk` and `$NotJunk` are written only when PERMANENTFLAGS allows them. Otherwise moves into or out of Junk do not train the server filter.
 - **`.eml` viewer never loads remote images**: opened files have no consent path for remote content. This is intentional for 0.5.2.
-- **Attachment and message drag-out deferred to 0.5.3**: `start_attachment_drag` and `start_message_drag` are registered stubs that return "Not available yet." Linux has no planned drag-out.
+- **Attachment and message drag-out deferred to a later release**: `start_attachment_drag` and `start_message_drag` are registered stubs that return "Not available yet." Linux has no planned drag-out.
 - **Store manifests lack the `.eml` association**: the direct config declares it in `src-tauri/tauri.conf.json` (`fileAssociations`). The MSIX manifest from `scripts/msstore-pack.js` and the Flatpak desktop entry (`packaging/flatpak/run.rosie.snap.desktop`) do not yet declare `message/rfc822`.
 - **Traffic-light position is unverified visually**: `MAC_TRAFFIC_LIGHTS` (18, 22) in `src-tauri/src/main.rs` must be checked on macOS in all three densities.
 - **PDF preview is partial**: only the first 20 pages render, each at most 1600 px wide. Encrypted or malformed files show an unavailable state.

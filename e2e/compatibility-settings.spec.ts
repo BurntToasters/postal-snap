@@ -128,6 +128,7 @@ test("folder assignments stay isolated and return to automatic", async ({
   await page.goto("/?multiAccount=1&nestedFolders=1");
   await openAccount(page);
   await page.getByRole("button", { name: "Folders", exact: true }).click();
+  await expect(page.getByLabel("Inbox folder", { exact: true })).toBeVisible();
   const sent = page.getByLabel("Sent folder", { exact: true });
   expect(
     await sent

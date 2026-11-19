@@ -29,11 +29,11 @@ use super::{
     MAX_MESSAGE_BYTES,
 };
 use crate::{
-    db::{CachedMessage, Database},
+    db::{mailboxes::effective_inbox_name, parse_role, CachedMessage, Database},
     models::{
         mailbox_role_assignment, AccountRecord, AccountSetupRequest, CachePolicy, MailboxRole,
-        MessageSummary, ProviderKind, SearchQuery, ServerConfig, ROLE_SOURCE_NAME,
-        ROLE_SOURCE_SPECIAL_USE,
+        MessageSummary, ProviderKind, SearchQuery, ServerConfig, ServerSearchResult,
+        ROLE_SOURCE_NAME, ROLE_SOURCE_SPECIAL_USE,
     },
     security::redact_error,
 };
@@ -449,11 +449,13 @@ impl PassBudget {
     }
 }
 
-/// Which folders a pass covers. `Folders` takes its list from the cache, so
-/// it never reconciles the folder list or evicts.
+/// Which folders a pass covers. Scoped variants take names from the cache, so
+/// they never reconcile the folder list or evict. `Inbox` resolves the
+/// account's effective Inbox at pass time; `also` adds extra cached folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncScope {
     All,
+    Inbox { also: Vec<String> },
     Folders(Vec<String>),
 }
 
@@ -514,7 +516,8 @@ pub async fn sync_account_scoped<H: SyncHooks>(
                 },
             }
         }
-        SyncScope::Folders(names) => folders_in_scope(db, account_id, names)?,
+        SyncScope::Inbox { also } => folders_in_scope(db, account_id, also, true)?,
+        SyncScope::Folders(names) => folders_in_scope(db, account_id, names, false)?,
     };
     let usage = db.account_cache_usage(account_id, policy.max_bytes)?;
     let mut budget = PassBudget {
@@ -574,38 +577,50 @@ pub(crate) fn reconcile_scope(
 ) -> Result<(), String> {
     match scope {
         SyncScope::All => db.reconcile_mailboxes(account_id, server_names),
-        SyncScope::Folders(_) => Ok(()),
+        SyncScope::Inbox { .. } | SyncScope::Folders(_) => Ok(()),
     }
 }
 
 /// Folders named by a scoped pass, read from the cache. Unknown names are
-/// skipped: the next full pass creates them. The stored role source is kept,
-/// because the upsert writes it back.
+/// skipped: the next full pass creates them. `inbox` resolves the effective
+/// Inbox name, so an assignment and a raw role never both join one pass. The
+/// stored raw role and source are kept, because the upsert writes them back.
 fn folders_in_scope(
     db: &Database,
     account_id: &str,
     names: &[String],
+    inbox: bool,
 ) -> Result<Vec<ListedFolder>, String> {
+    let inbox_name = inbox.then(|| effective_inbox_name(db, account_id));
     let cached = db.list_mailboxes(account_id)?;
-    let sources: std::collections::HashMap<String, String> = {
+    let raw_roles: std::collections::HashMap<String, (MailboxRole, String)> = {
         let conn = db.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT name, role_source FROM mailboxes WHERE account_id=?1")
+            .prepare("SELECT name, role, role_source FROM mailboxes WHERE account_id=?1")
             .map_err(|_| "Mail folders could not be read.".to_string())?;
         let rows = statement
             .query_map([account_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    parse_role(&row.get::<_, String>(1)?),
+                    row.get::<_, String>(2)?,
+                ))
             })
             .map_err(|_| "Mail folders could not be read.".to_string())?
-            .collect::<Result<_, _>>()
+            .collect::<Result<Vec<(String, MailboxRole, String)>, _>>()
             .map_err(|_| "Mail folders could not be read.".to_string())?;
-        rows
+        rows.into_iter()
+            .map(|(name, role, source)| (name, (role, source)))
+            .collect()
     };
     Ok(cached
         .into_iter()
-        .filter(|folder| names.contains(&folder.name))
+        .filter(|folder| {
+            names.contains(&folder.name) || inbox_name.as_deref() == Some(folder.name.as_str())
+        })
         .map(|folder| {
-            let role_source = match sources.get(&folder.name).map(String::as_str) {
+            let raw = raw_roles.get(&folder.name);
+            let role_source = match raw.map(|(_, source)| source.as_str()) {
                 Some(ROLE_SOURCE_SPECIAL_USE) => ROLE_SOURCE_SPECIAL_USE,
                 _ => ROLE_SOURCE_NAME,
             };
@@ -613,7 +628,7 @@ fn folders_in_scope(
                 skip_prefetch: matches!(folder.role, MailboxRole::Junk | MailboxRole::Trash),
                 name: folder.name,
                 delimiter: folder.delimiter,
-                role: folder.role,
+                role: raw.map_or(folder.role, |(role, _)| role.clone()),
                 role_source,
                 prefetched: None,
             }
@@ -756,6 +771,7 @@ async fn sync_folder<H: SyncHooks>(
     let Some(uid_validity) = selected.uid_validity else {
         return Err("Mailbox identity is unavailable.".into());
     };
+    let record_arrivals = db.mailbox_effective_role(account_id, &folder.name)? == "inbox";
 
     let max_uid = db.max_uid(mailbox_id)?;
     let mut new_fetched = 0u32;
@@ -772,6 +788,7 @@ async fn sync_folder<H: SyncHooks>(
             mailbox_id,
             EnvelopeRange::Sequence(start, selected.exists),
             cutoff.as_ref(),
+            false,
         )
         .await?;
         new_fetched = fetched.count;
@@ -817,6 +834,7 @@ async fn sync_folder<H: SyncHooks>(
                 mailbox_id,
                 EnvelopeRange::UidSet(super::folders::uid_set(chunk)?),
                 cutoff.as_ref(),
+                record_arrivals,
             )
             .await?;
             new_fetched = new_fetched.saturating_add(fetched.count);
@@ -962,6 +980,7 @@ async fn cache_envelopes(
     mailbox_id: i64,
     range: EnvelopeRange,
     cutoff: Option<&DateTime<Utc>>,
+    arrivals: bool,
 ) -> Result<EnvelopeBatch, String> {
     let query = format!("{ENVELOPE_QUERY_PREFIX}<0.{}>)", MAX_MESSAGE_BYTES + 1);
     let mut fetched = match range {
@@ -1034,7 +1053,11 @@ async fn cache_envelopes(
     let writer = db.clone();
     let owner = account_id.to_string();
     tokio::task::spawn_blocking(move || {
-        writer.upsert_envelopes(&owner, mailbox_id, &parsed_rows)?;
+        if arrivals {
+            writer.upsert_arrival_envelopes(&owner, mailbox_id, &parsed_rows)?;
+        } else {
+            writer.upsert_envelopes(&owner, mailbox_id, &parsed_rows)?;
+        }
         writer.reconcile_flag_colors(mailbox_id, &colors)?;
         let _ = writer.repair_thread_roots(&owner, &threaded);
         Ok::<(), String>(())
@@ -1112,6 +1135,7 @@ async fn backfill_batch(
                 mailbox_id,
                 EnvelopeRange::Sequence(start, sequence - 1),
                 cutoff,
+                false,
             )
             .await?;
             if start == 1 {
@@ -1142,6 +1166,7 @@ async fn backfill_batch(
                 mailbox_id,
                 EnvelopeRange::Uid(start, oldest - 1),
                 cutoff,
+                false,
             )
             .await?
         }
@@ -1795,6 +1820,7 @@ pub async fn refresh_mailbox_envelopes(
                 mailbox_id,
                 EnvelopeRange::Sequence(start, selected.exists),
                 cutoff.as_ref(),
+                false,
             )
             .await?;
             let state = if start == 1 {
@@ -1817,6 +1843,7 @@ pub async fn refresh_mailbox_envelopes(
                 mailbox_id,
                 EnvelopeRange::UidOpen(start),
                 cutoff.as_ref(),
+                false,
             )
             .await?;
         }
@@ -1861,7 +1888,7 @@ fn should_purge_stale_generation(previous: Option<u32>, selected: Option<u32>) -
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum IdleOutcome {
-    /// The server reported a change in INBOX.
+    /// The server reported a change in the effective Inbox.
     Changed,
     /// Nothing happened before the refresh interval.
     Timeout,
@@ -1869,14 +1896,17 @@ pub enum IdleOutcome {
     Interrupted,
 }
 
-/// Wait in IDLE on INBOX using the account's pooled session. Servers without
-/// IDLE are polled: the wait simply sleeps for `limit` (capped at two minutes).
+/// Wait in IDLE on the effective Inbox using the account's pooled session.
+/// A custom assignment keeps push when the dedicated watcher is unavailable;
+/// servers without IDLE are polled for `limit` (capped at two minutes).
 pub async fn idle_inbox(
+    db: &Database,
     account: &AccountRecord,
     password: &str,
     wake: &Notify,
     limit: Duration,
 ) -> Result<IdleOutcome, String> {
+    let target = effective_inbox_name(db, &account.summary.id);
     let mut lease = pool::checkout(account, password).await?;
     if !lease.capabilities.idle {
         lease.release();
@@ -1885,7 +1915,8 @@ pub async fn idle_inbox(
             _ = wake.notified() => IdleOutcome::Interrupted,
         });
     }
-    if let Err(error) = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine("INBOX"))
+    let wire_target = lease.mailbox_name(&target);
+    if let Err(error) = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_target))
         .await
         .map_err(|_| "Inbox monitoring timed out.".to_string())
         .and_then(|result| result.map_err(|error| redact_error(&error, "Inbox monitoring")))
@@ -1942,7 +1973,7 @@ pub async fn server_search<H: SyncHooks>(
     password: &str,
     query: &SearchQuery,
     hooks: &mut H,
-) -> Result<Vec<MessageSummary>, String> {
+) -> Result<ServerSearchResult, String> {
     let parsed = crate::search_query::parse(&query.text);
     let mut mailboxes = if query.all_folders {
         db.list_mailboxes(&account.summary.id)?
@@ -1971,17 +2002,18 @@ pub async fn server_search<H: SyncHooks>(
             })
         });
         if mailboxes.is_empty() {
-            return Ok(Vec::new());
+            return Ok(complete_search(Vec::new()));
         }
     }
     let mailboxes = mailboxes
         .into_iter()
         .map(|mailbox| (mailbox.id, mailbox.name))
         .collect::<Vec<_>>();
+    let mailboxes = folders_after_resume(&mailboxes, query.resume_after_mailbox_id)?.to_vec();
     let identities =
         crate::search_query::search_identities(&account.summary.email, &account.summary.aliases);
     let Some(criteria) = parsed.imap_criteria_with(&identities) else {
-        return Ok(Vec::new());
+        return Ok(complete_search(Vec::new()));
     };
     let mut lease = pool::checkout(account, password).await?;
     let filter = ServerHitFilter {
@@ -1991,17 +2023,33 @@ pub async fn server_search<H: SyncHooks>(
         smaller_than: parsed.smaller_than,
     };
     let mut results = Vec::new();
-    // Bound all-folders searches; a later search resumes from fresh results.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    for (index, (mailbox_id, name)) in mailboxes.into_iter().enumerate() {
-        if tokio::time::Instant::now() >= deadline {
+    // Bound the call; a later call resumes after the last finished folder.
+    let budget = tokio::time::Instant::now() + SERVER_SEARCH_BUDGET;
+    let ceiling = tokio::time::Instant::now() + SERVER_SEARCH_FIRST_FOLDER_CEILING;
+    let mut complete = true;
+    let mut last_finished = None;
+    for (index, (mailbox_id, name)) in mailboxes.iter().enumerate() {
+        let first = index == 0;
+        let limit = folder_limit(query.all_folders, first, budget, ceiling);
+        if tokio::time::Instant::now() >= limit {
+            complete = false;
             break;
         }
         if index > 0 {
             lease = yield_point(lease, hooks, account, password).await?;
         }
+        let mut cut_short = false;
         match search_mailbox(
-            &mut lease, db, account, query, &criteria, &filter, mailbox_id, &name, deadline,
+            &mut lease,
+            db,
+            account,
+            query,
+            &criteria,
+            &filter,
+            *mailbox_id,
+            name,
+            limit,
+            &mut cut_short,
         )
         .await
         {
@@ -2011,6 +2059,13 @@ pub async fn server_search<H: SyncHooks>(
                 return Err(error);
             }
         }
+        if cut_short {
+            complete = false;
+            last_finished =
+                cut_resume_point(query.all_folders, first, *mailbox_id).or(last_finished);
+            break;
+        }
+        last_finished = Some(*mailbox_id);
     }
     lease.release();
     results.sort_by(|left, right| {
@@ -2021,7 +2076,69 @@ pub async fn server_search<H: SyncHooks>(
     });
     results.dedup_by_key(|message| (message.mailbox_id, message.uid));
     results.truncate(query.limit.min(500) as usize);
-    Ok(results)
+    Ok(ServerSearchResult {
+        messages: results,
+        complete,
+        resume_after_mailbox_id: resume_point(query.all_folders, complete, last_finished),
+    })
+}
+
+fn complete_search(messages: Vec<MessageSummary>) -> ServerSearchResult {
+    ServerSearchResult {
+        messages,
+        complete: true,
+        resume_after_mailbox_id: None,
+    }
+}
+
+/// Folders after the resume point, in list order. A missing id is an error,
+/// because restarting from the top would repeat results without progress.
+fn folders_after_resume(
+    mailboxes: &[(i64, String)],
+    resume_after: Option<i64>,
+) -> Result<&[(i64, String)], String> {
+    let Some(id) = resume_after else {
+        return Ok(mailboxes);
+    };
+    let position = mailboxes
+        .iter()
+        .position(|(mailbox_id, _)| *mailbox_id == id)
+        .ok_or_else(|| {
+            "Server search position is no longer available. Search again.".to_string()
+        })?;
+    Ok(&mailboxes[position + 1..])
+}
+
+const SERVER_SEARCH_BUDGET: Duration = Duration::from_secs(30);
+/// Longer than the budget, so one large first folder still finishes or advances.
+const SERVER_SEARCH_FIRST_FOLDER_CEILING: Duration = Duration::from_secs(120);
+
+/// Deadline for one folder. Only the first folder of an all-folder call gets the ceiling.
+fn folder_limit(
+    all_folders: bool,
+    first: bool,
+    budget: tokio::time::Instant,
+    ceiling: tokio::time::Instant,
+) -> tokio::time::Instant {
+    if all_folders && first {
+        ceiling
+    } else {
+        budget
+    }
+}
+
+/// A first folder cut by its ceiling is skipped past, so the next call advances.
+fn cut_resume_point(all_folders: bool, first: bool, mailbox_id: i64) -> Option<i64> {
+    (all_folders && first).then_some(mailbox_id)
+}
+
+/// The resume point is only useful for all-folder searches that stopped early.
+fn resume_point(all_folders: bool, complete: bool, last_finished: Option<i64>) -> Option<i64> {
+    if all_folders && !complete {
+        last_finished
+    } else {
+        None
+    }
 }
 
 struct ServerHitFilter {
@@ -2067,6 +2184,10 @@ impl ServerHitFilter {
 
 const SERVER_SEARCH_UID_CHUNK: usize = 50;
 
+fn search_arrival_uid(effective_inbox: bool, previous_uid_next: Option<u32>, uid: u32) -> bool {
+    effective_inbox && previous_uid_next.is_some_and(|floor| uid >= floor)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn search_mailbox(
     lease: &mut Lease,
@@ -2078,6 +2199,7 @@ async fn search_mailbox(
     mailbox_id: i64,
     name: &str,
     deadline: tokio::time::Instant,
+    cut_short: &mut bool,
 ) -> Result<Vec<MessageSummary>, String> {
     let mut results = Vec::new();
     let hit_limit = query.limit.min(500) as usize;
@@ -2086,6 +2208,10 @@ async fn search_mailbox(
         .await
         .map_err(|_| "Server search timed out.".to_string())?
         .map_err(|error| redact_error(&error, "Server search"))?;
+    let effective_inbox = db.mailbox_effective_role(&account.summary.id, name)? == "inbox";
+    let previous_uid_next = db
+        .mailbox_sync_state(&account.summary.id, name)?
+        .and_then(|state| state.1);
     if let Some(expected_uid_validity) = db.mailbox_uid_validity(&account.summary.id, name)? {
         match selected.uid_validity {
             None => {
@@ -2117,7 +2243,11 @@ async fn search_mailbox(
     );
     let mut threaded = Vec::new();
     for chunk in uids.chunks(SERVER_SEARCH_UID_CHUNK) {
-        if tokio::time::Instant::now() >= deadline || results.len() >= hit_limit {
+        if results.len() >= hit_limit {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            *cut_short = true;
             break;
         }
         let set = chunk
@@ -2147,7 +2277,15 @@ async fn search_mailbox(
                 })
             })
             .collect::<Vec<_>>();
-        db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+        if let Some(floor) = previous_uid_next.filter(|floor| {
+            parsed
+                .iter()
+                .any(|message| search_arrival_uid(effective_inbox, Some(*floor), message.uid))
+        }) {
+            db.upsert_search_arrival_envelopes(&account.summary.id, mailbox_id, &parsed, floor)?;
+        } else {
+            db.upsert_envelopes(&account.summary.id, mailbox_id, &parsed)?;
+        }
         db.reconcile_flag_colors(mailbox_id, &colors)?;
         for item in &fetched {
             let Some(uid) = item.uid else {
@@ -2726,10 +2864,126 @@ mod scope_tests {
             0,
         )
         .unwrap();
-        let folders = folders_in_scope(&db, &id, &["Archive".into(), "Missing".into()]).unwrap();
+        let folders =
+            folders_in_scope(&db, &id, &["Archive".into(), "Missing".into()], false).unwrap();
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].name, "Archive");
         assert_eq!(folders[0].role, MailboxRole::Archive);
+    }
+
+    // Effective Inbox scope failure modes:
+    // 1. A scoped wake scans literal INBOX while Settings assigns another folder.
+    // 2. The raw INBOX joins the same pass as the assigned folder.
+    #[test]
+    fn inbox_scope_preserves_the_raw_role_of_the_effective_assignment() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let id = account.summary.id.clone();
+        let receipts = db
+            .upsert_mailbox_with_source(
+                &id,
+                "Receipts",
+                &MailboxRole::Other,
+                ROLE_SOURCE_NAME,
+                Some(1),
+                Some(1),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        db.upsert_mailbox_with_source(
+            &id,
+            "INBOX",
+            &MailboxRole::Inbox,
+            ROLE_SOURCE_NAME,
+            Some(1),
+            Some(1),
+            Some(0),
+            0,
+        )
+        .unwrap();
+        db.set_folder_assignment(&id, "inbox", Some(receipts))
+            .unwrap();
+
+        let scoped = folders_in_scope(&db, &id, &[], true).unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].name, "Receipts");
+        assert_eq!(scoped[0].role, MailboxRole::Other);
+        db.prepare_mailbox_for_sync(
+            &id,
+            &scoped[0].name,
+            &scoped[0].role,
+            scoped[0].role_source,
+            Some(1),
+        )
+        .unwrap();
+        db.set_folder_assignment(&id, "inbox", None).unwrap();
+        assert_eq!(db.mailbox_effective_role(&id, "Receipts").unwrap(), "other");
+        assert_eq!(db.mailbox_effective_role(&id, "INBOX").unwrap(), "inbox");
+    }
+
+    #[test]
+    fn server_search_marks_only_new_uids_in_the_effective_inbox_as_arrivals() {
+        use super::search_arrival_uid;
+        assert!(!search_arrival_uid(false, Some(50), 51));
+        assert!(!search_arrival_uid(true, None, 51));
+        assert!(!search_arrival_uid(true, Some(50), 49));
+        assert!(search_arrival_uid(true, Some(50), 50));
+    }
+
+    // Failure cases for resume selection:
+    // 1. A resume id missing from the folder list must error, not restart.
+    // 2. Resuming at the last folder leaves nothing to search.
+    // 3. No resume id searches every folder.
+    // 4. An empty folder list has nothing to resume.
+    // 5. A cut-short search never records a resume point.
+    #[test]
+    fn server_search_resume_skips_only_finished_folders() {
+        use super::{folders_after_resume, resume_point};
+        let folders = vec![
+            (1, "INBOX".to_string()),
+            (2, "Archive".to_string()),
+            (3, "Sent".to_string()),
+        ];
+        let ids = |slice: &[(i64, String)]| slice.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(folders_after_resume(&folders, None).unwrap()),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            ids(folders_after_resume(&folders, Some(1)).unwrap()),
+            [2, 3]
+        );
+        assert!(folders_after_resume(&folders, Some(3)).unwrap().is_empty());
+        assert!(folders_after_resume(&folders, Some(99)).is_err());
+        assert!(folders_after_resume(&[], None).unwrap().is_empty());
+        assert!(folders_after_resume(&[], Some(1)).is_err());
+        assert_eq!(resume_point(true, false, Some(2)), Some(2));
+        assert_eq!(resume_point(true, true, Some(3)), None);
+        assert_eq!(resume_point(false, false, Some(1)), None);
+        assert_eq!(resume_point(true, false, None), None);
+    }
+
+    // Failure cases for the time budget:
+    // 1. A single-mailbox search must keep the 30 s budget, not the ceiling.
+    // 2. The first folder of an all-folder call gets the ceiling.
+    // 3. Later folders of an all-folder call keep the 30 s budget.
+    // 4. A single-mailbox cut must not record a resume point.
+    // 5. A first-folder ceiling cut records that folder, so calls advance.
+    // 6. A later-folder cut keeps the earlier resume point.
+    #[test]
+    fn server_search_time_budget_always_advances() {
+        use super::{cut_resume_point, folder_limit};
+        let now = tokio::time::Instant::now();
+        let budget = now + std::time::Duration::from_secs(30);
+        let ceiling = now + std::time::Duration::from_secs(120);
+        assert_eq!(folder_limit(false, true, budget, ceiling), budget);
+        assert_eq!(folder_limit(true, true, budget, ceiling), ceiling);
+        assert_eq!(folder_limit(true, false, budget, ceiling), budget);
+        assert_eq!(cut_resume_point(false, true, 7), None);
+        assert_eq!(cut_resume_point(true, true, 7), Some(7));
+        assert_eq!(cut_resume_point(true, false, 7), None);
     }
 
     // Failure modes for the prefetch rule:

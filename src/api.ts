@@ -48,6 +48,7 @@ import type {
   FilterMatchPreview,
   FilterRule,
   SearchQuery,
+  ServerSearchResult,
   SyncState,
   SyncProgress,
   SendOutcome,
@@ -542,7 +543,7 @@ export const api = {
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchServer: (query: SearchQuery) =>
-    call<MessageSummary[]>("search_server_messages", { query }),
+    call<ServerSearchResult>("search_server_messages", { query }),
   listRecentSearches: (accountId: string) =>
     call<string[]>("list_recent_searches", { accountId }),
   rememberSearch: (accountId: string, query: string) =>

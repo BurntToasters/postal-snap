@@ -51,6 +51,7 @@ import { HighlightedText } from "../HighlightedText";
 import { RowActions } from "./rowActions";
 import { highlightTerms } from "../../searchHighlight";
 import { ImportanceMark, MessageRow, MessageWhen } from "./messageRow";
+import { ServerSearchNotice } from "./ServerSearchNotice";
 import { useAppStore } from "../../store";
 import { groupThreads, pinnedFirst } from "../../threads";
 import type { MessageSummary } from "../../types";
@@ -172,6 +173,7 @@ export function MessageList({
   showFolders = false,
   onClearSearch,
   onSearchAllFolders,
+  serverSearchStopped,
   emptyLabel,
   selecting,
   selectedIds,
@@ -209,6 +211,8 @@ export function MessageList({
   onClearSearch?: () => void;
   /** Widen a mailbox search that found nothing. */
   onSearchAllFolders?: () => void;
+  /** Set when a server search stopped early; onSearchMore is omitted if it cannot continue. */
+  serverSearchStopped?: { onSearchMore?: () => void };
   emptyLabel?: string;
   selecting?: boolean;
   selectedIds?: number[];
@@ -719,6 +723,12 @@ export function MessageList({
           title={strings.mail.noSearchResults(searchQuery)}
           hint={strings.mail.noSearchResultsHint}
         >
+          {serverSearchStopped ? (
+            <ServerSearchNotice
+              loading={loading}
+              onSearchMore={serverSearchStopped.onSearchMore}
+            />
+          ) : null}
           {onSearchAllFolders || onClearSearch ? (
             <div className="list-state-actions">
               {onSearchAllFolders ? (
@@ -1460,78 +1470,86 @@ export function MessageList({
   }
 
   return (
-    <div
-      className={`message-list${showSizes ? " show-sizes" : ""}`}
-      ref={listRef}
-      onPointerDown={() => {
-        pointerPick.current = true;
-      }}
-      onKeyDown={() => {
-        pointerPick.current = false;
-      }}
-      onScroll={() => {
-        const top = listRef.current?.scrollTop ?? 0;
-        if (scrollKey) rememberListScroll(scrollKey, top);
-        if (top < estimates.row / 2) setNewAtTop(false);
-      }}
-    >
-      {newAtTop ? (
-        <button
-          type="button"
-          className="new-messages"
-          onClick={() => {
-            if (listRef.current) listRef.current.scrollTop = 0;
-            setNewAtTop(false);
-          }}
-        >
-          {strings.mail.newMessages}
-        </button>
+    <>
+      {serverSearchStopped ? (
+        <ServerSearchNotice
+          loading={loading}
+          onSearchMore={serverSearchStopped.onSearchMore}
+        />
       ) : null}
       <div
-        role={hasThreadedGroups ? "tree" : "listbox"}
-        aria-label={strings.mail.messages}
-        aria-busy={loading}
-        aria-multiselectable={selecting ? true : undefined}
-        className="message-list-items"
-        style={{ height: virtualizer.getTotalSize() }}
+        className={`message-list${showSizes ? " show-sizes" : ""}`}
+        ref={listRef}
+        onPointerDown={() => {
+          pointerPick.current = true;
+        }}
+        onKeyDown={() => {
+          pointerPick.current = false;
+        }}
+        onScroll={() => {
+          const top = listRef.current?.scrollTop ?? 0;
+          if (scrollKey) rememberListScroll(scrollKey, top);
+          if (top < estimates.row / 2) setNewAtTop(false);
+        }}
       >
-        {renderedRows.map((virtualRow) => {
-          const item = items[virtualRow.index];
-          if (!item) return null;
-          // The next line's selection hides this row's separator (no :has()).
-          const next = items[virtualRow.index + 1];
-          const precedesSelection =
-            next?.kind === "option" &&
-            next.option.kind === "message" &&
-            rowStates(next.option.message, next.option.groupKey).isSelected;
-          return (
-            <div
-              key={virtualRow.key}
-              role="none"
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
-              className="virtual-row"
-              style={{ transform: `translateY(${virtualRow.start}px)` }}
-            >
-              {item.kind === "day"
-                ? renderDay(item)
-                : renderOption(item.option, item.groupEnd, precedesSelection)}
-            </div>
-          );
-        })}
-      </div>
-      {hasMore ? (
-        <button
-          type="button"
-          className="load-more-button"
-          onClick={() => void onLoadMore()}
-          disabled={loading}
+        {newAtTop ? (
+          <button
+            type="button"
+            className="new-messages"
+            onClick={() => {
+              if (listRef.current) listRef.current.scrollTop = 0;
+              setNewAtTop(false);
+            }}
+          >
+            {strings.mail.newMessages}
+          </button>
+        ) : null}
+        <div
+          role={hasThreadedGroups ? "tree" : "listbox"}
+          aria-label={strings.mail.messages}
+          aria-busy={loading}
+          aria-multiselectable={selecting ? true : undefined}
+          className="message-list-items"
+          style={{ height: virtualizer.getTotalSize() }}
         >
-          {loading
-            ? strings.mail.loadingOlder
-            : (loadMoreLabel ?? strings.mail.loadOlder)}
-        </button>
-      ) : null}
-    </div>
+          {renderedRows.map((virtualRow) => {
+            const item = items[virtualRow.index];
+            if (!item) return null;
+            // The next line's selection hides this row's separator (no :has()).
+            const next = items[virtualRow.index + 1];
+            const precedesSelection =
+              next?.kind === "option" &&
+              next.option.kind === "message" &&
+              rowStates(next.option.message, next.option.groupKey).isSelected;
+            return (
+              <div
+                key={virtualRow.key}
+                role="none"
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                className="virtual-row"
+                style={{ transform: `translateY(${virtualRow.start}px)` }}
+              >
+                {item.kind === "day"
+                  ? renderDay(item)
+                  : renderOption(item.option, item.groupEnd, precedesSelection)}
+              </div>
+            );
+          })}
+        </div>
+        {hasMore ? (
+          <button
+            type="button"
+            className="load-more-button"
+            onClick={() => void onLoadMore()}
+            disabled={loading}
+          >
+            {loading
+              ? strings.mail.loadingOlder
+              : (loadMoreLabel ?? strings.mail.loadOlder)}
+          </button>
+        ) : null}
+      </div>
+    </>
   );
 }

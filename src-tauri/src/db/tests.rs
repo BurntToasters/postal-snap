@@ -253,7 +253,7 @@ fn deferred_move_past_its_due_time_replays_without_commit() {
 }
 
 #[test]
-fn live_undo_session_keeps_expired_moves_and_their_dependencies_held() {
+fn live_undo_session_releases_expired_moves_but_keeps_future_moves_held() {
     let (db, account_id, _inbox, archive, message_id) = deferred_fixture();
     let session = db.begin_undo_session().unwrap();
     let token = format!("{session}{}", "a".repeat(32));
@@ -276,13 +276,15 @@ fn live_undo_session_keeps_expired_moves_and_their_dependencies_held() {
         )
         .unwrap();
 
-    assert!(db.queued_operations(&account_id).unwrap().is_empty());
+    let expired = db.queued_operations(&account_id).unwrap();
+    assert_eq!(
+        expired.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
+        ["move", "flags"]
+    );
     assert!(db.next_deferred_due(&account_id).unwrap().is_none());
-    assert_eq!(db.undo_deferred(&account_id, &token).unwrap(), (1, false));
-    let queued = db.queued_operations(&account_id).unwrap();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].1, "flags");
 
+    let (db, account_id, _inbox, archive, message_id) = deferred_fixture();
+    let session = db.begin_undo_session().unwrap();
     let commit_token = format!("{session}{}", "e".repeat(32));
     db.defer_moves(
         &account_id,
@@ -295,7 +297,15 @@ fn live_undo_session_keeps_expired_moves_and_their_dependencies_held() {
         future(3600),
     )
     .unwrap();
-    assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
+    db.queue_operation(
+        &account_id,
+        "flags",
+        &serde_json::json!({"messageId":message_id,"uid":1,"mailbox":"INBOX","uidValidity":2,"isRead":true}),
+        Some(&format!("flags:{message_id}:true:false")),
+    )
+    .unwrap();
+    assert!(db.queued_operations(&account_id).unwrap().is_empty());
+    assert!(db.next_deferred_due(&account_id).unwrap().is_some());
     db.commit_deferred(&account_id, &commit_token).unwrap();
     assert_eq!(db.queued_operations(&account_id).unwrap().len(), 2);
     assert!(db.next_deferred_due(&account_id).unwrap().is_none());
@@ -566,6 +576,8 @@ fn migration_37_upgrades_v36_database_preserving_offline_ops() {
         connection
             .execute_batch(
                 "DROP INDEX offline_ops_not_before;
+                     DROP INDEX offline_ops_account_state_due;
+                     ALTER TABLE offline_ops DROP COLUMN state;
                      ALTER TABLE offline_ops DROP COLUMN attempts;
                      ALTER TABLE offline_ops DROP COLUMN undo_token;
                      ALTER TABLE offline_ops DROP COLUMN not_before;
@@ -580,14 +592,17 @@ fn migration_37_upgrades_v36_database_preserving_offline_ops() {
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
     assert_eq!(version, CURRENT_SCHEMA_VERSION);
-    let (count, attempts, not_before_is_null): (i64, i64, bool) = conn
+    let (count, attempts, not_before_is_null, state): (i64, i64, bool, String) = conn
         .query_row(
-            "SELECT COUNT(*),MIN(attempts),MIN(not_before IS NULL) FROM offline_ops",
+            "SELECT COUNT(*),MIN(attempts),MIN(not_before IS NULL),MIN(state) FROM offline_ops",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
-    assert_eq!((count, attempts, not_before_is_null), (1, 0, true));
+    assert_eq!(
+        (count, attempts, not_before_is_null, state.as_str()),
+        (1, 0, true, "queued")
+    );
 }
 
 #[test]
@@ -2747,6 +2762,7 @@ fn search_indexes_cached_body_and_offline_ops_are_ordered() {
             mailbox_id: Some(mailbox),
             text: "sandwich".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap();
@@ -3265,6 +3281,7 @@ fn clearing_downloads_preserves_envelopes_and_subject_search() {
             mailbox_id: Some(mailbox),
             text: "picnic".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -3310,6 +3327,7 @@ fn message_detail_reads_payload_columns_and_scopes_account() {
             mailbox_id: Some(mailbox),
             text: "hidden@example.com".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -4917,6 +4935,7 @@ fn multi_account_isolation_and_operations() {
             text: "project".into(),
             limit: 10,
             all_folders: true,
+            resume_after_mailbox_id: None,
         })
         .unwrap();
     assert_eq!(res1.len(), 1);
@@ -5898,6 +5917,7 @@ fn search_operators_filter_and_rank() {
             mailbox_id: Some(inbox),
             text: text.into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -5941,6 +5961,7 @@ fn search_operators_filter_and_rank() {
             mailbox_id: Some(inbox),
             text: text.into(),
             all_folders: true,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -6038,6 +6059,7 @@ fn search_me_matches_this_account_not_a_lookalike() {
             mailbox_id: Some(inbox),
             text: text.into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -6087,6 +6109,7 @@ fn search_cc_matches_copied_addresses_only() {
             mailbox_id: Some(inbox),
             text: text.into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -6125,6 +6148,7 @@ fn search_muted_matches_the_conversation_only() {
             mailbox_id: Some(inbox),
             text: "is:muted".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -6137,6 +6161,7 @@ fn search_muted_matches_the_conversation_only() {
             mailbox_id: Some(inbox),
             text: text.into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         })
         .unwrap()
@@ -6660,6 +6685,7 @@ fn cleared_and_removed_mail_is_not_left_on_disk() {
 // 3. A caught parser panic is retried like an ordinary failure.
 // 4. A finished parse leaves an unfinished count behind.
 // 5. Opening a quarantined message parses it again.
+// 6. The default 90-day cutoff ages out the fixed date; use a full policy.
 #[test]
 fn interrupted_parse_quarantines_only_repeat_crashes() {
     let db = Database::memory();
@@ -6673,7 +6699,7 @@ fn interrupted_parse_quarantines_only_repeat_crashes() {
         db.upsert_message(&account.summary.id, inbox, &envelope)
             .unwrap();
     }
-    let policy = CachePolicy::default();
+    let policy = full(0);
     let candidates = |db: &Database| {
         let mut uids = db
             .prefetch_candidates(inbox, &policy, 10, u64::MAX, u64::MAX)
@@ -6781,6 +6807,7 @@ async fn guarded_parse_counts_attempts_on_every_path() {
 // 1. The flag survives a full download, or a full row is marked partial.
 // 2. A partial row with an empty text body is re-selected for prefetch forever.
 // 3. Clearing downloads leaves the flag set, so the message never refetches.
+// 4. The default 90-day cutoff ages out the fixed date; use a full policy.
 #[test]
 fn partial_body_flag_follows_the_stored_body() {
     let db = Database::memory();
@@ -6798,7 +6825,7 @@ fn partial_body_flag_follows_the_stored_body() {
         .find(|item| item.uid == 1)
         .unwrap()
         .id;
-    let policy = CachePolicy::default();
+    let policy = full(0);
     let is_candidate = |db: &Database| {
         db.prefetch_candidates(inbox, &policy, 10, u64::MAX, u64::MAX)
             .unwrap()
@@ -7724,4 +7751,216 @@ fn import_remote_draft_does_not_resurrect_deleted_draft() {
         db.list_drafts(&account.summary.id).unwrap().is_empty(),
         "deleted draft tombstone must not be resurrected by remote import"
     );
+}
+
+// Effective Inbox role failure modes:
+// 1. Raw-Other with explicit Inbox assignment must count in account totals.
+// 2. Rules and previews must scan the assigned Inbox, not the raw role.
+// 3. High-water and newest-unread must see the assigned Inbox.
+// 4. Moving the assignment must not add another raw-role folder.
+// 5. Watcher/IDLE targets the assignment or falls back before discovery.
+// 6. No assignment keeps raw-role fallback; accounts stay isolated.
+// 7. Role queries leave UIDVALIDITY, ids, and queued work untouched.
+#[test]
+fn effective_inbox_assignment_drives_counts_rules_arrivals_and_targets() {
+    let db = Database::memory();
+    db.insert_account(&account()).unwrap();
+    db.insert_account(&account_with_id("account-2", "lee@example.com"))
+        .unwrap();
+    let remember = |name: &str, role: &MailboxRole| {
+        db.upsert_mailbox("account-1", name, role, Some(1), Some(2), None, 1)
+            .unwrap()
+    };
+    let raw = remember("INBOX", &MailboxRole::Inbox);
+    let second = remember("Second Inbox", &MailboxRole::Inbox);
+    let custom = remember("Receipts", &MailboxRole::Other);
+    let other_account = db
+        .upsert_mailbox(
+            "account-2",
+            "INBOX",
+            &MailboxRole::Inbox,
+            Some(1),
+            Some(2),
+            None,
+            1,
+        )
+        .unwrap();
+
+    for (mailbox, uid, subject) in [
+        (custom, 1, "Assigned power bill"),
+        (raw, 2, "Raw power bill"),
+        (second, 3, "Second power bill"),
+    ] {
+        let mut value = message(uid, "2026-08-18T12:00:00Z");
+        value.subject = subject.into();
+        value.sender_address = "bills@power.example.com".into();
+        db.upsert_message("account-1", mailbox, &value).unwrap();
+    }
+    let mut foreign = message(4, "2026-08-18T13:00:00Z");
+    foreign.subject = "Other account power bill".into();
+    foreign.sender_address = "bills@power.example.com".into();
+    db.upsert_message("account-2", other_account, &foreign)
+        .unwrap();
+
+    let id = |mailbox, uid| db.message_summary_by_uid(mailbox, uid).unwrap().unwrap().id;
+    let custom_message = id(custom, 1);
+    let raw_message = id(raw, 2);
+    let second_message = id(second, 3);
+    let other_message = id(other_account, 4);
+    assert!(custom_message < raw_message && raw_message < second_message);
+    let custom_meta = db.mailbox_sync_meta(custom).unwrap();
+    db.queue_operation(
+        "account-1",
+        "flags",
+        &serde_json::json!({"messageId": custom_message, "mailbox": "Receipts", "uid": 1, "uidValidity": 1, "isRead": true}),
+        None,
+    )
+    .unwrap();
+
+    let assign = |mailbox_id| {
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO folder_assignments(account_id,role,mailbox_id) VALUES(?1,'inbox',?2)
+                 ON CONFLICT(account_id,role) DO UPDATE SET mailbox_id=excluded.mailbox_id",
+                rusqlite::params!["account-1", mailbox_id],
+            )
+            .unwrap();
+    };
+    let clear = || {
+        db.conn()
+            .unwrap()
+            .execute(
+                "DELETE FROM folder_assignments WHERE account_id='account-1' AND role='inbox'",
+                [],
+            )
+            .unwrap();
+    };
+    let counts = || {
+        db.list_account_inbox_counts()
+            .unwrap()
+            .into_iter()
+            .map(|count| (count.account_id, count.unread_count, count.total_count))
+            .collect::<Vec<_>>()
+    };
+    let roles = || {
+        db.list_mailboxes("account-1")
+            .unwrap()
+            .into_iter()
+            .map(|mailbox| (mailbox.name, mailbox.role))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let rule = |field: &str, contains: &str| {
+        let mut rule = filter_rule("account-1");
+        rule.field = field.into();
+        rule.contains = contains.into();
+        rule
+    };
+    let matched = |rule: &FilterRule| {
+        db.find_rule_matches("account-1", rule, None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, uid, folder, mailbox_id)| (uid, folder, mailbox_id))
+            .collect::<Vec<_>>()
+    };
+
+    // 1. The explicitly assigned raw-Other folder is the account's Inbox.
+    assign(custom);
+    assert_eq!(
+        counts(),
+        vec![("account-1".into(), 1, 1), ("account-2".into(), 1, 1),]
+    );
+    let assigned_roles = roles();
+    assert_eq!(assigned_roles["Receipts"], MailboxRole::Inbox);
+    assert_eq!(assigned_roles["INBOX"], MailboxRole::Other);
+    assert_eq!(assigned_roles["Second Inbox"], MailboxRole::Other);
+
+    // 2. Rules and previews only see the assigned folder.
+    let power = rule("subject", "power");
+    assert_eq!(matched(&power), vec![(1, "Receipts".into(), custom)]);
+    let preview = db.preview_rule_matches("account-1", &power).unwrap();
+    assert_eq!(preview.matched, 1);
+    assert_eq!(preview.subjects, vec!["Assigned power bill"]);
+
+    // 3. Arrival high-water and notification selection follow the assignment.
+    assert_eq!(
+        db.inbox_high_water("account-1").unwrap(),
+        Some(custom_message)
+    );
+    assert_eq!(
+        db.newest_unread_inbox_after("account-1", None)
+            .unwrap()
+            .map(|message| message.id),
+        Some(custom_message)
+    );
+
+    // 4. Moving the assignment moves every Inbox-derived behavior at once.
+    assign(second);
+    assert_eq!(
+        counts(),
+        vec![("account-1".into(), 1, 1), ("account-2".into(), 1, 1),]
+    );
+    let moved_roles = roles();
+    assert_eq!(moved_roles["Second Inbox"], MailboxRole::Inbox);
+    assert_eq!(moved_roles["INBOX"], MailboxRole::Other);
+    assert_eq!(moved_roles["Receipts"], MailboxRole::Other);
+    assert_eq!(matched(&power), vec![(3, "Second Inbox".into(), second)]);
+    assert_eq!(
+        db.inbox_high_water("account-1").unwrap(),
+        Some(second_message)
+    );
+    assert_eq!(
+        db.newest_unread_inbox_after("account-1", None)
+            .unwrap()
+            .map(|message| message.id),
+        Some(second_message)
+    );
+
+    // 6. Clearing the assignment restores the automatic raw-role fallback.
+    clear();
+    assert_eq!(
+        counts(),
+        vec![("account-1".into(), 2, 2), ("account-2".into(), 1, 1),]
+    );
+    assert_eq!(
+        db.inbox_high_water("account-1").unwrap(),
+        Some(second_message)
+    );
+    assert_eq!(
+        db.newest_unread_inbox_after("account-1", None)
+            .unwrap()
+            .map(|message| message.id),
+        Some(second_message)
+    );
+    assert_eq!(
+        matched(&power),
+        vec![(3, "Second Inbox".into(), second), (2, "INBOX".into(), raw)]
+    );
+    assert_eq!(
+        db.preview_rule_matches("account-1", &power)
+            .unwrap()
+            .matched,
+        2
+    );
+    assert_eq!(roles()["Receipts"], MailboxRole::Other);
+    assert_eq!(
+        db.message_summary_by_uid(other_account, 4)
+            .unwrap()
+            .unwrap()
+            .id,
+        other_message
+    );
+
+    // 7. Role resolution never rewrites mailbox identity or queued work.
+    assert_eq!(
+        db.mailbox(custom).unwrap(),
+        ("account-1".into(), "Receipts".into())
+    );
+    let after = db.mailbox_sync_meta(custom).unwrap();
+    assert_eq!(after.uid_validity, custom_meta.uid_validity);
+    assert_eq!(after.uid_next, custom_meta.uid_next);
+    let queued = db.queued_operations("account-1").unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].1, "flags");
+    assert!(queued[0].2.contains(&custom_message.to_string()));
 }

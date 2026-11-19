@@ -268,7 +268,12 @@ fn main() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 .traffic_light_position(MAC_TRAFFIC_LIGHTS);
-            #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
+            // Native glass needs a transparent surface; the base config stays
+            // opaque for macOS Store and Linux builds.
+            #[cfg(any(
+                target_os = "windows",
+                all(target_os = "macos", feature = "macos-vibrancy")
+            ))]
             let window_builder = window_builder.transparent(true);
             // Frameless custom caption (IYERIS/Zinnia). Do not attach a Win32
             // menubar onto this HWND — muda paints it through glass on activate.

@@ -13,6 +13,7 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { attachArtifactsAfterEach } from "./ipc";
+import { appPrimaryModifier } from "./keyboard";
 
 test.afterEach(attachArtifactsAfterEach);
 
@@ -533,26 +534,9 @@ const INLINE_TARGETS = [
 ].join(", ");
 
 // Undersized targets on the current tree, matched exactly. Any other undersized
-// target fails; a fixed target must be removed here. Compact's reader actions
-// and filter pills are 28px (floor: --target-size, 32px).
-const REPORTED_UNDERSIZED: Record<string, string[]> = {
-  "compact|1": [
-    "list: control input.[] 28.0<32",
-    ...[
-      "Flag",
-      "Archive",
-      "More actions",
-      "Move to trash",
-      "Next message",
-      "Previous message",
-    ].map(
-      (name) => `thread: control button.reader-icon-action[${name}] 28.0<32`,
-    ),
-    ...["Forward", "Reply all", "Reply"].map(
-      (name) => `thread: control button.reader-reply-action[${name}] 28.0<32`,
-    ),
-  ],
-};
+// target fails; a fixed target must be removed here. Every density meets the
+// floor (--target-size, 32px); this list is empty.
+const REPORTED_UNDERSIZED: Record<string, string[]> = {};
 
 type Floors = { control: number; inline: number };
 type TargetScan = { checked: number; minSize: number; small: string[] };
@@ -1760,7 +1744,7 @@ test.describe("0.5.2 density matrix (failure modes FM1-FM38)", () => {
     await page
       .locator(".message-row")
       .nth(0)
-      .click({ modifiers: ["ControlOrMeta"] });
+      .click({ modifiers: [await appPrimaryModifier(page)] });
     await expect(
       page.getByRole("toolbar", { name: /selected/i }),
     ).toBeVisible();

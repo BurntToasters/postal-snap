@@ -11,9 +11,29 @@ import { strings } from "../i18n";
 import type { MessageListFilter } from "../listFilter";
 import type { MessageListSort } from "../listSort";
 import { useAppStore } from "../store";
-import type { MessageCursor } from "../types";
-import { mergeSearchResults } from "../components/mail/mailSearch";
+import type { MessageCursor, SearchQuery, ServerSearchResult } from "../types";
+import {
+  appendServerSearchResults,
+  mergeSearchResults,
+} from "../components/mail/mailSearch";
 import { errorText } from "../errors";
+
+/** A server search that stopped early. The resume id is null when it cannot continue. */
+interface ServerSearchMore {
+  accountId: string;
+  mailboxId?: number;
+  text: string;
+  allFolders: boolean;
+  resumeAfterMailboxId: number | null;
+}
+
+function serverSearchMoreFor(
+  server: ServerSearchResult,
+  base: Omit<ServerSearchMore, "resumeAfterMailboxId">,
+): ServerSearchMore | null {
+  if (server.complete) return null;
+  return { ...base, resumeAfterMailboxId: server.resumeAfterMailboxId ?? null };
+}
 
 interface Options {
   listFilter: MessageListFilter;
@@ -52,6 +72,8 @@ export function useMailboxMessages({
   const appendMessages = useAppStore((state) => state.appendMessages);
   const setError = useAppStore((state) => state.setError);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [serverSearchMoreState, setServerSearchMore] =
+    useState<ServerSearchMore | null>(null);
 
   // The worker polls the open folder more often; tell it which one is open.
   useEffect(() => {
@@ -275,6 +297,7 @@ export function useMailboxMessages({
       allFolders: searchAllFolders,
       limit: 250,
     };
+    setServerSearchMore(null);
     setLoadingMessages(true);
     try {
       const cached = await api.searchCached(search);
@@ -297,8 +320,21 @@ export function useMailboxMessages({
           search.text,
           search.allFolders,
         )
-      )
-        setMessages(mergeSearchResults(cached, server), undefined, false);
+      ) {
+        setMessages(
+          mergeSearchResults(cached, server.messages),
+          undefined,
+          false,
+        );
+        setServerSearchMore(
+          serverSearchMoreFor(server, {
+            accountId,
+            mailboxId,
+            text,
+            allFolders: searchAllFolders,
+          }),
+        );
+      }
     } catch (cause) {
       if (
         searchStillCurrent(
@@ -328,11 +364,81 @@ export function useMailboxMessages({
     searchStillCurrent,
   ]);
 
+  // Shown only while the same search is still on screen.
+  const serverSearchMore =
+    serverSearchMoreState &&
+    serverSearchMoreState.accountId === activeAccountId &&
+    serverSearchMoreState.mailboxId === activeMailboxId &&
+    serverSearchMoreState.text === submittedQuery &&
+    !activeLocalView
+      ? serverSearchMoreState
+      : null;
+
+  /** Continues a stopped all-folder search after the last finished folder. */
+  const searchMoreFolders = useCallback(async () => {
+    const more = serverSearchMore;
+    const resume = more?.resumeAfterMailboxId;
+    if (!more || resume == null || loadingMessages) return;
+    const request = ++searchRequestRef.current;
+    setLoadingMessages(true);
+    try {
+      const server = await api.searchServer({
+        accountId: more.accountId,
+        mailboxId: more.mailboxId,
+        text: more.text,
+        allFolders: more.allFolders,
+        limit: 250,
+        resumeAfterMailboxId: resume,
+      } satisfies SearchQuery);
+      if (
+        searchStillCurrent(
+          request,
+          more.accountId,
+          more.mailboxId,
+          more.text,
+          more.allFolders,
+        )
+      ) {
+        setMessages(
+          appendServerSearchResults(
+            useAppStore.getState().messages,
+            server.messages,
+          ),
+          undefined,
+          false,
+        );
+        setServerSearchMore(serverSearchMoreFor(server, more));
+      }
+    } catch (cause) {
+      if (
+        searchStillCurrent(
+          request,
+          more.accountId,
+          more.mailboxId,
+          more.text,
+          more.allFolders,
+        )
+      )
+        setError(strings.mail.partialSearch(errorText(cause)));
+    } finally {
+      if (request === searchRequestRef.current) setLoadingMessages(false);
+    }
+  }, [
+    serverSearchMore,
+    loadingMessages,
+    searchRequestRef,
+    searchStillCurrent,
+    setError,
+    setMessages,
+  ]);
+
   return {
     loadMessages,
     loadMoreMessages,
     runSearch,
     canDownloadOlder,
     loadingMessages,
+    serverSearchMore,
+    searchMoreFolders,
   };
 }

@@ -120,16 +120,12 @@ export function useDialogFocus(
       if (event.key !== "Tab" || !trapFocus || event.defaultPrevented) return;
       const items = [
         ...currentDialog.querySelectorAll<HTMLElement>(focusable),
-        ...document.querySelectorAll<HTMLElement>(
-          ".global-window-caption-controls button",
-        ),
       ].filter(isSequentiallyFocusable);
       if (items.length === 0) return;
       const firstItem = items[0];
       const lastItem = items.at(-1)!;
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
-      // Include the real window controls without leaking focus into inert mail.
-      // Explicit traversal also handles the caption controls' separate DOM root.
+      // Keep modal traversal inside the dialog, including on frameless Windows.
       if (currentIndex >= 0) {
         event.preventDefault();
         items[

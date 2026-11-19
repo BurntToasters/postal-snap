@@ -745,7 +745,9 @@ pub(crate) async fn preview_bytes(
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"
     ) {
         // Declared type alone is not trusted: sniff the bytes too.
-        if security::detect_image_mime(&bytes) != Some(content_type) {
+        if security::detect_image_mime(&bytes) != Some(content_type)
+            || !security::image_within_pixel_limit(&bytes, content_type)
+        {
             return Err("This image format is not supported.".into());
         }
         return Ok(AttachmentPreview {
@@ -987,6 +989,7 @@ pub fn pasted_image(data: &str) -> Result<(Vec<u8>, &'static str, String), Strin
         return Err("That image is too large.".into());
     }
     let mime = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     let extension = match mime {
         "image/jpeg" => "jpg",
@@ -1164,6 +1167,7 @@ pub async fn read_message_inline_image(
         return Err("This inline image is too large.".into());
     }
     let sniffed = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "This inline image format is not supported.".to_string())?;
     if sniffed != attachment.content_type {
         return Err("This inline image format is not supported.".into());
@@ -1200,6 +1204,7 @@ pub async fn read_compose_image(
             BoundedFileError::Unavailable => "Could not read that image.".to_string(),
         })?;
     let mime = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
@@ -1294,8 +1299,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let image = dir.path().join("preview.png");
-        let bytes = b"\x89PNG\r\n\x1a\npreview";
-        std::fs::write(&image, bytes).unwrap();
+        // A 1x1 PNG header, so the header-only pixel budget accepts it.
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0preview");
+        std::fs::write(&image, &bytes).unwrap();
         let (app, _app_dir, account_id) = compose_preview_app(&image, "preview-token");
         let state = app.app_handle().state::<AppState>();
 

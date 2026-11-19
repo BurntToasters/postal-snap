@@ -441,6 +441,14 @@ export interface SearchQuery {
   text: string;
   allFolders: boolean;
   limit: number;
+  /** Continue an all-folder server search after this mailbox. */
+  resumeAfterMailboxId?: number;
+}
+
+export interface ServerSearchResult {
+  messages: MessageSummary[];
+  complete: boolean;
+  resumeAfterMailboxId?: number | null;
 }
 
 export interface SyncState {
@@ -694,7 +702,7 @@ export interface AccountConnection {
   blockers?: { queuedChanges: number; unsentMessages: number };
 }
 export interface FolderAssignment {
-  role: "sent" | "drafts" | "archive" | "junk" | "trash";
+  role: "inbox" | "sent" | "drafts" | "archive" | "junk" | "trash";
   mailboxId: number | null;
   missing: boolean;
 }

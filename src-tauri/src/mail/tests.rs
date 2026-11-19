@@ -567,6 +567,7 @@ async fn bridge_recovery_protocol_integration() {
             mailbox_id: Some(renamed.id),
             text: "subject:Project".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         },
         &mut Uncontended,
@@ -574,7 +575,7 @@ async fn bridge_recovery_protocol_integration() {
     .await
     .unwrap();
     assert_eq!(
-        search.len(),
+        search.messages.len(),
         1,
         "search should select the renamed wire name"
     );
@@ -2228,6 +2229,7 @@ async fn bridge_server_search_refuses_missing_examine_uid_validity_integration()
             mailbox_id: Some(mailbox_id),
             text: "Synthetic".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 25,
         },
         &mut Uncontended,
@@ -2864,13 +2866,14 @@ async fn greenmail_protocol_integration() {
             mailbox_id: Some(summary.mailbox_id),
             text: "protocol check".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 25,
         },
         &mut Uncontended,
     )
     .await
     .unwrap();
-    assert!(!search.is_empty());
+    assert!(!search.messages.is_empty());
 
     let draft_message_id = "<draft-22222222-2222-4222-8222-222222222222-1@run.rosie.snap>";
     let draft_bytes = prepare_draft_message(&account, &draft, draft_message_id)
@@ -2929,7 +2932,7 @@ async fn greenmail_protocol_integration() {
     wake.notify_one();
     tokio::time::timeout(
         Duration::from_secs(5),
-        idle_inbox(&account, password, &wake, Duration::from_secs(120)),
+        idle_inbox(&db, &account, password, &wake, Duration::from_secs(120)),
     )
     .await
     .expect("IDLE interruption timed out")
@@ -3510,13 +3513,13 @@ async fn icloud_live_sync_timing() {
     let wake = tokio::sync::Notify::new();
     for round in 1..=3 {
         let step = Instant::now();
-        let outcome = idle_inbox(&account, &password, &wake, Duration::from_secs(15)).await;
+        let outcome = idle_inbox(&db, &account, &password, &wake, Duration::from_secs(15)).await;
         eprintln!("idle {round}: {:?} -> {outcome:?}", step.elapsed());
     }
     // Get Mail interrupts IDLE; this is how long it waits for the lock.
     let step = Instant::now();
     let (outcome, ()) = tokio::join!(
-        idle_inbox(&account, &password, &wake, Duration::from_secs(60)),
+        idle_inbox(&db, &account, &password, &wake, Duration::from_secs(60)),
         async {
             tokio::time::sleep(Duration::from_secs(2)).await;
             wake.notify_one();
@@ -4362,14 +4365,15 @@ async fn search_mailbox_reconciles_flag_colors() {
             mailbox_id: Some(inbox),
             text: "Flagged".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 20,
         },
         &mut Uncontended,
     )
     .await
     .unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].flag_color, 2);
+    assert_eq!(hits.messages.len(), 1);
+    assert_eq!(hits.messages[0].flag_color, 2);
     pool::forget(&account_id);
     server.abort();
 }

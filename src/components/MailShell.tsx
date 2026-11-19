@@ -395,6 +395,8 @@ export function MailShell({ onOpenSettings }: Props) {
   }
 
   const mailboxRequest = useRef(0);
+  // Count-only refreshes; a full load also takes one so it can own mailboxes.
+  const countsRequest = useRef(0);
   const messageRequest = useRef(0);
   const pagingRequest = useRef(0);
   const searchRequest = useRef(0);
@@ -450,6 +452,7 @@ export function MailShell({ onOpenSettings }: Props) {
     if (previousAccountId.current === activeAccountId) return;
     previousAccountId.current = activeAccountId;
     mailboxRequest.current += 1;
+    countsRequest.current += 1;
     messageRequest.current += 1;
     pagingRequest.current += 1;
     beginMessageOpen();
@@ -470,6 +473,7 @@ export function MailShell({ onOpenSettings }: Props) {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
     const request = ++mailboxRequest.current;
+    const counts = ++countsRequest.current;
     try {
       const [mailboxesResult, draftsResult, outboxResult, snoozedResult] =
         await Promise.allSettled([
@@ -483,7 +487,11 @@ export function MailShell({ onOpenSettings }: Props) {
         useAppStore.getState().activeAccountId !== accountId
       )
         return;
-      if (mailboxesResult.status === "fulfilled")
+      // A newer count refresh owns mailboxes; drafts and friends still apply.
+      if (
+        mailboxesResult.status === "fulfilled" &&
+        counts === countsRequest.current
+      )
         setMailboxes(mailboxesResult.value);
       if (draftsResult.status === "fulfilled") setDrafts(draftsResult.value);
       if (outboxResult.status === "fulfilled") setOutbox(outboxResult.value);
@@ -511,17 +519,17 @@ export function MailShell({ onOpenSettings }: Props) {
   const loadMailboxCounts = useCallback(async () => {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
-    const request = ++mailboxRequest.current;
+    const request = ++countsRequest.current;
     try {
       const mailboxes = await api.listMailboxes(accountId);
       if (
-        request !== mailboxRequest.current ||
+        request !== countsRequest.current ||
         useAppStore.getState().activeAccountId !== accountId
       )
         return;
       setMailboxes(mailboxes);
     } catch (cause) {
-      if (request === mailboxRequest.current) setError(errorText(cause));
+      if (request === countsRequest.current) setError(errorText(cause));
     }
   }, [activeAccountId, setError, setMailboxes]);
 
@@ -540,6 +548,8 @@ export function MailShell({ onOpenSettings }: Props) {
     runSearch,
     canDownloadOlder,
     loadingMessages,
+    serverSearchMore,
+    searchMoreFolders,
   } = useMailboxMessages({
     listFilter,
     listSort,
@@ -1555,6 +1565,16 @@ export function MailShell({ onOpenSettings }: Props) {
                 hasMoreMessages ? undefined : strings.mail.loadOlderFromServer
               }
               searchQuery={submittedQuery}
+              serverSearchStopped={
+                serverSearchMore
+                  ? {
+                      onSearchMore:
+                        serverSearchMore.resumeAfterMailboxId == null
+                          ? undefined
+                          : () => void searchMoreFolders(),
+                    }
+                  : undefined
+              }
               showFolders={Boolean(submittedQuery) && allFolders}
               selecting={selecting}
               selectedIds={selectedIds}

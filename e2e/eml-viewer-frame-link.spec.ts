@@ -36,9 +36,25 @@ async function setOpenedMessage(page: Page, fields: Record<string, unknown>) {
 }
 
 async function openViewer(page: Page, fields: Record<string, unknown>) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__POSTAL_SNAP_TEST__?.eventListeners.get("eml-opened")?.size ??
+          0,
+      ),
+    )
+    .toBeGreaterThan(0);
   await setOpenedMessage(page, fields);
   await emitTauriEvent(page, "eml-opened", { token: "opened-eml-1" });
   await expect(dialog(page)).toBeVisible();
+}
+
+// The viewer's body frame renders after the dialog opens; wait for its link before emitting.
+async function waitForViewerLink(page: Page, text: string) {
+  await expect(
+    dialog(page).frameLocator("iframe").getByRole("link", { name: text }),
+  ).toBeVisible();
 }
 
 async function openedUrls(page: Page): Promise<string[]> {
@@ -59,6 +75,7 @@ test("a frame link in an opened file on the setup screen reaches link confirmati
     "sandbox",
     SANDBOX,
   );
+  await waitForViewerLink(page, FILE_LINK);
 
   page.once("dialog", async (native) => {
     expect(native.message()).toContain("files.example.test");
@@ -83,6 +100,7 @@ test("a mailto link in an opened file with no account says so and opens nothing"
   await openViewer(page, {
     htmlBody: `<p><a href="${MAILTO}">Email Riley</a></p>`,
   });
+  await waitForViewerLink(page, "Email Riley");
 
   await emitTauriEvent(page, "frame-link", MAILTO);
 
@@ -128,6 +146,7 @@ test("with a reader mounted, the mismatch warning names the viewer's link text",
   await openViewer(page, {
     htmlBody: `<p>Sign here: <a href="${FILE_LINK}">${SIGN_TEXT}</a></p>`,
   });
+  await waitForViewerLink(page, SIGN_TEXT);
 
   page.once("dialog", async (native) => {
     const text = native.message();

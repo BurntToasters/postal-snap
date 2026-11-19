@@ -14,6 +14,31 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountInboxCount, MailboxRole, MailboxSummary, ROLE_SOURCE_NAME};
 
+/// One definition of a mailbox's effective role. Explicit assignment wins;
+/// otherwise the raw role applies unless another folder claimed it.
+pub(crate) fn effective_role_sql(alias: &str) -> String {
+    debug_assert!(
+        alias
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+        "internal SQL alias must be a simple identifier"
+    );
+    format!(
+        "COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id={alias}.account_id AND a.mailbox_id={alias}.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id={alias}.account_id AND a.role={alias}.role) THEN 'other' ELSE {alias}.role END)"
+    )
+}
+
+/// Inbox target for watchers and Inbox-scoped sync. Explicit assignment wins,
+/// then the best raw Inbox. Literal INBOX is the safe fallback until folders
+/// are discovered or while an assigned folder is unavailable.
+pub(crate) fn effective_inbox_name(db: &Database, account_id: &str) -> String {
+    db.mailbox_for_role(account_id, "inbox")
+        .ok()
+        .flatten()
+        .map(|(_, name)| name)
+        .unwrap_or_else(|| "INBOX".into())
+}
+
 database_operations! {
 impl Database {
     /// Mark UIDNEXT unknown so the next pass does not treat the folder as
@@ -85,7 +110,8 @@ impl Database {
             // UIDs from the old generation cannot target recycled server UIDs.
             transaction
                 .execute(
-                    "DELETE FROM offline_ops WHERE account_id=?1 AND ((kind='flags' AND json_extract(payload,'$.mailbox')=?2) OR (kind='move' AND json_extract(payload,'$.source')=?2))",
+                    "UPDATE offline_ops SET state='needs_attention',not_before=NULL,undo_token=NULL
+                     WHERE account_id=?1 AND ((kind IN ('flags','keyword') AND json_extract(payload,'$.mailbox')=?2) OR (kind IN ('move','copy') AND json_extract(payload,'$.source')=?2))",
                     params![account_id, name],
                 )
                 .map_err(db_error)?;
@@ -190,7 +216,8 @@ impl Database {
             // them here instead of letting replay act on recycled UIDs.
             transaction
                 .execute(
-                    "DELETE FROM offline_ops WHERE account_id=?1 AND ((kind='flags' AND json_extract(payload,'$.mailbox')=?2) OR (kind='move' AND json_extract(payload,'$.source')=?2))",
+                    "UPDATE offline_ops SET state='needs_attention',not_before=NULL,undo_token=NULL
+                     WHERE account_id=?1 AND ((kind IN ('flags','keyword') AND json_extract(payload,'$.mailbox')=?2) OR (kind IN ('move','copy') AND json_extract(payload,'$.source')=?2))",
                     params![account_id, name],
                 )
                 .map_err(db_error)?;
@@ -201,16 +228,17 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.read_conn()?;
+        let effective_role = effective_role_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT f.id, f.account_id, f.name, f.display_name,
-                    COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
+                    {effective_role},
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              WHERE f.account_id = ?1 GROUP BY f.id
-             ORDER BY CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
+             ORDER BY CASE {effective_role} WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
             ))
             .map_err(db_error)?;
         let rows = statement
@@ -233,16 +261,17 @@ impl Database {
 
     pub fn list_all_mailboxes(&self) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.read_conn()?;
+        let effective_role = effective_role_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT f.id, f.account_id, f.name, f.display_name,
-                    COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role) THEN 'other' ELSE f.role END),
+                    {effective_role},
                     MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
                     MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
                     f.delimiter, f.allows_keywords
              FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
              GROUP BY f.id
-             ORDER BY f.account_id, CASE f.role WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
+             ORDER BY f.account_id, CASE {effective_role} WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
             ))
             .map_err(db_error)?;
         let rows = statement
@@ -265,10 +294,11 @@ impl Database {
 
     pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
         let conn = self.read_conn()?;
-        // One row per account: recompute each inbox-role folder from cached
-        // rows, then sum across folders. The badge layer keeps only the first
-        // row per account, so multiple inbox-role folders must not surface
-        // separately here.
+        // One row per account: recompute each effective inbox-role folder from
+        // cached rows, then sum across folders. The badge layer keeps only the
+        // first row per account, so multiple inbox-role folders must not
+        // surface separately here.
+        let effective_role = effective_role_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT per_folder.account_id, SUM(per_folder.unread), SUM(per_folder.total)
@@ -277,7 +307,7 @@ impl Database {
                     MAX(0, COALESCE(COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta, 0)) AS unread,
                     MAX(0, COALESCE(COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta, 0)) AS total
                 FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
-                WHERE f.role = 'inbox'
+                WHERE {effective_role} = 'inbox'
                 GROUP BY f.id, f.account_id
               ) per_folder
               GROUP BY per_folder.account_id
@@ -299,13 +329,12 @@ impl Database {
     /// Role as the mailbox list shows it: an explicit assignment, else the
     /// folder's own role, else `other` when another folder took that role.
     pub fn mailbox_effective_role(&self, account_id: &str, mailbox: &str) -> Result<String, String> {
+        let effective_role = effective_role_sql("f");
         self.read_conn()?
             .query_row(
-                "SELECT COALESCE(
-                   (SELECT a.role FROM folder_assignments a WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
-                   CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=f.account_id AND a.role=f.role)
-                        THEN 'other' ELSE f.role END)
-                 FROM mailboxes f WHERE f.account_id=?1 AND f.name=?2",
+                &format!(
+                    "SELECT {effective_role} FROM mailboxes f WHERE f.account_id=?1 AND f.name=?2"
+                ),
                 params![account_id, mailbox],
                 |row| row.get(0),
             )
@@ -331,9 +360,10 @@ impl Database {
         if let Some(id) = explicit {
             return conn.query_row("SELECT id,name FROM mailboxes WHERE account_id=?1 AND id=?2 AND server_available=1", params![account_id,id], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(db_error)?.map(Some).ok_or_else(|| "Assigned folder needs attention. Choose another folder or Automatic in Settings.".into());
         }
+        let effective_role = effective_role_sql("f");
         conn
             .query_row(
-                "SELECT id, name FROM mailboxes WHERE account_id = ?1 AND role = ?2 AND server_available=1 AND NOT EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id=mailboxes.account_id AND a.mailbox_id=mailboxes.id) ORDER BY CASE COALESCE(role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, id LIMIT 1",
+                &format!("SELECT f.id, f.name FROM mailboxes f WHERE f.account_id = ?1 AND {effective_role} = ?2 AND f.server_available=1 ORDER BY CASE COALESCE(f.role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, f.id LIMIT 1"),
                 params![account_id, role],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

@@ -215,6 +215,8 @@ pub fn get_folder_assignments(
     Ok(state.db.folder_assignments(&account_id)?)
 }
 
+/// Assigning a role can move the effective Inbox. Restart the watcher now
+/// instead of waiting for its 30-second polling check.
 #[tauri::command]
 pub async fn set_folder_assignment(
     account_id: String,
@@ -223,9 +225,14 @@ pub async fn set_folder_assignment(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<crate::db::compatibility::FolderAssignment>> {
     let _guard = state.lock_account(&account_id).await?;
+    let previous_inbox = crate::db::mailboxes::effective_inbox_name(&state.db, &account_id);
     state
         .db
         .set_folder_assignment(&account_id, &role, mailbox_id)?;
-    state.actor(&account_id)?.request(wake::SYNC);
+    let actor = state.actor(&account_id)?;
+    if previous_inbox != crate::db::mailboxes::effective_inbox_name(&state.db, &account_id) {
+        actor.watch().signal_restart();
+    }
+    actor.request(wake::SYNC);
     Ok(state.db.folder_assignments(&account_id)?)
 }

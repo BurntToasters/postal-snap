@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
-import { attachArtifactsAfterEach, ipcCommands } from "./ipc";
+import { attachArtifacts, attachArtifactsAfterEach, ipcCommands } from "./ipc";
 
 test.afterEach(attachArtifactsAfterEach);
 
@@ -13,6 +13,17 @@ test.afterEach(attachArtifactsAfterEach);
 // FM5 disabling stops the 10 s native reduce-transparency poll.
 // FM6 repeated toggles add no matchMedia listeners.
 // FM7 the poll never runs off macOS.
+
+// Pane gutter failure modes (GMn) for the 5px splitter tracks:
+// GM1 the right-pane reader/list gutter exposes the native background.
+// GM2 the folder splitter exposes the native background.
+// GM3 the bottom-pane horizontal gutter exposes the native background.
+// GM4 a hover/focus accent must not excuse a transparent default gutter.
+// GM5 opaque fallback, reduced transparency, and forced colors stay opaque.
+// GM6 Windows Mica keeps working without global Tauri transparency.
+// GM7 direct macOS vibrancy still opts into transparency at runtime.
+// GM8 Linux, Flatpak, MS Store, MAS, and macOS without macos-vibrancy
+//     remain opaque.
 
 const macUserAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
@@ -35,6 +46,48 @@ async function alphaFor(page: Page, selector: string): Promise<number> {
     .first()
     .evaluate((node) => getComputedStyle(node).backgroundColor);
   return alphaOf(color);
+}
+
+// Every visible gutter must paint an opaque strip: the native material may
+// show through the sidebar, never through a splitter track.
+async function expectOpaqueGutters(
+  page: Page,
+  selectors: string[],
+  mode: string,
+) {
+  await expect(page.locator(".pane-splitter:visible")).toHaveCount(
+    selectors.length,
+  );
+  for (const selector of selectors) {
+    const splitter = page.locator(selector);
+    await expect(splitter).toBeVisible();
+    const color = await splitter.evaluate(
+      (node) => getComputedStyle(node).backgroundColor,
+    );
+    expect(alphaOf(color), `${mode} ${selector} paints ${color}`).toBe(1);
+  }
+}
+
+async function expectSplitterMetrics(page: Page, selectors: string[]) {
+  for (const selector of selectors) {
+    const metrics = await page.locator(selector).evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const before = getComputedStyle(element, "::before");
+      return {
+        width: rect.width,
+        height: rect.height,
+        hitWidth: Number.parseFloat(before.width),
+        hitHeight: Number.parseFloat(before.height),
+        orientation: element.getAttribute("aria-orientation"),
+      };
+    });
+    const vertical = metrics.orientation === "vertical";
+    // Splitter tracks are px tokens, so text scaling must not change them.
+    expect(vertical ? metrics.width : metrics.height).toBe(5);
+    expect(
+      vertical ? metrics.hitWidth : metrics.hitHeight,
+    ).toBeGreaterThanOrEqual(32);
+  }
 }
 
 async function openAppearance(page: Page) {
@@ -80,6 +133,97 @@ test.describe("macOS native glass", () => {
     expect(await alphaFor(page, ".reader-pane")).toBe(1);
   });
 
+  for (const layout of [
+    { pane: "right", gutter: ".reader-splitter", code: "GM1" },
+    { pane: "bottom", gutter: ".reader-bottom-splitter", code: "GM3" },
+  ] as const) {
+    for (const density of ["normal", "comfortable", "compact"] as const) {
+      for (const scale of [1, 2] as const) {
+        const caseLabel = `${layout.pane}-${density}-${scale * 100}`;
+        test(`${layout.code} ${layout.pane} gutters stay opaque at ${density} ${scale * 100}% text`, async ({
+          page,
+        }, testInfo) => {
+          const label = `${testInfo.project.name}-${caseLabel}`;
+          await page.setViewportSize({ width: 1240, height: 820 });
+          await page.goto(
+            `/?pane=${layout.pane}&density=${density}&scale=${scale}`,
+          );
+          await page.locator(".mail-shell").waitFor();
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-density",
+            density,
+          );
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-text-scale",
+            scale >= 1.5 ? "large" : "normal",
+          );
+          expect(
+            await page
+              .locator("html")
+              .evaluate((element) => getComputedStyle(element).fontSize),
+          ).toBe(`${16 * scale}px`);
+          const gutters = [".folder-splitter", layout.gutter];
+          const context = {
+            gutters,
+            density,
+            textScale: scale,
+            project: testInfo.project.name,
+          };
+
+          // GM2: the folder splitter never exposes the native background.
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-window-fx",
+            "opaque",
+          );
+          await expectOpaqueGutters(
+            page,
+            gutters,
+            `opaque ${density} ${scale}`,
+          );
+          await expectSplitterMetrics(page, gutters);
+          await attachArtifacts(
+            page,
+            testInfo,
+            `${label}-gutters-opaque`,
+            context,
+          );
+
+          await enableTranslucency(page);
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-window-fx",
+            "vibrant",
+          );
+          await expectOpaqueGutters(
+            page,
+            gutters,
+            `vibrant ${density} ${scale}`,
+          );
+          await expectSplitterMetrics(page, gutters);
+
+          // GM4: the hover accent paints over the opaque strip; it never
+          // replaces the default gutter with a transparent track.
+          const gutter = page.locator(layout.gutter);
+          await gutter.hover();
+          await expect
+            .poll(() =>
+              gutter.evaluate(
+                (element) =>
+                  getComputedStyle(element, "::after").backgroundColor,
+              ),
+            )
+            .not.toBe("rgba(0, 0, 0, 0)");
+          expect(await alphaFor(page, layout.gutter)).toBe(1);
+          await attachArtifacts(
+            page,
+            testInfo,
+            `${label}-gutters-vibrant`,
+            context,
+          );
+        });
+      }
+    }
+  }
+
   test("FM2 native reduced transparency keeps chrome opaque", async ({
     page,
   }) => {
@@ -95,6 +239,11 @@ test.describe("macOS native glass", () => {
       "opaque",
     );
     expect(await alphaFor(page, ".folder-pane")).toBe(1);
+    await expectOpaqueGutters(
+      page,
+      [".folder-splitter", ".reader-splitter"],
+      "reduced transparency",
+    );
   });
 
   test("FM3 forced colors keeps chrome opaque", async ({ page }) => {
@@ -109,6 +258,11 @@ test.describe("macOS native glass", () => {
     );
     expect(await alphaFor(page, ".folder-pane")).toBe(1);
     expect(await alphaFor(page, ".message-pane")).toBe(1);
+    await expectOpaqueGutters(
+      page,
+      [".folder-splitter", ".reader-splitter"],
+      "forced colors",
+    );
   });
 
   test("FM4 unsupported native glass hides the toggle and stays opaque", async ({
@@ -126,6 +280,11 @@ test.describe("macOS native glass", () => {
       page.getByRole("checkbox", { name: /Translucent window background/ }),
     ).toHaveCount(0);
     expect(await alphaFor(page, ".folder-pane")).toBe(1);
+    await expectOpaqueGutters(
+      page,
+      [".folder-splitter", ".reader-splitter"],
+      "unsupported native glass",
+    );
   });
 
   test("FM5 disabling translucency stops the native poll", async ({ page }) => {
@@ -231,6 +390,11 @@ test.describe("non-macOS native glass", () => {
     await page.goto("/");
     await page.locator(".mail-shell").waitFor();
     await enableTranslucency(page);
+    await expectOpaqueGutters(
+      page,
+      [".folder-splitter", ".reader-splitter"],
+      "Windows Mica",
+    );
     await page.clock.pauseAt(new Date("2026-11-07T10:00:05Z"));
     const count = async () =>
       (await ipcCommands(page)).filter(

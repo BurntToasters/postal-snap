@@ -99,6 +99,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     function folderAssignments(id: unknown) {
       const item = ownedAccount(id);
       assignments[item.id] ??= [
+        "inbox",
         "sent",
         "drafts",
         "archive",

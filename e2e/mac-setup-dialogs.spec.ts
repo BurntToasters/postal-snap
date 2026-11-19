@@ -227,6 +227,7 @@ test("FM7: setup and confirm dialog have no serious axe violations", async ({
 }, testInfo: TestInfo) => {
   await page.setViewportSize(DESKTOP_VIEWPORT);
   await page.goto("/?firstRun=1");
+  await expect(page.locator(".setup-card.setup-flow")).toBeVisible();
   const setup = await new AxeBuilder({ page })
     .include(".setup-card.setup-flow")
     .analyze();

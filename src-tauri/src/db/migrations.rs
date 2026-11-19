@@ -46,6 +46,8 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (41, step_v41),
     (42, step_v42),
     (43, step_v43),
+    (44, step_v44),
+    (45, step_v45),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -1022,6 +1024,51 @@ fn step_v43(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v45(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "state",
+        "ALTER TABLE offline_ops ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','needs_attention'))",
+    )?;
+    transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS offline_ops_account_state_due ON offline_ops(account_id,state,not_before)",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v44(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "messages",
+        "notification_state",
+        "ALTER TABLE messages ADD COLUMN notification_state INTEGER NOT NULL DEFAULT 0",
+    )?;
+    let effective_role = super::mailboxes::effective_role_sql("f");
+    transaction
+        .execute(
+            &format!(
+                "UPDATE messages SET notification_state=notification_state|3
+                 WHERE id IN (
+                   SELECT m.id FROM messages m
+                   JOIN mailboxes f ON f.id=m.mailbox_id
+                   JOIN accounts a ON a.id=m.account_id
+                   WHERE a.rules_pending_from IS NOT NULL
+                     AND m.id>a.rules_pending_from
+                     AND m.is_read=0
+                     AND m.pending_move_to IS NULL
+                     AND {effective_role}='inbox'
+                 )"
+            ),
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
 /// Rules saved before v43 carry one condition and one action in legacy columns.
 /// The JSON shape matches the camelCase DTOs in `models/dto.rs`.
 fn backfill_filter_rule_json(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
@@ -1534,8 +1581,8 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 43);
-        assert_eq!(CURRENT_SCHEMA_VERSION, 43);
+        assert_eq!(version, 45);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 45);
 
         let rows: Vec<(String, String, String, String)> = conn
             .prepare("SELECT id,match_mode,conditions_json,actions_json FROM filter_rules ORDER BY position")

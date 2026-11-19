@@ -4,6 +4,8 @@ Record the build commit, tester, date, operating-system version, and result for 
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
+Dated evidence from 0.5.0 and 0.5.2 does not apply to 0.5.4. Each 0.5.4 claim needs its own date, commit id, and artifact path.
+
 At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec gate passed across 679 locked crates. The pinned GreenMail 2.1.11 integration run passed, including watcher, batched-move, deferred-move, and no-IDLE connection-limit coverage; see the [mail integration report](../artifacts/mail-integration/results.json). The local `npm run test:all` gate passed all 15 phases, and the audit-fix branch adds native and browser regression coverage for worker recovery, snooze accounting, outbox limits, and identity-save races; verification artifacts live under `artifacts/0.5.0/`. Manual and release-commit checkboxes below remain unchecked. The updater is vendored from upstream `plugins-workspace` commit `f36ba7ba` (zip 9.0.3), with a local macOS installation patch; `rustls` remains 0.23.46. [The dependency remediation note](0.5.0-DEPENDENCY-REMEDIATION.md) records the original overrides. Do not broaden advisory ignores, and keep the RustSec gate closed to every new advisory.
 
 ## Automated gates
@@ -18,6 +20,22 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
+
+## 0.5.4 additions
+
+Behavior changes made for 0.5.4. Each must hold on the release commit.
+
+- [ ] The base Tauri window is opaque (`transparent: false`). Native transparency applies only to Windows Mica and direct macOS `macos-vibrancy` builds.
+- [ ] A folder explicitly assigned as Inbox drives Inbox badges, new-mail notifications, and filter rules (effective role).
+- [ ] Offline operations that exhaust retries move to `needs_attention` instead of being dropped. An ambiguous COPY or fallback MOVE is not reissued without Message-ID proof.
+- [ ] Notify-only rules do not notify again for the same message across sync passes.
+- [ ] Compact density reader and list controls meet the 32px target floor.
+
+## 0.5.4 manual checks
+
+Record date, commit id, and artifact path for each item. These native checks are required before the 0.5.4 GitHub release.
+
+- [ ] The direct macOS build (DMG/ZIP) shows no desktop or window bleed through the list/reader divider in right, bottom, and hidden reading-pane modes. Capture a screenshot of each. The Mac App Store, Flatpak, and unsupported Mac builds stay opaque.
 
 ## 0.5.2 additions
 

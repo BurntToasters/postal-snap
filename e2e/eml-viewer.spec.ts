@@ -2,6 +2,7 @@ import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { attachArtifacts, emitTauriEvent, ipcCalls, ipcCommands } from "./ipc";
+import { pressAppShortcut } from "./keyboard";
 
 // Failure modes covered here (WP5.13):
 // 1. The eml-opened event does not show the viewer, or shows it without the subject.
@@ -203,7 +204,7 @@ test.describe("eml viewer", () => {
   }, testInfo: TestInfo) => {
     await page.goto("/");
     await expect(page.locator(".app-viewport")).toBeVisible();
-    await page.keyboard.press("ControlOrMeta+K");
+    await pressAppShortcut(page, "K");
     const combobox = page.getByRole("combobox", { name: /Search commands/ });
     await expect(combobox).toBeFocused();
     await combobox.fill("Open email file");
@@ -218,7 +219,7 @@ test.describe("eml viewer", () => {
   }, testInfo: TestInfo) => {
     await page.goto("/?emlCancel=1");
     await expect(page.locator(".app-viewport")).toBeVisible();
-    await page.keyboard.press("ControlOrMeta+K");
+    await pressAppShortcut(page, "K");
     await page
       .getByRole("combobox", { name: /Search commands/ })
       .fill("Open email file");

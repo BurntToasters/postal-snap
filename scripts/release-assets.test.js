@@ -827,6 +827,7 @@ test("direct and Store builds keep separate capabilities", async () => {
   assert.equal(msstore.app.macOSPrivateApi, false);
   assert.equal(flatpak.app.macOSPrivateApi, false);
   assert.equal(mas.app.windows[0].transparent, false);
+  assert.equal(direct.app.windows[0].transparent, false);
   assert.equal(direct.app.macOSPrivateApi, false);
   const directOverlay = await readJson("src-tauri/tauri.direct.conf.json");
   assert.equal(directOverlay.app.macOSPrivateApi, false);
@@ -1781,4 +1782,17 @@ test("macOSPrivateApi stays false in every Tauri config", async () => {
   for (const [file, value] of found) {
     assert.equal(value, false, `${file} must keep macOSPrivateApi false`);
   }
+});
+
+test("native transparency is opt-in only for supported window glass", async () => {
+  const config = JSON.parse(
+    await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+  );
+  assert.equal(config.app.windows[0].transparent, false);
+  const main = await readFile(join(root, "src-tauri/src/main.rs"), "utf8");
+  assert.match(
+    main,
+    /#\[cfg\(any\(\s*target_os = "windows",\s*all\(target_os = "macos", feature = "macos-vibrancy"\)\s*\)\)\]\s*let window_builder = window_builder\.transparent\(true\);/,
+  );
+  assert.equal((main.match(/\.transparent\(true\)/g) ?? []).length, 1);
 });

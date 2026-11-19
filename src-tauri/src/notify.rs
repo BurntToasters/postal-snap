@@ -105,34 +105,18 @@ fn route_tap<R: Runtime>(app: &AppHandle<R>, action: &ActionPerformed) {
     });
 }
 
-/// Arrival notice for the newest unread Inbox message after the previous
-/// pass. Sync stores rows with rising ids, so arrival order never depends on
-/// the sender's Date header.
-/// Picks the newest unread Inbox message after `previous_message_id`, skipping
-/// messages already notified by a filter rule in the same sync pass.
-pub(crate) fn pick_new_mail_message(
-    db: &Database,
-    account_id: &str,
-    previous_message_id: Option<i64>,
-    exclude_ids: &[i64],
-) -> Option<crate::models::MessageSummary> {
-    db.newest_unread_inbox_after_excluding(account_id, previous_message_id, exclude_ids)
-        .ok()
-        .flatten()
-}
-
+/// Claim the durable catch-up arrival burst before asking the OS to display
+/// anything. Startup and disabled-notification passes consume it silently.
 pub(crate) fn notify_new_mail(
     app: &AppHandle,
     db: &Database,
     account_id: &str,
-    previous_message_id: Option<i64>,
-    exclude_ids: &[i64],
+    allow_notice: bool,
 ) {
-    let Some(message) = pick_new_mail_message(db, account_id, previous_message_id, exclude_ids)
-    else {
+    let Ok(Some(message)) = db.consume_new_mail_arrival(account_id) else {
         return;
     };
-    if !arrival_allowed(app, db, account_id) {
+    if !allow_notice || !arrival_allowed(app, db, account_id) {
         return;
     }
     show_arrival(app, db, account_id, &message);
@@ -146,12 +130,19 @@ pub(crate) fn rule_notice(
     account_id: &str,
     message_id: i64,
 ) -> bool {
-    if !arrival_allowed(app, db, account_id) {
-        return false;
-    }
+    let allowed = arrival_allowed(app, db, account_id);
     let Ok(Some(message)) = db.rule_notice_message(account_id, message_id) else {
         return false;
     };
+    if !db
+        .claim_rule_notification(account_id, message_id)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if !allowed {
+        return false;
+    }
     show_arrival(app, db, account_id, &message);
     true
 }
@@ -455,10 +446,8 @@ mod tests {
         };
         insert(1);
         let first_id = db.list_messages(inbox, None, 10).unwrap().items[0].id;
-        assert!(
-            pick_new_mail_message(&db, "account-1", None, &[first_id]).is_none(),
-            "rule-notified message must not also trigger new-mail notice"
-        );
+        db.record_new_mail_arrival("account-1", first_id).unwrap();
+        assert!(db.claim_rule_notification("account-1", first_id).unwrap());
 
         insert(2);
         let items = db.list_messages(inbox, None, 10).unwrap().items;
@@ -467,8 +456,11 @@ mod tests {
             .find(|item| item.id != first_id)
             .expect("second message")
             .id;
-        let picked = pick_new_mail_message(&db, "account-1", None, &[second_id])
+        db.record_new_mail_arrival("account-1", second_id).unwrap();
+        let picked = db
+            .consume_new_mail_arrival("account-1")
+            .unwrap()
             .expect("unrelated unread arrival still notifies");
-        assert_eq!(picked.id, first_id);
+        assert_eq!(picked.id, second_id);
     }
 }

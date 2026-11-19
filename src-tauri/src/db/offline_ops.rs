@@ -176,7 +176,7 @@ impl Database {
                     continue;
                 }
             }
-            tx.prepare_cached("UPDATE offline_ops SET payload=?2,dedupe_key=?3 WHERE id=?1")
+            tx.prepare_cached("UPDATE offline_ops SET payload=?2,dedupe_key=?3,state='queued',attempts=0 WHERE id=?1")
                 .map_err(db_error)?
                 .execute(params![id, operation.to_string(), dedupe])
                 .map_err(db_error)?;
@@ -199,7 +199,7 @@ impl Database {
                 let dedupe = flag_dedupe_key(message_id, read.is_some(), star.is_some(), &field);
                 tx.prepare_cached(
                     "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
-                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP",
+                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP,state='queued',attempts=0",
                 )
                 .map_err(db_error)?
                 .execute(params![account_id, field.to_string(), dedupe])
@@ -294,8 +294,8 @@ impl Database {
             .map_err(|_| "Could not queue the offline change.".to_string())?;
         self.conn()?
             .execute(
-                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,?2,?3,?4)
-                 ON CONFLICT(account_id,dedupe_key) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,created_at=CURRENT_TIMESTAMP,not_before=NULL,undo_token=NULL",
+                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key,state) VALUES(?1,?2,?3,?4,'queued')
+                 ON CONFLICT(account_id,dedupe_key) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,created_at=CURRENT_TIMESTAMP,not_before=NULL,undo_token=NULL,state='queued',attempts=0",
                 params![account_id, kind, json, dedupe_key],
             )
             .map_err(db_error)?;
@@ -315,26 +315,42 @@ impl Database {
             .collect())
     }
 
+    pub fn replay_source_barrier_operations(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<(i64, String, String)>, String> {
+        let conn = self.read_conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id,kind,payload FROM offline_ops
+                 WHERE account_id=?1 AND (
+                     (state IN ('queued','needs_attention') AND kind IN ('copy','keyword'))
+                     OR (state='needs_attention' AND kind='flags')
+                   ) ORDER BY id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([account_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
     /// Due operations plus their transient failure counts, for batch planning.
     pub fn queued_operations_with_attempts(
         &self,
         account_id: &str,
     ) -> Result<Vec<(i64, String, String, i64)>, String> {
-        let session = self.current_undo_session()?;
         let now = format_instant(chrono::Utc::now());
         let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(
                 "SELECT o.id,o.kind,o.payload,o.attempts FROM offline_ops o
-                 WHERE o.account_id=?1
+                 WHERE o.account_id=?1 AND o.state='queued'
                    AND (o.not_before IS NULL OR o.not_before<=?2)
-                   AND NOT (o.kind='move' AND o.not_before IS NOT NULL
-                     AND COALESCE(length(o.undo_token)=64 AND substr(o.undo_token,1,32)=?3,0))
                    AND NOT EXISTS (
                      SELECT 1 FROM offline_ops held
-                     WHERE held.account_id=o.account_id AND held.kind='move'
-                       AND held.not_before IS NOT NULL
-                       AND (held.not_before>?2 OR COALESCE(length(held.undo_token)=64 AND substr(held.undo_token,1,32)=?3,0))
+                     WHERE held.account_id=o.account_id AND held.state='queued' AND held.kind='move'
+                       AND held.not_before IS NOT NULL AND held.not_before>?2
                        AND held.id<o.id
                        AND CASE WHEN json_valid(held.payload) THEN json_extract(held.payload,'$.messageId') END
                          = CASE WHEN json_valid(o.payload) THEN json_extract(o.payload,'$.messageId') END
@@ -343,7 +359,7 @@ impl Database {
             )
             .map_err(db_error)?;
         let rows = statement
-            .query_map(params![account_id, now, session], |row| {
+            .query_map(params![account_id, now], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .map_err(db_error)?;
@@ -375,9 +391,9 @@ impl Database {
             let dedupe_key = format!("move:{message_id}");
             transaction
                 .prepare_cached(
-                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key,not_before,undo_token,attempts)
-                     VALUES(?1,'move',?2,?3,?4,?5,0)
-                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,created_at=CURRENT_TIMESTAMP,not_before=excluded.not_before,undo_token=excluded.undo_token,attempts=0",
+                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key,not_before,undo_token,attempts,state)
+                     VALUES(?1,'move',?2,?3,?4,?5,0,'queued')
+                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,created_at=CURRENT_TIMESTAMP,not_before=excluded.not_before,undo_token=excluded.undo_token,attempts=0,state='queued'",
                 )
                 .map_err(db_error)?
                 .execute(params![account_id, json, dedupe_key, not_before, undo_token])
@@ -439,7 +455,7 @@ impl Database {
     pub fn commit_deferred(&self, account_id: &str, undo_token: &str) -> Result<(), String> {
         self.conn()?
             .execute(
-                "UPDATE offline_ops SET not_before=NULL WHERE account_id=?1 AND undo_token=?2",
+                "UPDATE offline_ops SET not_before=NULL WHERE account_id=?1 AND undo_token=?2 AND state='queued'",
                 params![account_id, undo_token],
             )
             .map_err(db_error)?;
@@ -448,15 +464,13 @@ impl Database {
 
     /// Time until the next deferred operation becomes due, if any is still waiting.
     pub fn next_deferred_due(&self, account_id: &str) -> Result<Option<std::time::Duration>, String> {
-        let session = self.current_undo_session()?;
         let now = chrono::Utc::now();
         let next: Option<String> = self
             .read_conn()?
             .query_row(
                 "SELECT MIN(not_before) FROM offline_ops
-                 WHERE account_id=?1 AND not_before>?2
-                   AND NOT COALESCE(length(undo_token)=64 AND substr(undo_token,1,32)=?3,0)",
-                params![account_id, format_instant(now), session],
+                 WHERE account_id=?1 AND state='queued' AND not_before>?2",
+                params![account_id, format_instant(now)],
                 |row| row.get(0),
             )
             .map_err(db_error)?;
@@ -469,11 +483,36 @@ impl Database {
     pub fn record_operation_attempt(&self, account_id: &str, id: i64) -> Result<(), String> {
         self.conn()?
             .execute(
-                "UPDATE offline_ops SET attempts=attempts+1 WHERE id=?1 AND account_id=?2",
+                "UPDATE offline_ops SET attempts=attempts+1 WHERE id=?1 AND account_id=?2 AND state='queued'",
                 params![id, account_id],
             )
             .map_err(db_error)?;
         Ok(())
+    }
+
+    pub fn mark_operation_needs_attention(
+        &self,
+        account_id: &str,
+        id: i64,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE offline_ops SET state='needs_attention',not_before=NULL,undo_token=NULL
+                 WHERE id=?1 AND account_id=?2",
+                params![id, account_id],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn offline_operations_needing_attention(&self, account_id: &str) -> Result<u32, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT COUNT(*) FROM offline_ops WHERE account_id=?1 AND state='needs_attention'",
+                [account_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(db_error)
     }
 
     pub fn remove_operation(&self, account_id: &str, id: i64) -> Result<(), String> {

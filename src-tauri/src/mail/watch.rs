@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 use super::{connect::ConnectError, failure::FailureKind, pool, ImapSession, IMAP_COMMAND_TIMEOUT};
 use crate::{
     commands::{reconnect_delay, wake, AccountActor},
-    db::Database,
+    db::{mailboxes::effective_inbox_name, Database},
     models::AccountRecord,
 };
 
@@ -120,6 +120,11 @@ pub(crate) fn restart_required(
     current_epoch: u64,
 ) -> bool {
     session_generation != current_generation || session_epoch != current_epoch
+}
+
+/// The watcher restarts when Settings assigns a different effective Inbox.
+pub(crate) fn watch_target_moved(previous: &str, current: &str) -> bool {
+    previous != current
 }
 
 /// Counts consecutive sessions that ended almost at once.
@@ -240,16 +245,21 @@ enum Ending {
 
 /// IDLE on the watcher session until something ends it. Re-IDLEs after each
 /// server answer so the session never sits past the server's timeout.
+#[allow(clippy::too_many_arguments)]
 async fn idle_until_end(
     mut session: ImapSession,
     link: &WatchLink,
     actor: &AccountActor,
     db: &Database,
     account_id: &str,
+    target: &str,
     generation: u64,
     epoch: u64,
 ) -> Ending {
     loop {
+        if watch_target_moved(target, &effective_inbox_name(db, account_id)) {
+            return Ending::Restart;
+        }
         let mut idle = session.idle();
         if !matches!(
             tokio::time::timeout(IMAP_COMMAND_TIMEOUT, idle.init()).await,
@@ -277,7 +287,9 @@ async fn idle_until_end(
                         break wait.as_mut().await;
                     }
                     _ = tokio::time::sleep(CHECK_INTERVAL) => {
-                        if must_end(db, account_id, generation, epoch, link) {
+                        if must_end(db, account_id, generation, epoch, link)
+                            || watch_target_moved(target, &effective_inbox_name(db, account_id))
+                        {
                             interrupt.take();
                             break wait.as_mut().await;
                         }
@@ -298,7 +310,9 @@ async fn idle_until_end(
                 }
             }
             Ok(IdleResponse::ManualInterrupt) => {
-                if must_end(db, account_id, generation, epoch, link) {
+                if must_end(db, account_id, generation, epoch, link)
+                    || watch_target_moved(target, &effective_inbox_name(db, account_id))
+                {
                     return if account_present(db, account_id) {
                         Ending::Restart
                     } else {
@@ -396,7 +410,10 @@ pub(crate) async fn run_with_secret(
         }
         let mut session = session;
         let started = Instant::now();
-        let examined = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine("INBOX")).await;
+        let target = effective_inbox_name(&db, &account_id);
+        let wire_target = super::utf7::encode(&target);
+        let examined =
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.examine(&wire_target)).await;
         if !matches!(examined, Ok(Ok(_))) {
             drop(session);
             back_off(link, &account_id, backoff, attempt).await;
@@ -407,8 +424,17 @@ pub(crate) async fn run_with_secret(
         link.set_active(true);
         // Catch up on mail that arrived while the watcher was not running.
         actor.request(wake::INBOX);
-        let ending =
-            idle_until_end(session, link, &actor, &db, &account_id, generation, epoch).await;
+        let ending = idle_until_end(
+            session,
+            link,
+            &actor,
+            &db,
+            &account_id,
+            &target,
+            generation,
+            epoch,
+        )
+        .await;
         if link.active() {
             link.set_active(false);
             // Let a worker in watch mode fall back to in-actor IDLE.
@@ -771,5 +797,114 @@ mod tests {
                 "watcher must not call {forbidden}"
             );
         }
+    }
+
+    // Effective Inbox watcher failure modes:
+    // 1. The watcher keeps examining literal INBOX while Settings assigns a
+    //    raw-Other folder as Inbox.
+    // 2. Moving the assignment leaves the old folder watched forever.
+    // 3. Before folder discovery there is no mailbox row, so the watcher must
+    //    keep a safe literal fallback instead of failing closed.
+    // 4. One account's assignment changes another account's target.
+    #[test]
+    fn watcher_targets_the_assigned_inbox_and_falls_back_before_discovery() {
+        use crate::db::{mailboxes::effective_inbox_name, Database};
+        use crate::models::MailboxRole;
+
+        let db = Database::memory();
+        let account = no_idle_fixture_account(0);
+        let account_id = account.summary.id.clone();
+        db.insert_account(&account).unwrap();
+        // Before discovery there is no mailbox row; keep the safe fallback.
+        assert_eq!(effective_inbox_name(&db, &account_id), "INBOX");
+        let raw = db
+            .upsert_mailbox(
+                &account_id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let custom = db
+            .upsert_mailbox(
+                &account_id,
+                "Receipts",
+                &MailboxRole::Other,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let second = db
+            .upsert_mailbox(
+                &account_id,
+                "Second Inbox",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let assign = |mailbox_id| {
+            db.conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO folder_assignments(account_id,role,mailbox_id) VALUES(?1,'inbox',?2)
+                     ON CONFLICT(account_id,role) DO UPDATE SET mailbox_id=excluded.mailbox_id",
+                    rusqlite::params![&account_id, mailbox_id],
+                )
+                .unwrap();
+        };
+        assert_eq!(effective_inbox_name(&db, &account_id), "INBOX");
+        assign(custom);
+        assert_eq!(effective_inbox_name(&db, &account_id), "Receipts");
+        assert!(super::watch_target_moved("INBOX", "Receipts"));
+        assert!(!super::watch_target_moved("Receipts", "Receipts"));
+        assign(second);
+        assert_eq!(effective_inbox_name(&db, &account_id), "Second Inbox");
+        assert_ne!(effective_inbox_name(&db, &account_id), "Receipts");
+        db.conn()
+            .unwrap()
+            .execute(
+                "DELETE FROM folder_assignments WHERE account_id=?1 AND role='inbox'",
+                [&account_id],
+            )
+            .unwrap();
+        assert_eq!(effective_inbox_name(&db, &account_id), "INBOX");
+
+        // Another account's assignment never changes this target.
+        let mut other = no_idle_fixture_account(0);
+        other.summary.email = "other@example.test".into();
+        let other_id = other.summary.id.clone();
+        db.insert_account(&other).unwrap();
+        let other_custom = db
+            .upsert_mailbox(
+                &other_id,
+                "Statements",
+                &MailboxRole::Other,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO folder_assignments(account_id,role,mailbox_id) VALUES(?1,'inbox',?2)",
+                rusqlite::params![&other_id, other_custom],
+            )
+            .unwrap();
+        assert_eq!(effective_inbox_name(&db, &other_id), "Statements");
+        assert_eq!(effective_inbox_name(&db, &account_id), "INBOX");
+        assert_eq!(
+            db.mailbox(raw).unwrap(),
+            (account_id.clone(), "INBOX".into())
+        );
     }
 }

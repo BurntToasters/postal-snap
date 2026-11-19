@@ -7,6 +7,17 @@ import type { MockShared, MockState } from "./context";
 // only.
 export async function registerMockRemoteSecurity(page: Page): Promise<void> {
   await page.addInitScript(() => {
+    Object.defineProperty(window, "print", {
+      configurable: true,
+      value: () => {
+        const state = (
+          window.top as Window & { __POSTAL_SNAP_TEST__?: MockState }
+        )?.__POSTAL_SNAP_TEST__;
+        if (state) state.printCalls += 1;
+      },
+    });
+  });
+  await page.addInitScript(() => {
     const mock = window.__POSTAL_SNAP_MOCK__ as MockShared;
     const state = window.__POSTAL_SNAP_TEST__ as MockState;
     function inspectExternalUrl(raw: string) {

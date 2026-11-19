@@ -611,6 +611,18 @@ pub struct SearchQuery {
     pub text: String,
     pub all_folders: bool,
     pub limit: u32,
+    #[serde(default)]
+    pub resume_after_mailbox_id: Option<i64>,
+}
+
+/// One server search call. `complete` is false when a deadline stopped the
+/// search; pass `resume_after_mailbox_id` back to continue after it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSearchResult {
+    pub messages: Vec<MessageSummary>,
+    pub complete: bool,
+    pub resume_after_mailbox_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

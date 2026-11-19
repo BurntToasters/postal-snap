@@ -5,7 +5,11 @@
 //! lands only on a matching copy in the captured mailbox generation and UID
 //! range.
 
-use super::{db_error, messages::remove_message_in_transaction, Database};
+use super::{
+    db_error,
+    messages::{mark_pending_move_in_transaction, remove_message_in_transaction},
+    Database,
+};
 use rusqlite::{params, OptionalExtension, Transaction};
 
 /// Same clock format and comparison as `NOT_SNOOZED_SQL`.
@@ -79,6 +83,11 @@ impl Database {
                 remove_message_in_transaction(&transaction, message_row_id)?;
                 continue;
             };
+            mark_pending_move_in_transaction(
+                &transaction,
+                message_row_id,
+                destination_identity.mailbox_id,
+            )?;
             transaction
                 .execute(
                     "INSERT INTO pending_snooze_transfers(
