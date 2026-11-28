@@ -14,6 +14,19 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::{AccountInboxCount, MailboxRole, MailboxSummary, ROLE_SOURCE_NAME};
 
+#[cfg(test)]
+thread_local! {
+    static MAILBOX_COUNT_VM_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_mailbox_count_vm_steps(statement: &rusqlite::Statement<'_>) {
+    let steps = statement
+        .reset_status(rusqlite::StatementStatus::VmStep)
+        .max(0) as u64;
+    MAILBOX_COUNT_VM_STEPS.with(|counter| counter.set(counter.get() + steps));
+}
+
 /// One definition of a mailbox's effective role. Explicit assignment wins;
 /// otherwise the raw role applies unless another folder claimed it.
 pub(crate) fn effective_role_sql(alias: &str) -> String {
@@ -26,6 +39,75 @@ pub(crate) fn effective_role_sql(alias: &str) -> String {
     format!(
         "COALESCE((SELECT a.role FROM folder_assignments a WHERE a.account_id={alias}.account_id AND a.mailbox_id={alias}.id), CASE WHEN EXISTS(SELECT 1 FROM folder_assignments a WHERE a.account_id={alias}.account_id AND a.role={alias}.role) THEN 'other' ELSE {alias}.role END)"
     )
+}
+
+enum RoleMailboxLookup {
+    ExplicitAvailable((i64, String)),
+    ExplicitUnavailable,
+    Automatic(Option<(i64, String)>),
+}
+
+fn lookup_role_mailbox(
+    db: &Database,
+    account_id: &str,
+    role: &str,
+) -> Result<RoleMailboxLookup, String> {
+    let conn = db.read_conn()?;
+    let explicit: Option<i64> = conn
+        .query_row(
+            "SELECT mailbox_id FROM folder_assignments WHERE account_id=?1 AND role=?2",
+            params![account_id, role],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if let Some(id) = explicit {
+        let mailbox = conn
+            .query_row(
+                "SELECT id,name FROM mailboxes WHERE account_id=?1 AND id=?2 AND server_available=1",
+                params![account_id, id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        return Ok(match mailbox {
+            Some(mailbox) => RoleMailboxLookup::ExplicitAvailable(mailbox),
+            None => RoleMailboxLookup::ExplicitUnavailable,
+        });
+    }
+
+    let effective_role = effective_role_sql("f");
+    let mailbox = conn
+        .query_row(
+            &format!(
+                "SELECT f.id,f.name FROM mailboxes f
+                 WHERE f.account_id=?1 AND {effective_role}=?2 AND f.server_available=1
+                 ORDER BY CASE COALESCE(f.role_source,'name') WHEN 'specialUse' THEN 0 ELSE 1 END, f.id LIMIT 1"
+            ),
+            params![account_id, role],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    Ok(RoleMailboxLookup::Automatic(mailbox))
+}
+
+fn count_fallbacks_sql(alias: &str) -> (String, String) {
+    let unread = format!(
+        "COALESCE({alias}.server_unread,(
+             SELECT COUNT(*) FROM messages m
+             WHERE m.mailbox_id={alias}.id AND m.is_read=0 AND m.pending_move_to IS NULL
+               AND {NOT_SNOOZED_SQL}
+         ))"
+    );
+    let total = format!(
+        "COALESCE({alias}.server_total,(
+             SELECT COUNT(*) FROM messages m
+             WHERE m.mailbox_id={alias}.id AND m.pending_move_to IS NULL
+               AND {NOT_SNOOZED_SQL}
+         ))"
+    );
+    (unread, total)
 }
 
 /// Inbox target for watchers and Inbox-scoped sync. Explicit assignment wins,
@@ -229,15 +311,16 @@ impl Database {
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.read_conn()?;
         let effective_role = effective_role_sql("f");
+        let (unread_count, total_count) = count_fallbacks_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT f.id, f.account_id, f.name, f.display_name,
                     {effective_role},
-                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    MAX(0, {unread_count} + f.local_unread_delta),
+                    MAX(0, {total_count} + f.local_total_delta),
                     f.delimiter, f.allows_keywords
-             FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
-             WHERE f.account_id = ?1 GROUP BY f.id
+             FROM mailboxes f
+             WHERE f.account_id = ?1
              ORDER BY CASE {effective_role} WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
             ))
             .map_err(db_error)?;
@@ -256,21 +339,24 @@ impl Database {
                 })
             })
             .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        let rows = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+        #[cfg(test)]
+        record_mailbox_count_vm_steps(&statement);
+        Ok(rows)
     }
 
     pub fn list_all_mailboxes(&self) -> Result<Vec<MailboxSummary>, String> {
         let conn = self.read_conn()?;
         let effective_role = effective_role_sql("f");
+        let (unread_count, total_count) = count_fallbacks_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT f.id, f.account_id, f.name, f.display_name,
                     {effective_role},
-                    MAX(0, COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta),
-                    MAX(0, COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta),
+                    MAX(0, {unread_count} + f.local_unread_delta),
+                    MAX(0, {total_count} + f.local_total_delta),
                     f.delimiter, f.allows_keywords
-             FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
-             GROUP BY f.id
+             FROM mailboxes f
              ORDER BY f.account_id, CASE {effective_role} WHEN 'inbox' THEN 0 WHEN 'starred' THEN 1 WHEN 'drafts' THEN 2 WHEN 'sent' THEN 3 WHEN 'archive' THEN 4 WHEN 'junk' THEN 5 WHEN 'trash' THEN 6 ELSE 7 END, f.display_name COLLATE NOCASE"
             ))
             .map_err(db_error)?;
@@ -289,7 +375,10 @@ impl Database {
                 })
             })
             .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        let rows = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+        #[cfg(test)]
+        record_mailbox_count_vm_steps(&statement);
+        Ok(rows)
     }
 
     pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
@@ -299,16 +388,16 @@ impl Database {
         // first row per account, so multiple inbox-role folders must not
         // surface separately here.
         let effective_role = effective_role_sql("f");
+        let (unread_count, total_count) = count_fallbacks_sql("f");
         let mut statement = conn
             .prepare_cached(&format!(
                 "SELECT per_folder.account_id, SUM(per_folder.unread), SUM(per_folder.total)
               FROM (
                 SELECT f.account_id AS account_id,
-                    MAX(0, COALESCE(COALESCE(f.server_unread, SUM(CASE WHEN m.is_read = 0 AND m.pending_move_to IS NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_unread_delta, 0)) AS unread,
-                    MAX(0, COALESCE(COALESCE(f.server_total, SUM(CASE WHEN m.pending_move_to IS NULL AND m.id IS NOT NULL AND {NOT_SNOOZED_SQL} THEN 1 ELSE 0 END)) + f.local_total_delta, 0)) AS total
-                FROM mailboxes f LEFT JOIN messages m ON m.mailbox_id = f.id
+                    MAX(0, {unread_count} + f.local_unread_delta) AS unread,
+                    MAX(0, {total_count} + f.local_total_delta) AS total
+                FROM mailboxes f
                 WHERE {effective_role} = 'inbox'
-                GROUP BY f.id, f.account_id
               ) per_folder
               GROUP BY per_folder.account_id
               ORDER BY per_folder.account_id"
@@ -323,7 +412,10 @@ impl Database {
                 })
             })
             .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        let rows = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+        #[cfg(test)]
+        record_mailbox_count_vm_steps(&statement);
+        Ok(rows)
     }
 
     /// Role as the mailbox list shows it: an explicit assignment, else the
@@ -348,27 +440,30 @@ impl Database {
         account_id: &str,
         role: &str,
     ) -> Result<Option<(i64, String)>, String> {
-        let conn = self.read_conn()?;
-        let explicit: Option<i64> = conn
-            .query_row(
-                "SELECT mailbox_id FROM folder_assignments WHERE account_id=?1 AND role=?2",
-                params![account_id, role],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
-        if let Some(id) = explicit {
-            return conn.query_row("SELECT id,name FROM mailboxes WHERE account_id=?1 AND id=?2 AND server_available=1", params![account_id,id], |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(db_error)?.map(Some).ok_or_else(|| "Assigned folder needs attention. Choose another folder or Automatic in Settings.".into());
+        match lookup_role_mailbox(self, account_id, role)? {
+            RoleMailboxLookup::ExplicitAvailable(mailbox) | RoleMailboxLookup::Automatic(Some(mailbox)) => {
+                Ok(Some(mailbox))
+            }
+            RoleMailboxLookup::ExplicitUnavailable => Err(
+                "Assigned folder needs attention. Choose another folder or Automatic in Settings."
+                    .into(),
+            ),
+            RoleMailboxLookup::Automatic(None) => Ok(None),
         }
-        let effective_role = effective_role_sql("f");
-        conn
-            .query_row(
-                &format!("SELECT f.id, f.name FROM mailboxes f WHERE f.account_id = ?1 AND {effective_role} = ?2 AND f.server_available=1 ORDER BY CASE COALESCE(f.role_source, 'name') WHEN 'specialUse' THEN 0 ELSE 1 END, f.id LIMIT 1"),
-                params![account_id, role],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(db_error)
+    }
+
+    /// Resolves an automatic rule target without falling back from an explicit
+    /// assignment that is missing or unavailable. Database errors stay errors.
+    pub fn mailbox_for_rule_role(
+        &self,
+        account_id: &str,
+        role: &str,
+    ) -> Result<Option<(i64, String)>, String> {
+        match lookup_role_mailbox(self, account_id, role)? {
+            RoleMailboxLookup::ExplicitAvailable(mailbox)
+            | RoleMailboxLookup::Automatic(Some(mailbox)) => Ok(Some(mailbox)),
+            RoleMailboxLookup::ExplicitUnavailable | RoleMailboxLookup::Automatic(None) => Ok(None),
+        }
     }
 
     pub fn reconcile_mailboxes(
@@ -645,6 +740,22 @@ impl Database {
             .ok_or_else(|| "Mailbox not found.".into())
     }
 
+    /// Mailbox name for an account-owned ID. Missing and foreign IDs return None.
+    pub fn mailbox_name_for_account(
+        &self,
+        account_id: &str,
+        mailbox_id: i64,
+    ) -> Result<Option<String>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT name FROM mailboxes WHERE account_id=?1 AND id=?2",
+                params![account_id, mailbox_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
     pub fn mailbox_delimiter(&self, id: i64) -> Result<Option<String>, String> {
         self.read_conn()?
             .query_row("SELECT delimiter FROM mailboxes WHERE id=?1", [id], |row| {
@@ -909,7 +1020,10 @@ impl Database {
 mod tests {
     use super::*;
     use crate::db::{CachedMessage, Database};
-    use crate::models::{AccountRecord, AccountSummary, ProviderKind, ServerConfig, TlsMode};
+    use crate::models::{
+        AccountRecord, AccountSummary, FilterRule, ProviderKind, RuleAction, RuleCondition,
+        ServerConfig, TlsMode,
+    };
 
     fn account_with(id: &str, email: &str) -> AccountRecord {
         AccountRecord {
@@ -1006,6 +1120,21 @@ mod tests {
         (mailbox.unread_count, mailbox.total_count)
     }
 
+    fn counts_in(mailboxes: &[crate::models::MailboxSummary], mailbox_id: i64) -> (u32, u32) {
+        let mailbox = mailboxes
+            .iter()
+            .find(|mailbox| mailbox.id == mailbox_id)
+            .unwrap();
+        (mailbox.unread_count, mailbox.total_count)
+    }
+
+    fn measured_vm_steps<T>(operation: impl FnOnce() -> T) -> (T, u64) {
+        MAILBOX_COUNT_VM_STEPS.with(|counter| counter.set(0));
+        let result = operation();
+        let steps = MAILBOX_COUNT_VM_STEPS.with(std::cell::Cell::get);
+        (result, steps)
+    }
+
     #[test]
     fn mailbox_counts_exclude_snoozed_messages() {
         let db = Database::memory();
@@ -1095,6 +1224,255 @@ mod tests {
                 .map(|count| (count.account_id, count.unread_count, count.total_count))
                 .collect::<Vec<_>>(),
             vec![("account-1".into(), 3, 3), ("account-2".into(), 1, 2),]
+        );
+    }
+
+    #[test]
+    fn mailbox_count_functions_preserve_mixed_status_and_cached_counts() {
+        let db = Database::memory();
+        let first_account = account_with("account-1", "sam@example.com");
+        let second_account = account_with("account-2", "lee@example.com");
+        db.insert_account(&first_account).unwrap();
+        db.insert_account(&second_account).unwrap();
+
+        let inbox = db
+            .upsert_mailbox(
+                "account-1",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(4),
+                Some(7),
+                9,
+            )
+            .unwrap();
+        let assigned_inbox = db
+            .upsert_mailbox(
+                "account-1",
+                "Main Mail",
+                &MailboxRole::Other,
+                Some(1),
+                Some(4),
+                Some(10),
+                20,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                "account-1",
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(1),
+                None,
+                0,
+            )
+            .unwrap();
+        let fallback = db
+            .upsert_mailbox(
+                "account-1",
+                "Fallback",
+                &MailboxRole::Other,
+                Some(1),
+                Some(4),
+                None,
+                4,
+            )
+            .unwrap();
+        let empty = db
+            .upsert_mailbox(
+                "account-1",
+                "Empty",
+                &MailboxRole::Other,
+                Some(1),
+                Some(1),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let second_inbox = db
+            .upsert_mailbox(
+                "account-2",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                None,
+                8,
+            )
+            .unwrap();
+
+        db.set_folder_assignment("account-1", "inbox", Some(assigned_inbox))
+            .unwrap();
+        db.set_folder_assignment("account-1", "archive", Some(inbox))
+            .unwrap();
+
+        for (mailbox, uid) in [
+            (assigned_inbox, 1),
+            (assigned_inbox, 2),
+            (assigned_inbox, 3),
+        ] {
+            db.upsert_message("account-1", mailbox, &message(uid, "2026-08-18T12:00:00Z"))
+                .unwrap();
+        }
+        let read_message = db
+            .message_summary_by_uid(assigned_inbox, 1)
+            .unwrap()
+            .unwrap();
+        db.record_flag_change("account-1", read_message.id, Some(true), None, None)
+            .unwrap();
+        let pending_message = db
+            .message_summary_by_uid(assigned_inbox, 2)
+            .unwrap()
+            .unwrap();
+        db.mark_pending_move(pending_message.id, archive).unwrap();
+
+        for uid in 1..=3 {
+            db.upsert_message("account-1", fallback, &message(uid, "2026-08-18T13:00:00Z"))
+                .unwrap();
+        }
+        let snoozed = db.message_summary_by_uid(fallback, 1).unwrap().unwrap();
+        db.snooze_message("account-1", snoozed.id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+        db.upsert_message(
+            "account-2",
+            second_inbox,
+            &message(1, "2026-08-18T14:00:00Z"),
+        )
+        .unwrap();
+        let snoozed = db.message_summary_by_uid(second_inbox, 1).unwrap().unwrap();
+        db.snooze_message("account-2", snoozed.id, "2999-01-01T00:00:00+00:00")
+            .unwrap();
+
+        let listed = db.list_mailboxes("account-1").unwrap();
+        assert_eq!(
+            listed.iter().map(|mailbox| mailbox.id).collect::<Vec<_>>(),
+            vec![assigned_inbox, inbox, archive, empty, fallback]
+        );
+        assert_eq!(counts_in(&listed, assigned_inbox), (8, 19));
+        assert_eq!(counts_in(&listed, inbox), (7, 9));
+        assert_eq!(counts_in(&listed, archive), (1, 1));
+        assert_eq!(counts_in(&listed, empty), (0, 0));
+        assert_eq!(counts_in(&listed, fallback), (2, 4));
+
+        let all = db.list_all_mailboxes().unwrap();
+        assert_eq!(
+            all.iter().map(|mailbox| mailbox.id).collect::<Vec<_>>(),
+            vec![
+                assigned_inbox,
+                inbox,
+                archive,
+                empty,
+                fallback,
+                second_inbox
+            ]
+        );
+        assert_eq!(counts_in(&all, assigned_inbox), (8, 19));
+        assert_eq!(counts_in(&all, inbox), (7, 9));
+        assert_eq!(counts_in(&all, archive), (1, 1));
+        assert_eq!(counts_in(&all, empty), (0, 0));
+        assert_eq!(counts_in(&all, fallback), (2, 4));
+        assert_eq!(counts_in(&all, second_inbox), (0, 8));
+
+        assert_eq!(
+            db.list_account_inbox_counts()
+                .unwrap()
+                .into_iter()
+                .map(|count| (count.account_id, count.unread_count, count.total_count))
+                .collect::<Vec<_>>(),
+            vec![("account-1".into(), 8, 19), ("account-2".into(), 0, 8)]
+        );
+    }
+
+    #[test]
+    fn mailbox_count_retroactive_rule_with_foreign_destination_stays_incomplete() {
+        let db = Database::memory();
+        let account = account_with("account-1", "sam@example.com");
+        db.insert_account(&account).unwrap();
+        let other_account = account_with("account-2", "lee@example.com");
+        db.insert_account(&other_account).unwrap();
+        let inbox = fixture_mailbox(&db, "account-1", "INBOX", 1);
+        let foreign_destination = fixture_mailbox(&db, "account-2", "Archive", 0);
+        db.upsert_message("account-1", inbox, &message(1, "2026-08-18T12:00:00Z"))
+            .unwrap();
+        db.create_filter_rule(&FilterRule {
+            id: String::new(),
+            account_id: account.summary.id.clone(),
+            name: "Unavailable destination".into(),
+            field: "subject".into(),
+            contains: "letter".into(),
+            action: "move_mailbox".into(),
+            target_mailbox: Some(foreign_destination.to_string()),
+            enabled: true,
+            match_mode: "all".into(),
+            conditions: vec![RuleCondition {
+                field: "subject".into(),
+                value: "letter".into(),
+            }],
+            actions: vec![RuleAction {
+                kind: "move_mailbox".into(),
+                target_mailbox: Some(foreign_destination.to_string()),
+                flag_color: None,
+            }],
+        })
+        .unwrap();
+
+        assert!(
+            !crate::commands::sync::apply_filter_rules(&db, &account, None),
+            "manual retroactive evaluation must report an unavailable foreign target"
+        );
+    }
+
+    #[test]
+    fn mailbox_count_vm_work_is_bounded_with_authoritative_status() {
+        let db = Database::memory();
+        db.insert_account(&account_with("account-1", "sam@example.com"))
+            .unwrap();
+        let mailbox = db
+            .upsert_mailbox(
+                "account-1",
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(100_001),
+                Some(40_000),
+                100_000,
+            )
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "WITH RECURSIVE seq(uid) AS (
+                    SELECT 1 UNION ALL SELECT uid+1 FROM seq WHERE uid<100000
+                 )
+                 INSERT INTO messages(account_id,mailbox_id,uid,received_at)
+                 SELECT ?1,?2,uid,'2026-08-18T12:00:00Z' FROM seq",
+                rusqlite::params!["account-1", mailbox],
+            )
+            .unwrap();
+
+        let (listed, list_steps) = measured_vm_steps(|| db.list_mailboxes("account-1").unwrap());
+        assert_eq!(counts_in(&listed, mailbox), (40_000, 100_000));
+        assert!(
+            list_steps < 1_000,
+            "account list used {list_steps} VM steps"
+        );
+
+        let (all, all_steps) = measured_vm_steps(|| db.list_all_mailboxes().unwrap());
+        assert_eq!(counts_in(&all, mailbox), (40_000, 100_000));
+        assert!(all_steps < 1_000, "global list used {all_steps} VM steps");
+
+        let (badge, badge_steps) = measured_vm_steps(|| db.list_account_inbox_counts().unwrap());
+        assert_eq!(
+            badge
+                .into_iter()
+                .map(|item| (item.unread_count, item.total_count))
+                .collect::<Vec<_>>(),
+            vec![(40_000, 100_000)]
+        );
+        assert!(
+            badge_steps < 1_000,
+            "account badges used {badge_steps} VM steps"
         );
     }
 }

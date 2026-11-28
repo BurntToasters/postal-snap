@@ -13,15 +13,16 @@ use std::{
     time::Duration,
 };
 
-use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use tempfile::TempDir;
+use time::Duration as TimeDuration;
 
 use super::{
     plan_replay_batches, replay_candidates, replay_offline_operations_with_notification,
     ReplayBatchCaps,
 };
 use crate::{
+    date_time::{format_rfc3339, now_utc},
     db::Database,
     mail,
     models::{
@@ -243,7 +244,7 @@ fn defer_move(fixture: &Fixture, undo_token: &str) {
             &fixture.account.summary.id,
             &[(fixture.message_row_id, operation, fixture.archive_id)],
             undo_token,
-            Utc::now() + ChronoDuration::minutes(5),
+            now_utc() + TimeDuration::minutes(5),
         )
         .expect("defer move in local database");
 }
@@ -490,7 +491,7 @@ async fn wait_for_landed_copy(fixture: &Fixture, message_id: &str) -> i64 {
 fn snoozed_row_ids(fixture: &Fixture) -> Vec<(i64, String)> {
     let mut rows: Vec<(i64, String)> = fixture
         .db
-        .list_snoozed(&fixture.account.summary.id, &Utc::now().to_rfc3339())
+        .list_snoozed(&fixture.account.summary.id, &format_rfc3339(now_utc()))
         .expect("list snoozed mail")
         .into_iter()
         .map(|entry| (entry.message.id, entry.snoozed_until))
@@ -507,7 +508,7 @@ async fn greenmail_replayed_deferred_move_keeps_the_snooze() {
     let fixture = fixture().await;
     let account_id = &fixture.account.summary.id;
 
-    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    let snoozed_until = format_rfc3339(now_utc() + TimeDuration::minutes(60));
     fixture
         .db
         .snooze_message(account_id, fixture.message_row_id, &snoozed_until)
@@ -550,7 +551,7 @@ async fn greenmail_batched_move_replay_keeps_every_snooze() {
     let second_message_id = deliver_synthetic(&fixture.account).await;
     let second = cached_inbox_row(&fixture, &second_message_id).await;
 
-    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    let snoozed_until = format_rfc3339(now_utc() + TimeDuration::minutes(60));
     fixture
         .db
         .snooze_messages(
@@ -585,7 +586,7 @@ async fn greenmail_batched_move_replay_keeps_every_snooze() {
             &account_id,
             &operations,
             "batched-snooze-moves",
-            Utc::now() + ChronoDuration::minutes(5),
+            now_utc() + TimeDuration::minutes(5),
         )
         .expect("defer both moves in local database");
     fixture
@@ -645,7 +646,7 @@ async fn greenmail_batched_move_replay_keeps_every_snooze() {
 async fn greenmail_live_single_move_keeps_the_snooze() {
     let fixture = fixture().await;
     let account_id = fixture.account.summary.id.clone();
-    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    let snoozed_until = format_rfc3339(now_utc() + TimeDuration::minutes(60));
     fixture
         .db
         .snooze_message(&account_id, fixture.message_row_id, &snoozed_until)
@@ -698,7 +699,7 @@ async fn greenmail_live_bulk_move_keeps_every_snooze() {
     let second_message_id = deliver_synthetic(&fixture.account).await;
     let second = cached_inbox_row(&fixture, &second_message_id).await;
 
-    let snoozed_until = (Utc::now() + ChronoDuration::minutes(60)).to_rfc3339();
+    let snoozed_until = format_rfc3339(now_utc() + TimeDuration::minutes(60));
     fixture
         .db
         .snooze_messages(

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import { parseMailto } from "../../mailto";
 import { useAppStore } from "../../store";
 import { registerFrameLinkSink } from "../frameLinkRouter";
@@ -12,7 +12,7 @@ export function useFrameLinks(
   // eslint-disable-next-line react-hooks/refs -- latest-ref pattern
   onExternalLinkRef.current = onExternalLink;
 
-  useEffect(
+  useLayoutEffect(
     () =>
       registerFrameLinkSink("reader", {
         frame,

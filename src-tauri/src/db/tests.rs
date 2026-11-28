@@ -1,8 +1,21 @@
 use super::messages::{SANITIZE_CALLS, SANITIZE_HOOK};
-use super::migrations::migrate_v19;
+use super::migrations::{migrate_schema_to_version_for_test, migrate_v19};
 use super::*;
 use crate::mail::failure::MailError;
 use crate::models::{RuleAction, RuleCondition};
+
+#[test]
+fn received_at_normalization_keeps_explicit_utc_and_whole_seconds() {
+    assert_eq!(
+        normalize_received_at("2024-02-29T23:59:58.987654321+05:45"),
+        "2024-02-29T18:14:58+00:00"
+    );
+    assert_eq!(
+        normalize_received_at("2026-03-08T01:02:03-07:00"),
+        "2026-03-08T08:02:03+00:00"
+    );
+    assert_eq!(normalize_received_at("not-a-date"), "not-a-date");
+}
 
 // Undo must not remove a separate move made after the send became uncertain.
 #[test]
@@ -200,8 +213,8 @@ fn deferred_move_payload(message_id: i64, source: &str, destination: &str) -> se
     })
 }
 
-fn future(seconds: i64) -> chrono::DateTime<chrono::Utc> {
-    chrono::Utc::now() + chrono::TimeDelta::seconds(seconds)
+fn future(seconds: i64) -> time::OffsetDateTime {
+    crate::date_time::now_utc() + time::Duration::seconds(seconds)
 }
 
 #[test]
@@ -559,29 +572,20 @@ fn migration_37_upgrades_v36_database_preserving_offline_ops() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("mail.sqlite3");
     {
-        let db = Database::open(&path).unwrap();
-        let account = account();
-        db.insert_account(&account).unwrap();
-        db.queue_operation(
-            &account.summary.id,
-            "flags",
-            &serde_json::json!({ "messageId": 7 }),
-            Some("flags:7:true:false"),
-        )
-        .unwrap();
-    }
-    {
-        // Rebuild the v36 shape by dropping only the columns from v37.
-        let connection = Connection::open(&path).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_schema_to_version_for_test(&mut connection, 36).unwrap();
         connection
-            .execute_batch(
-                "DROP INDEX offline_ops_not_before;
-                     DROP INDEX offline_ops_account_state_due;
-                     ALTER TABLE offline_ops DROP COLUMN state;
-                     ALTER TABLE offline_ops DROP COLUMN attempts;
-                     ALTER TABLE offline_ops DROP COLUMN undo_token;
-                     ALTER TABLE offline_ops DROP COLUMN not_before;
-                     PRAGMA user_version=36;",
+            .execute(
+                "INSERT INTO accounts(id,provider,email,display_name,imap_host,imap_port,imap_tls,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username)
+                 VALUES('legacy-account','manual','legacy@example.test','Legacy','imap.example.test',993,'tls','legacy','smtp.example.test',465,'tls','legacy')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key)
+                 VALUES('legacy-account','flags','{\"messageId\":7,\"isRead\":false}',NULL)",
+                [],
             )
             .unwrap();
     }
@@ -592,16 +596,31 @@ fn migration_37_upgrades_v36_database_preserving_offline_ops() {
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
     assert_eq!(version, CURRENT_SCHEMA_VERSION);
-    let (count, attempts, not_before_is_null, state): (i64, i64, bool, String) = conn
+    let (count, payload, attempts, not_before, state):
+        (i64, String, i64, Option<String>, String) = conn
         .query_row(
-            "SELECT COUNT(*),MIN(attempts),MIN(not_before IS NULL),MIN(state) FROM offline_ops",
+            "SELECT COUNT(*),MIN(payload),MIN(attempts),MIN(not_before),MIN(state) FROM offline_ops",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(
-        (count, attempts, not_before_is_null, state.as_str()),
-        (1, 0, true, "queued")
+        (
+            count,
+            payload.as_str(),
+            attempts,
+            not_before.as_deref(),
+            state.as_str()
+        ),
+        (1, "{\"messageId\":7,\"isRead\":false}", 0, None, "queued")
     );
 }
 
@@ -1776,15 +1795,15 @@ fn draft_times_are_utc_rfc3339_even_for_legacy_rows() {
         )
         .unwrap();
     let listed = db.list_drafts(&account.summary.id).unwrap();
-    let parsed = chrono::DateTime::parse_from_rfc3339(&listed[0].updated_at).unwrap();
+    let parsed = crate::date_time::parse_rfc3339(&listed[0].updated_at).unwrap();
     assert_eq!(
-        parsed.with_timezone(&chrono::Utc).to_rfc3339(),
+        crate::date_time::format_rfc3339(parsed.to_offset(time::UtcOffset::UTC)),
         "2026-09-26T04:27:52+00:00"
     );
     let fresh = db.save_draft(&draft(&account.summary.id)).unwrap();
     let listed = db.list_drafts(&account.summary.id).unwrap();
     let saved = listed.iter().find(|item| item.id == fresh).unwrap();
-    assert!(chrono::DateTime::parse_from_rfc3339(&saved.updated_at).is_ok());
+    assert!(crate::date_time::parse_rfc3339(&saved.updated_at).is_ok());
 }
 
 #[test]
@@ -5136,7 +5155,7 @@ fn envelope_only(uid: u32, received_at: &str) -> CachedMessage {
 }
 
 fn days_ago(days: i64) -> String {
-    crate::mail::parse::canonical_time(Utc::now() - chrono::Duration::days(days))
+    crate::mail::parse::canonical_time(crate::date_time::now_utc() - time::Duration::days(days))
 }
 
 fn cached(db: &Database, mailbox: i64, uid: u32, account_id: &str) -> bool {

@@ -6,6 +6,35 @@ import type { MessageSummary } from "./types";
 import { BULK_LIMIT } from "./bulk";
 import { errorText } from "./errors";
 
+interface SaveScope {
+  accountId: string;
+  mailboxId: ReturnType<typeof useAppStore.getState>["activeMailboxId"];
+  localView: ReturnType<typeof useAppStore.getState>["activeLocalView"];
+}
+
+function captureSaveScope(accountId: string): SaveScope {
+  const current = useAppStore.getState();
+  return {
+    accountId,
+    mailboxId: current.activeMailboxId,
+    localView: current.activeLocalView,
+  };
+}
+
+function saveScopeIsCurrent(scope: SaveScope): boolean {
+  const current = useAppStore.getState();
+  return (
+    current.activeAccountId === scope.accountId &&
+    current.activeMailboxId === scope.mailboxId &&
+    current.activeLocalView === scope.localView
+  );
+}
+
+function setScopedSaveError(scope: SaveScope, cause: unknown): void {
+  if (saveScopeIsCurrent(scope))
+    useAppStore.getState().setError(errorText(cause));
+}
+
 /**
  * Saves every regular file from the loaded messages in this conversation
  * into one folder. Messages that are not loaded stay out of the save.
@@ -14,6 +43,8 @@ export async function saveLoadedConversationFiles(
   summary: MessageSummary,
 ): Promise<void> {
   const store = useAppStore.getState();
+  if (store.activeAccountId !== summary.accountId) return;
+  const scope = captureSaveScope(summary.accountId);
   const members = conversationMessages(store.messages, summary);
   if (members.length < 2 || !members.some((item) => item.hasAttachments))
     return;
@@ -30,7 +61,7 @@ export async function saveLoadedConversationFiles(
       saving.map((item) => item.id),
     );
   } catch (cause) {
-    useAppStore.getState().setError(errorText(cause));
+    setScopedSaveError(scope, cause);
   }
 }
 
@@ -40,6 +71,8 @@ export async function saveSelectedMessages(
   messageIds: number[],
 ): Promise<void> {
   const store = useAppStore.getState();
+  if (store.activeAccountId !== accountId) return;
+  const scope = captureSaveScope(accountId);
   const ids = messageIds.filter((id) =>
     store.messages.some(
       (message) => message.id === id && message.accountId === accountId,
@@ -53,7 +86,7 @@ export async function saveSelectedMessages(
   try {
     await api.saveMessagesEml(accountId, ids);
   } catch (cause) {
-    useAppStore.getState().setError(errorText(cause));
+    setScopedSaveError(scope, cause);
   }
 }
 
@@ -63,6 +96,8 @@ export async function saveSelectedFiles(
   messageIds: number[],
 ): Promise<void> {
   const store = useAppStore.getState();
+  if (store.activeAccountId !== accountId) return;
+  const scope = captureSaveScope(accountId);
   const ids = messageIds.filter((id) => {
     const item = store.messages.find(
       (message) => message.id === id && message.accountId === accountId,
@@ -80,6 +115,6 @@ export async function saveSelectedFiles(
   try {
     await api.saveConversationAttachments(accountId, ids);
   } catch (cause) {
-    useAppStore.getState().setError(errorText(cause));
+    setScopedSaveError(scope, cause);
   }
 }

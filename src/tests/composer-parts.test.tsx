@@ -584,7 +584,38 @@ describe("format toolbar", () => {
     ] as const;
     const chain: Record<string, ReturnType<typeof vi.fn>> = {};
     for (const name of commandNames) chain[name] = vi.fn(() => chain);
+    type EditorEventHandler = (...args: unknown[]) => void;
+    const listeners = new Map<string, Set<EditorEventHandler>>();
+    const on = vi.fn(function (
+      this: Editor,
+      event: string,
+      handler: EditorEventHandler,
+    ) {
+      const eventListeners =
+        listeners.get(event) ?? new Set<EditorEventHandler>();
+      eventListeners.add(handler);
+      listeners.set(event, eventListeners);
+      return this;
+    });
+    const off = vi.fn(function (
+      this: Editor,
+      event: string,
+      handler: EditorEventHandler,
+    ) {
+      listeners.get(event)?.delete(handler);
+      return this;
+    });
+    const editorDom = document.createElement("div");
+    editorDom.contentEditable = "true";
     const editor = {
+      on,
+      off,
+      view: {
+        dom: editorDom,
+        hasFocus: vi.fn(() => false),
+        focus: vi.fn(),
+        posAtDOM: vi.fn(() => 0),
+      },
       chain: vi.fn(() => chain),
       getAttributes: vi.fn(() => ({ fontFamily: "Arial", fontSize: "16px" })),
       isActive: vi.fn((value: unknown) => value === "bold"),

@@ -2,8 +2,8 @@
 Type=Application
 Name=Postal Snap
 Comment=Easy, secure email without clutter
-Exec=postal-snap %u
+Exec=postal-snap %U
 Icon=run.rosie.snap
 Terminal=false
 Categories=Office;Email;
-MimeType=x-scheme-handler/mailto;
+MimeType=message/rfc822;x-scheme-handler/mailto;

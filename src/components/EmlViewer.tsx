@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Download, Eye, Image, X } from "lucide-react";
 import { api } from "../api";
@@ -89,7 +96,7 @@ export function EmlViewer({
   }, []);
 
   // Native frame clicks (WebKit) arrive through the app router while this viewer is open.
-  useEffect(
+  useLayoutEffect(
     () =>
       registerFrameLinkSink("viewer", {
         frame: frameRef,
@@ -106,8 +113,9 @@ export function EmlViewer({
     if (!doc?.body) return;
     const onLink = (event: Event) => {
       const target = event.target;
+      const FrameElement = doc.defaultView?.Element;
       const link =
-        target instanceof Element
+        FrameElement && target instanceof FrameElement
           ? target.closest<HTMLAnchorElement>("a[href], a[data-external-href]")
           : null;
       if (!link) return;

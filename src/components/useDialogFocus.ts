@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 const focusable =
   'button, input, select, textarea, iframe, a[href], area[href], [tabindex], summary, [contenteditable]:not([contenteditable="false"]), audio[controls], video[controls]';
@@ -55,15 +55,25 @@ export function useDialogFocus(
   const internalRef = useRef<HTMLElement>(null);
   const ref = options?.ref ?? internalRef;
   const closeRef = useRef(onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const trapFocus = options?.trapFocus ?? true;
 
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+  useLayoutEffect(() => {
     const dialog = ref.current;
+    const active = document.activeElement as HTMLElement | null;
+    // Preserve the opener when StrictMode replays this effect after focusing inside.
+    if (
+      previousFocusRef.current === null &&
+      active &&
+      (!dialog || !dialog.contains(active))
+    ) {
+      previousFocusRef.current = active;
+    }
+    const previous = previousFocusRef.current;
     if (dialog) {
       if (trapFocus) dialog.setAttribute("data-dialog-focus-trap", "");
       // React applies autoFocus without leaving an attribute or property
@@ -83,16 +93,13 @@ export function useDialogFocus(
       const first =
         controls.find((element) => element.hasAttribute("autofocus")) ??
         controls[0];
-      window.setTimeout(() => {
-        if (
-          document.activeElement &&
-          document.activeElement !== document.body &&
-          dialog.contains(document.activeElement)
-        ) {
-          return;
-        }
+      if (
+        !document.activeElement ||
+        document.activeElement === document.body ||
+        !dialog.contains(document.activeElement)
+      ) {
         first?.focus();
-      }, 0);
+      }
     }
 
     function onKeyDown(event: KeyboardEvent) {

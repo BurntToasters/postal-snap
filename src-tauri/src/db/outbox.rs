@@ -1349,8 +1349,8 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        let due = chrono::DateTime::parse_from_rfc3339(&retry_after).unwrap();
-        (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds()
+        let due = crate::date_time::parse_rfc3339(&retry_after).unwrap();
+        (due - crate::date_time::now_utc()).whole_seconds()
     }
 
     #[test]

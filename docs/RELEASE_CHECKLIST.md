@@ -12,9 +12,9 @@ At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec
 
 - [ ] Clean checkout uses Node.js 26.13.0 (CI and `package.json` `engines`; `24.22.1` is also allowed) and the Rust version pinned in `rust-toolchain.toml`.
 - [ ] `npm ci` succeeds without lockfile changes.
-- [ ] `npm run audit` passes: no npm high-severity advisory and no denied RustSec warning (online; signing host). Moderate dev-only npm advisories are tracked in `docs/partially_implemented.md`.
+- [ ] `npm run audit` passes online: no npm high-severity advisory and no denied RustSec warning. The scoped 0.5.4 candidate's `npm run audit:npm` reported zero vulnerabilities; see `docs/partially_implemented.md`.
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).
-- [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
+- [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`. Only the instrumented Vite host runs with `node --no-turbo-fast-api-calls` to avoid the Node 26.13.1 `Buffer.byteLength` V8 abort in `ServerResponse.end`; the Playwright child and production remain unchanged.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
@@ -30,6 +30,7 @@ Behavior changes made for 0.5.4. Each must hold on the release commit.
 - [ ] Offline operations that exhaust retries move to `needs_attention` instead of being dropped. An ambiguous COPY or fallback MOVE is not reissued without Message-ID proof.
 - [ ] Notify-only rules do not notify again for the same message across sync passes.
 - [ ] Compact density reader and list controls meet the 32px target floor.
+- [ ] Instrumented E2E coverage teardown skips untouched `about:blank` pages and still rejects an app document without instrumentation (`e2e/coverage-lifecycle.spec.ts`).
 
 ## 0.5.4 manual checks
 
@@ -42,7 +43,7 @@ Record date, commit id, and artifact path for each item. These native checks are
 Automated gate decisions made for 0.5.2. Each must hold on the release commit.
 
 - [ ] `npm run audit:cargo` passes with the acknowledged list unchanged. `pin-utils` (RUSTSEC-2026-0441) is removed from the vendored `async-imap`, and `async-executor` is 1.14.1 because 1.14.0 is yanked. The five existing acknowledged IDs are still reported and stay listed in `scripts/audit-cargo.js`.
-- [ ] `npm run audit:npm` passes. Its gate is high severity; the 14 moderate advisories all come from `minimatch` and `glob` through dev tooling and are recorded in `docs/partially_implemented.md`.
+- [ ] `npm run audit:npm` passed for 0.5.2's high-severity gate. That baseline reported 14 moderate dev-tool advisories from `minimatch` and `glob`; they were resolved for 0.5.4 as recorded in `docs/partially_implemented.md`.
 
 ## 0.5.2 manual checks
 

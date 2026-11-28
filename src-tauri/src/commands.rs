@@ -38,6 +38,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
+    date_time::{now_utc, parse_rfc3339},
     db::Database,
     mail,
     models::{
@@ -712,12 +713,8 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             .next_scheduled_send_at(account_id)
             .ok()
             .flatten()
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
-            .map(|when| {
-                (when.with_timezone(&chrono::Utc) - chrono::Utc::now())
-                    .to_std()
-                    .unwrap_or(Duration::ZERO)
-            });
+            .and_then(|value| parse_rfc3339(&value).ok())
+            .map(|when| std::time::Duration::try_from(when - now_utc()).unwrap_or(Duration::ZERO));
         // Autosave does not wake the worker; push pending drafts after a
         // short quiet period instead of on every keystroke-driven save.
         let drafts_pending = state
@@ -2031,6 +2028,7 @@ async fn release_attachment_tokens<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::date_time::{format_rfc3339, now_utc};
     // Get Mail stall failure modes:
     // - a Get Mail pass yields to the worker only because the worker waits
     //   for the lock, and the worker then IDLEs holding it (up to 300s);
@@ -2904,9 +2902,9 @@ mod tests {
         assert_eq!(resolve_requested_send_at(Some("   ")).unwrap(), None);
         assert!(resolve_requested_send_at(Some("tomorrow-ish")).is_err());
         assert!(resolve_requested_send_at(Some("2000-01-01T00:00:00Z")).is_err());
-        let far = (chrono::Utc::now() + chrono::Duration::days(366)).to_rfc3339();
+        let far = format_rfc3339(now_utc() + time::Duration::days(366));
         assert!(resolve_requested_send_at(Some(&far)).is_err());
-        let soon = (chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339();
+        let soon = format_rfc3339(now_utc() + time::Duration::hours(3));
         let resolved = resolve_requested_send_at(Some(&soon)).unwrap().unwrap();
         assert!(resolved.contains("T"));
     }

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use futures_util::TryStreamExt;
 use mail_parser::{MessageParser, MimeHeaders};
 
@@ -12,6 +11,7 @@ use super::{
     RemoteDraftSnapshot, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS,
 };
 use crate::{
+    date_time::{format_rfc3339, now_utc},
     models::AccountRecord,
     security::{redact_error, safe_filename},
 };
@@ -242,8 +242,9 @@ pub async fn fetch_remote_drafts(
             }
             let updated_at = row
                 .internal_date()
-                .map(|date| date.with_timezone(&Utc).to_rfc3339())
-                .unwrap_or_else(|| Utc::now().to_rfc3339());
+                .and_then(|date| date.checked_to_offset(time::UtcOffset::UTC))
+                .map(format_rfc3339)
+                .unwrap_or_else(|| format_rfc3339(now_utc()));
             if let Ok(draft) = parse_remote_draft(uid, raw, updated_at) {
                 drafts.push(draft);
             }

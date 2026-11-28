@@ -16,6 +16,7 @@ import {
 } from "../blockedSenders";
 
 import { beginMessageOpen } from "../messageOpen";
+import type { MoveFailureReconciler } from "../moveConversation";
 import { forgetOpenMessage } from "../recentMessage";
 import { rememberedLetterScroll } from "../letterScroll";
 import { snoozeLoadedConversation } from "../snoozeConversation";
@@ -69,6 +70,7 @@ import { MEDIA_QUERIES } from "../breakpoints";
 import { errorText } from "../errors";
 
 export function MessageReader({
+  reconcileMoveFailure,
   onSnoozed,
   onConversationSnoozed,
   onShowInFolder,
@@ -83,6 +85,7 @@ export function MessageReader({
   onContinueDraft,
   searchQuery,
 }: {
+  reconcileMoveFailure?: MoveFailureReconciler;
   onSnoozed?: (accountId: string, messageId: number) => void | Promise<void>;
   onConversationSnoozed?: (
     accountId: string,
@@ -522,6 +525,7 @@ export function MessageReader({
     setMailboxes,
     setError,
     moveOperations,
+    reconcileMoveFailure,
   });
 
   const { blockSender, blockDomain, unblockDomain, unblockSender } =

@@ -2,6 +2,7 @@ import {
   type Dispatch,
   type MutableRefObject,
   type SetStateAction,
+  useRef,
 } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
@@ -17,6 +18,13 @@ import { errorText } from "../../errors";
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
+interface MutationScope {
+  accountId: string;
+  mailboxId: AppState["activeMailboxId"];
+  localView: AppState["activeLocalView"];
+  selectedIds: number[];
+}
+
 interface Options {
   activeAccountId: AppState["activeAccountId"];
   activeMailboxId: AppState["activeMailboxId"];
@@ -25,7 +33,7 @@ interface Options {
   listedMessages: MessageSummary[];
   setError: AppState["setError"];
   selectMessage: AppState["selectMessage"];
-  refreshList: () => Promise<void>;
+  refreshList: () => Promise<boolean>;
   loadAccountData: () => Promise<void>;
   chooseMessage: (summary: MessageSummary) => Promise<boolean>;
   selectedIds: number[];
@@ -56,6 +64,72 @@ export function useMessageSelection({
   setSelecting,
   setSelectionSnoozeOpen,
 }: Options) {
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+
+  function captureMutationScope(accountId: string): MutationScope {
+    const current = useAppStore.getState();
+    return {
+      accountId,
+      mailboxId: current.activeMailboxId,
+      localView: current.activeLocalView,
+      selectedIds: selectedIdsRef.current.slice(),
+    };
+  }
+
+  function scopeIsCurrent(scope: MutationScope): boolean {
+    const current = useAppStore.getState();
+    return (
+      current.activeAccountId === scope.accountId &&
+      current.activeMailboxId === scope.mailboxId &&
+      current.activeLocalView === scope.localView
+    );
+  }
+
+  function selectionIsCurrent(scope: MutationScope): boolean {
+    return (
+      selectedIdsRef.current.length === scope.selectedIds.length &&
+      selectedIdsRef.current.every(
+        (id, index) => id === scope.selectedIds[index],
+      )
+    );
+  }
+
+  function selectionScopeIsCurrent(scope: MutationScope): boolean {
+    return scopeIsCurrent(scope) && selectionIsCurrent(scope);
+  }
+
+  function clearSelectionIfCurrent(scope: MutationScope): boolean {
+    if (!selectionScopeIsCurrent(scope)) return false;
+    setSelectedIds([]);
+    setSelecting(false);
+    return true;
+  }
+
+  function setScopedError(scope: MutationScope, error: string): void {
+    if (scopeIsCurrent(scope)) setError(error);
+  }
+
+  function setScopedSelectionError(scope: MutationScope, error: string): void {
+    if (selectionScopeIsCurrent(scope)) setError(error);
+  }
+
+  function closeOpenMessageIfCurrent(
+    scope: MutationScope,
+    expected: AppState["selectedMessage"],
+  ): boolean {
+    if (!expected || !scopeIsCurrent(scope)) return false;
+    const open = useAppStore.getState().selectedMessage;
+    if (
+      open?.id !== expected.id ||
+      open.accountId !== expected.accountId ||
+      open.mailboxId !== expected.mailboxId
+    )
+      return false;
+    selectMessage(undefined);
+    return true;
+  }
+
   function toggleSelectIds(ids: number[]) {
     const unique = [...new Set(ids)];
     if (unique.length === 0) return;
@@ -110,22 +184,29 @@ export function useMessageSelection({
 
   async function bulkFlags(isRead?: boolean, isStarred?: boolean) {
     if (!activeAccountId || selectedIds.length === 0 || bulkBusy) return;
+    const accountId = activeAccountId;
+    const scope = captureMutationScope(accountId);
+    const messageIds = scope.selectedIds;
     setBulkBusy(true);
     try {
       const outcome = await api.setMessagesFlags(
-        activeAccountId,
-        selectedIds,
+        accountId,
+        messageIds,
         isRead,
         isStarred,
       );
+      if (!scopeIsCurrent(scope)) return;
       if (outcome.failed > 0)
-        setError(strings.mail.bulkPartial(outcome.failed));
-      setSelectedIds([]);
-      setSelecting(false);
+        setScopedSelectionError(
+          scope,
+          strings.mail.bulkPartial(outcome.failed),
+        );
+      clearSelectionIfCurrent(scope);
       await refreshList();
+      if (!scopeIsCurrent(scope)) return;
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -139,29 +220,32 @@ export function useMessageSelection({
       setError(strings.mail.bulkTooMany);
       return;
     }
-    const ids = selectedIds.slice();
-    const confirmed = await api.showNativeConfirm(
-      strings.mail.deleteForever,
-      strings.mail.deleteForeverQuestion(ids.length),
-    );
-    if (!confirmed) return;
-    const latest = useAppStore.getState();
-    if (
-      latest.activeAccountId !== activeAccountId ||
-      latest.activeMailboxId !== activeMailboxId
-    )
+    const scope = captureMutationScope(activeAccountId);
+    const ids = scope.selectedIds;
+    const open = useAppStore.getState().selectedMessage;
+    let confirmed: boolean;
+    try {
+      confirmed = await api.showNativeConfirm(
+        strings.mail.deleteForever,
+        strings.mail.deleteForeverQuestion(ids.length),
+      );
+    } catch (cause) {
+      setScopedSelectionError(scope, errorText(cause));
+      return;
+    }
+    if (!confirmed || !scopeIsCurrent(scope) || !selectionIsCurrent(scope))
       return;
     setBulkBusy(true);
     try {
-      await api.deleteTrashMessages(activeAccountId, ids);
-      const open = useAppStore.getState().selectedMessage;
-      if (open && ids.includes(open.id)) selectMessage(undefined);
-      setSelectedIds([]);
-      setSelecting(false);
+      await api.deleteTrashMessages(scope.accountId, ids);
+      if (!scopeIsCurrent(scope)) return;
+      if (open && ids.includes(open.id)) closeOpenMessageIfCurrent(scope, open);
+      clearSelectionIfCurrent(scope);
       await refreshList();
+      if (!scopeIsCurrent(scope)) return;
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -190,32 +274,39 @@ export function useMessageSelection({
       setError(strings.mail.noTargetFolder);
       return;
     }
+    const accountId = activeAccountId;
+    const scope = captureMutationScope(accountId);
+    const movedIds = scope.selectedIds;
+    const open = useAppStore.getState().selectedMessage;
     setBulkBusy(true);
     try {
-      const movedIds = selectedIds;
       const outcome = await undoableMove({
-        accountId: activeAccountId,
+        accountId,
         target: undoTargetFor(destination),
         send: (undoToken) =>
           api.moveMessagesToMailbox(
-            activeAccountId,
+            accountId,
             movedIds,
             destination.id,
             undoToken,
           ),
         deferred: (result) => result.queued,
       });
+      if (!scopeIsCurrent(scope)) return;
       if (outcome.failed > 0)
-        setError(strings.mail.bulkPartial(outcome.failed));
+        setScopedSelectionError(
+          scope,
+          strings.mail.bulkPartial(outcome.failed),
+        );
       // The bulk event names no message, so close a moved open message here.
-      const open = useAppStore.getState().selectedMessage;
-      if (open && movedIds.includes(open.id)) selectMessage(undefined);
-      setSelectedIds([]);
-      setSelecting(false);
+      if (open && movedIds.includes(open.id))
+        closeOpenMessageIfCurrent(scope, open);
+      clearSelectionIfCurrent(scope);
       await refreshList();
+      if (!scopeIsCurrent(scope)) return;
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -238,7 +329,8 @@ export function useMessageSelection({
       return;
     }
     const accountId = activeAccountId;
-    const ids = selectedIds.slice();
+    const scope = captureMutationScope(accountId);
+    const ids = scope.selectedIds;
     const removed = new Set(ids);
     const current = useAppStore.getState();
     const open = current.selectedMessage;
@@ -256,30 +348,33 @@ export function useMessageSelection({
           )
         : undefined;
     setBulkBusy(true);
+    let request: number | undefined;
     try {
       await api.snoozeMessages(accountId, ids, untilIso);
-    } catch (cause) {
-      setError(errorText(cause));
-      setBulkBusy(false);
-      return;
-    }
-    if (openRemoved) selectMessage(undefined);
-    setSelectionSnoozeOpen(false);
-    setSelectedIds([]);
-    setSelecting(false);
-    const request = openRemoved ? beginMessageOpen() : undefined;
-    try {
+      if (!scopeIsCurrent(scope)) return;
+      const closedOpen = openRemoved && closeOpenMessageIfCurrent(scope, open);
+      if (selectionIsCurrent(scope)) {
+        setSelectionSnoozeOpen(false);
+        clearSelectionIfCurrent(scope);
+      }
+      request = closedOpen ? beginMessageOpen() : undefined;
       await loadAccountData();
+      if (!scopeIsCurrent(scope)) return;
       await refreshList();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
       return;
     } finally {
       setBulkBusy(false);
     }
     if (request === undefined || !isCurrentMessageOpen(request)) return;
     const after = useAppStore.getState();
-    if (after.activeAccountId !== accountId || after.activeLocalView) return;
+    if (
+      after.activeAccountId !== accountId ||
+      after.activeMailboxId !== scope.mailboxId ||
+      after.activeLocalView !== scope.localView
+    )
+      return;
     const summary = next
       ? after.messages.find((item) => item.id === next.id)
       : undefined;
@@ -296,19 +391,27 @@ export function useMessageSelection({
       setError(strings.mail.noTargetFolder);
       return;
     }
+    const accountId = activeAccountId;
+    const scope = captureMutationScope(accountId);
+    const messageIds = scope.selectedIds;
     setBulkBusy(true);
     try {
       const outcome = await api.copyMessagesToMailbox(
-        activeAccountId,
-        selectedIds,
+        accountId,
+        messageIds,
         destination.id,
       );
+      if (!scopeIsCurrent(scope)) return;
       if (outcome.failed > 0)
-        setError(strings.mail.bulkPartial(outcome.failed));
-      else if (outcome.queued > 0) setError(strings.mail.copyQueued);
+        setScopedSelectionError(
+          scope,
+          strings.mail.bulkPartial(outcome.failed),
+        );
+      else if (outcome.queued > 0)
+        setScopedSelectionError(scope, strings.mail.copyQueued);
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -331,15 +434,19 @@ export function useMessageSelection({
         mailbox.accountId === activeAccountId && mailbox.id === mailboxId,
     );
     if (!destination || destination.id === activeMailboxId) return;
+    const scope = captureMutationScope(activeAccountId);
     const open = useAppStore.getState().selectedMessage;
     const releaseDragged = (id: number) => {
-      setSelectedIds((current) => {
-        const next = current.filter((item) => item !== id);
-        if (next.length === 0) setSelecting(false);
-        return next;
-      });
+      if (!scopeIsCurrent(scope) || !selectionIsCurrent(scope)) return;
+      const next = scope.selectedIds.filter((item) => item !== id);
+      setSelectedIds(next);
+      if (next.length === 0) setSelecting(false);
     };
-    if (known.length === 1 && open?.id === known[0]) {
+    if (
+      known.length === 1 &&
+      open?.accountId === activeAccountId &&
+      open.id === known[0]
+    ) {
       releaseDragged(known[0]);
       window.dispatchEvent(
         new CustomEvent("postal:move-mailbox", { detail: destination.id }),
@@ -361,6 +468,7 @@ export function useMessageSelection({
             ),
           deferred: () => 1,
         });
+        if (!scopeIsCurrent(scope)) return;
         releaseDragged(known[0]);
       } else {
         const outcome = await undoableMove({
@@ -375,16 +483,21 @@ export function useMessageSelection({
             ),
           deferred: (result) => result.queued,
         });
+        if (!scopeIsCurrent(scope)) return;
         if (outcome.failed > 0)
-          setError(strings.mail.bulkPartial(outcome.failed));
-        setSelectedIds([]);
-        setSelecting(false);
+          setScopedSelectionError(
+            scope,
+            strings.mail.bulkPartial(outcome.failed),
+          );
+        clearSelectionIfCurrent(scope);
       }
-      if (open && known.includes(open.id)) selectMessage(undefined);
+      if (open && known.includes(open.id))
+        closeOpenMessageIfCurrent(scope, open);
       await refreshList();
+      if (!scopeIsCurrent(scope)) return;
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedSelectionError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }
@@ -393,9 +506,11 @@ export function useMessageSelection({
   async function markMailboxReadById(mailboxId: number) {
     if (!activeAccountId || bulkBusy) return;
     const accountId = activeAccountId;
+    const scope = captureMutationScope(accountId);
     setBulkBusy(true);
     try {
       const outcome = await api.markMailboxRead(accountId, mailboxId);
+      if (!scopeIsCurrent(scope)) return;
       if (outcome.failed > 0)
         setError(strings.mail.bulkPartial(outcome.failed));
       const latest = useAppStore.getState();
@@ -406,9 +521,10 @@ export function useMessageSelection({
       ) {
         await refreshList();
       }
+      if (!scopeIsCurrent(scope)) return;
       await loadAccountData();
     } catch (cause) {
-      setError(errorText(cause));
+      setScopedError(scope, errorText(cause));
     } finally {
       setBulkBusy(false);
     }

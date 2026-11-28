@@ -15,7 +15,7 @@ type AppState = ReturnType<typeof useAppStore.getState>;
 interface Options {
   activeAccountId: AppState["activeAccountId"];
   loadAccountData: () => Promise<void>;
-  refreshList: () => Promise<void>;
+  refreshList: () => Promise<boolean>;
   chooseMessage: (summary: MessageSummary) => Promise<boolean>;
   setLoadingMessageId: (id: number | undefined) => void;
   setOutboxPreview: (draft: ComposeDraft | null) => void;

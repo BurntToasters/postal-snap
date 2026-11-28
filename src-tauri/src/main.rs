@@ -9,6 +9,7 @@ mod bridge;
 mod commands;
 mod content_blocking;
 mod credentials;
+mod date_time;
 mod db;
 mod download_mark;
 mod html_sanitize;
@@ -392,12 +393,16 @@ fn main() {
             commands::opened::open_eml_file,
             commands::opened::get_opened_message,
             commands::opened::close_opened_message,
+            commands::opened::drain_opened_message_tokens,
+            commands::opened::acknowledge_opened_message_token,
             commands::opened::save_opened_attachment,
             commands::opened::preview_opened_attachment,
             commands::attachments::view_attachment_message,
             commands::drag::start_attachment_drag,
             commands::drag::start_message_drag,
             commands::compatibility::get_account_connection,
+            commands::compatibility::get_failed_offline_operations,
+            commands::compatibility::dismiss_failed_offline_operations,
             commands::compatibility::update_account_connection,
             commands::compatibility::import_bridge_certificate,
             commands::compatibility::approve_bridge_certificate,

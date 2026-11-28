@@ -115,7 +115,14 @@ export async function starLoadedConversation(
       starred,
     );
     if (outcome.failed > 0) {
-      useAppStore.getState().setError(strings.mail.bulkPartial(outcome.failed));
+      const current = useAppStore.getState();
+      if (
+        current.activeAccountId === summary.accountId &&
+        current.activeMailboxId === viewMailboxId &&
+        current.activeLocalView === viewLocal
+      ) {
+        current.setError(strings.mail.bulkPartial(outcome.failed));
+      }
     }
   } catch (cause) {
     const current = useAppStore.getState();

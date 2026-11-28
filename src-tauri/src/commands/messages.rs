@@ -962,8 +962,8 @@ fn junk_keyword_for_roles(source_role: &str, destination_role: &str) -> Option<b
     (source_role == "junk" && destination_role == "inbox").then_some(false)
 }
 
-fn undo_not_before() -> chrono::DateTime<chrono::Utc> {
-    chrono::Utc::now() + chrono::TimeDelta::seconds(UNDO_HOLD_SECONDS)
+fn undo_not_before() -> time::OffsetDateTime {
+    crate::date_time::now_utc() + time::Duration::seconds(UNDO_HOLD_SECONDS)
 }
 
 /// Undo tokens come from the frontend. Keep them short and plain.
@@ -1946,10 +1946,12 @@ mod content_plan_tests {
 
 #[cfg(test)]
 mod undo_session_tls_tests {
-    use chrono::{Duration as ChronoDuration, Utc};
+    use std::time::Duration;
     use tempfile::TempDir;
+    use time::{Duration as TimeDuration, OffsetDateTime};
 
     use crate::{
+        date_time::now_utc,
         db::Database,
         mail,
         models::{
@@ -2077,7 +2079,7 @@ mod undo_session_tls_tests {
         }
     }
 
-    fn defer(fixture: &Fixture, token: &str, not_before: chrono::DateTime<Utc>) {
+    fn defer(fixture: &Fixture, token: &str, not_before: OffsetDateTime) {
         let operation = serde_json::json!({
             "messageId": fixture.row_id,
             "uid": fixture.uid,
@@ -2124,79 +2126,113 @@ mod undo_session_tls_tests {
         matches.len()
     }
 
-    // Failure modes for A19: a live frontend's move replays at its expired
-    // deadline; offline Undo leaves a replayable move behind; startup leaves
-    // an abandoned hold permanent; stale enqueue races rotation; or replay
-    // moves the message more than once.
+    // Failure modes for A19: future Undo fails to cancel, an expired move is
+    // held past its deadline, restart leaves an abandoned hold stuck, a stale
+    // token enqueues work, or replay moves a message more than once.
     #[tokio::test]
     #[ignore = "requires npm run test:mail-integration"]
-    async fn greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart() {
-        let fixture = fixture().await;
-        let live_session = fixture.db.begin_undo_session().unwrap();
-        let live_token = format!("{live_session}{}", "c".repeat(32));
-        defer(
-            &fixture,
-            &live_token,
-            Utc::now() - ChronoDuration::seconds(1),
-        );
+    async fn greenmail_undo_session_finite_hold_replays_expired_and_recovers_after_restart() {
+        let live = fixture().await;
+        let live_session = live.db.begin_undo_session().unwrap();
+        let future_token = format!("{live_session}{}", "c".repeat(32));
+        defer(&live, &future_token, now_utc() + TimeDuration::minutes(5));
 
-        assert!(fixture
+        assert!(live
             .db
-            .queued_operations(&fixture.account_id)
+            .queued_operations(&live.account_id)
             .unwrap()
             .is_empty());
-        assert!(fixture
+        assert!(live
             .db
-            .next_deferred_due(&fixture.account_id)
+            .next_deferred_due(&live.account_id)
             .unwrap()
-            .is_none());
-        assert!(!replay(&fixture).await);
-        assert_eq!(server_count(&fixture, "INBOX").await, 1);
-        assert_eq!(server_count(&fixture, "Archive").await, 0);
+            .is_some_and(|due| due > Duration::from_secs(240)));
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 1);
+        assert_eq!(server_count(&live, "Archive").await, 0);
 
         assert_eq!(
-            fixture
-                .db
-                .undo_deferred(&fixture.account_id, &live_token)
+            live.db
+                .undo_deferred(&live.account_id, &future_token)
                 .unwrap(),
             (1, false),
-            "undo edits the local queue while the account is offline"
+            "offline Undo cancels a future move"
         );
-        assert!(!replay(&fixture).await);
-        assert_eq!(server_count(&fixture, "INBOX").await, 1);
-        assert_eq!(server_count(&fixture, "Archive").await, 0);
+        assert!(live
+            .db
+            .queued_operations(&live.account_id)
+            .unwrap()
+            .is_empty());
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 1);
+        assert_eq!(server_count(&live, "Archive").await, 0);
 
-        let restart_token = format!("{live_session}{}", "d".repeat(32));
-        defer(
-            &fixture,
-            &restart_token,
-            Utc::now() + ChronoDuration::minutes(5),
+        let expired_token = format!("{live_session}{}", "d".repeat(32));
+        defer(&live, &expired_token, now_utc() - TimeDuration::seconds(1));
+        assert_eq!(
+            live.db.queued_operations(&live.account_id).unwrap().len(),
+            1
         );
-        let database_path = fixture._directory.path().join("mail.sqlite3");
-        let account_id = fixture.account_id.clone();
-        let account = fixture.account.clone();
-        let message_id = fixture.message_id.clone();
-        let row_id = fixture.row_id;
-        let uid = fixture.uid;
-        let uid_validity = fixture.uid_validity;
-        let archive_id = fixture.archive_id;
+        assert!(live
+            .db
+            .next_deferred_due(&live.account_id)
+            .unwrap()
+            .is_none());
+        assert!(!replay(&live).await, "the expired move should drain once");
+        assert!(live
+            .db
+            .queued_operations(&live.account_id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(server_count(&live, "INBOX").await, 0);
+        assert_eq!(server_count(&live, "Archive").await, 1);
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 0);
+        assert_eq!(server_count(&live, "Archive").await, 1);
+
+        let abandoned = fixture().await;
+        let abandoned_session = abandoned.db.begin_undo_session().unwrap();
+        let abandoned_token = format!("{abandoned_session}{}", "e".repeat(32));
+        defer(
+            &abandoned,
+            &abandoned_token,
+            now_utc() + TimeDuration::minutes(5),
+        );
+        assert!(abandoned
+            .db
+            .queued_operations(&abandoned.account_id)
+            .unwrap()
+            .is_empty());
+        assert!(abandoned
+            .db
+            .next_deferred_due(&abandoned.account_id)
+            .unwrap()
+            .is_some());
+        let database_path = abandoned._directory.path().join("mail.sqlite3");
+        let account_id = abandoned.account_id.clone();
+        let account = abandoned.account.clone();
+        let message_id = abandoned.message_id.clone();
+        let row_id = abandoned.row_id;
+        let uid = abandoned.uid;
+        let uid_validity = abandoned.uid_validity;
+        let archive_id = abandoned.archive_id;
         let Fixture {
             db,
             _directory: directory,
             ..
-        } = fixture;
+        } = abandoned;
         drop(db);
 
         let db = Database::open(&database_path).expect("reopen durable mail database");
         let restarted_session = db.begin_undo_session().unwrap();
-        assert_ne!(restarted_session, live_session);
+        assert_ne!(restarted_session, abandoned_session);
         assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
         assert!(db
             .defer_moves::<serde_json::Value>(
                 &account_id,
                 &[],
-                &restart_token,
-                Utc::now() + ChronoDuration::minutes(5),
+                &abandoned_token,
+                now_utc() + TimeDuration::minutes(5),
             )
             .is_err());
         let reopened = Fixture {
@@ -2213,6 +2249,11 @@ mod undo_session_tls_tests {
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);
+        assert!(reopened
+            .db
+            .queued_operations(&reopened.account_id)
+            .unwrap()
+            .is_empty());
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);

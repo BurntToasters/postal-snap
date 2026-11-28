@@ -137,8 +137,43 @@ pub(crate) const ARRIVAL_RULE_PENDING: i64 = 1;
 pub(crate) const ARRIVAL_NOTICE_PENDING: i64 = 2;
 pub(crate) const RULE_NOTICE_CLAIMED: i64 = 4;
 pub(crate) const NEW_MAIL_NOTICE_CLAIMED: i64 = 8;
+const RULE_ARRIVAL_PAGE_LIMIT: i64 = 100;
 /// Subtree visits one thread repair may make for each arrived message.
 const THREAD_REPAIR_ROUNDS: usize = 2000;
+
+fn pending_rule_arrival_sql() -> String {
+    let effective_role = effective_role_sql("f");
+    format!(
+        "SELECT m.id FROM messages m INDEXED BY messages_pending_rule_arrival
+         JOIN mailboxes f ON f.id=m.mailbox_id
+         WHERE m.account_id=?1 AND {effective_role}='inbox' AND m.is_read=0
+           AND m.pending_move_to IS NULL
+           AND (m.notification_state & {ARRIVAL_RULE_PENDING}) != 0
+         ORDER BY m.id ASC LIMIT ?2"
+    )
+}
+
+fn consume_new_mail_arrival_select_sql() -> String {
+    let effective_role = effective_role_sql("box");
+    format!(
+        "{MESSAGE_SUMMARY_SELECT} INDEXED BY messages_pending_notice_arrival
+         JOIN mailboxes box ON box.id=m.mailbox_id
+         WHERE m.account_id=?1 AND {effective_role}='inbox'
+           AND m.pending_move_to IS NULL AND m.is_read=0
+           AND (m.notification_state & {ARRIVAL_NOTICE_PENDING}) != 0
+           AND (m.notification_state & ?2) = 0
+         ORDER BY m.id DESC LIMIT 1"
+    )
+}
+
+fn consume_new_mail_arrival_clear_sql() -> String {
+    format!(
+        "UPDATE messages SET notification_state=
+           (notification_state & ~?2) |
+           CASE WHEN (notification_state & ?3)=0 THEN ?4 ELSE 0 END
+         WHERE account_id=?1 AND (notification_state & {ARRIVAL_NOTICE_PENDING}) != 0"
+    )
+}
 
 database_operations! {
 impl Database {
@@ -476,6 +511,20 @@ impl Database {
         Ok(())
     }
 
+    /// Oldest pending unread Inbox arrivals for one automatic-rule pass.
+    pub fn pending_rule_arrival_ids(&self, account_id: &str) -> Result<Vec<i64>, String> {
+        let conn = self.read_conn()?;
+        let mut statement = conn
+            .prepare(&pending_rule_arrival_sql())
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![account_id, RULE_ARRIVAL_PAGE_LIMIT], |row| row.get(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        Ok(rows)
+    }
+
     /// Consumes one account's pending arrival burst and returns its newest
     /// unread Inbox message. The claim lands before the native notice is shown.
     pub fn consume_new_mail_arrival(
@@ -484,33 +533,17 @@ impl Database {
     ) -> Result<Option<MessageSummary>, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        let effective_role = effective_role_sql("box");
         let message = transaction
             .query_row(
-                &format!(
-                    "{} JOIN mailboxes box ON box.id=m.mailbox_id
-                     WHERE m.account_id=?1 AND {effective_role}='inbox'
-                       AND m.pending_move_to IS NULL AND m.is_read=0
-                       AND (m.notification_state & ?2) != 0
-                       AND (m.notification_state & ?3) = 0
-                     ORDER BY m.id DESC LIMIT 1",
-                    MESSAGE_SUMMARY_SELECT
-                ),
-                params![
-                    account_id,
-                    ARRIVAL_NOTICE_PENDING,
-                    RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED
-                ],
+                &consume_new_mail_arrival_select_sql(),
+                params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
                 map_message_summary,
             )
             .optional()
             .map_err(db_error)?;
         transaction
             .execute(
-                "UPDATE messages SET notification_state=
-                   (notification_state & ~?2) |
-                   CASE WHEN (notification_state & ?3)=0 THEN ?4 ELSE 0 END
-                 WHERE account_id=?1 AND (notification_state & ?2) != 0",
+                &consume_new_mail_arrival_clear_sql(),
                 params![
                     account_id,
                     ARRIVAL_NOTICE_PENDING,
@@ -1879,18 +1912,18 @@ impl Database {
         }
         // Dates are UTC days; received_at is RFC 3339, so text compares.
         if let Some(date) = parsed.after {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
         }
         if let Some(date) = parsed.before {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
         }
         if let Some(date) = parsed.on {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
-            if let Some(next) = date.checked_add_signed(chrono::Duration::days(1)) {
-                values.push(Value::from(next.format("%Y-%m-%d").to_string()));
+            if let Some(next) = date.next_day() {
+                values.push(Value::from(crate::date_time::format_iso_date(next)));
                 sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
             }
         }
@@ -2748,6 +2781,13 @@ mod tests {
         AccountRecord, AccountSummary, MailboxRole, ProviderKind, SearchQuery, ServerConfig,
         TlsMode,
     };
+    use rusqlite::{Connection, StatementStatus};
+
+    use super::{
+        consume_new_mail_arrival_clear_sql, consume_new_mail_arrival_select_sql,
+        pending_rule_arrival_sql, ARRIVAL_NOTICE_PENDING, ARRIVAL_RULE_PENDING,
+        NEW_MAIL_NOTICE_CLAIMED, RULE_NOTICE_CLAIMED,
+    };
 
     fn with_account() -> (Database, String, i64) {
         let database = Database::memory();
@@ -2832,6 +2872,213 @@ mod tests {
             importance: String::new(),
             disposition_to: String::new(),
         }
+    }
+
+    fn seed_arrival_query_rows(db: &Database, account_id: &str, mailbox_id: i64) {
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "WITH digits(x) AS (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9))
+             INSERT INTO messages(account_id,mailbox_id,uid,received_at,notification_state)
+             SELECT ?1,?2,
+                    1 + a.x*10000 + b.x*1000 + c.x*100 + d.x*10 + e.x,
+                    '2026-01-01T00:00:00+00:00',0
+             FROM digits a,digits b,digits c,digits d,digits e",
+            rusqlite::params![account_id, mailbox_id],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE account_id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 100_000);
+    }
+
+    fn measured_ids<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> (Vec<i64>, i32) {
+        let mut statement = connection.prepare(sql).unwrap();
+        let ids = statement
+            .query_map(parameters, |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let vm_steps = statement.get_status(StatementStatus::VmStep);
+        (ids, vm_steps)
+    }
+
+    fn measured_update<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> (usize, i32) {
+        let mut statement = connection.prepare(sql).unwrap();
+        let changed = statement.execute(parameters).unwrap();
+        let vm_steps = statement.get_status(StatementStatus::VmStep);
+        (changed, vm_steps)
+    }
+
+    fn query_plan<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> String {
+        let mut statement = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        statement
+            .query_map(parameters, |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" | ")
+    }
+
+    // Failure-first actual-query fixture: the page and notice selects retain
+    // their runtime-bound masks and production joins/order/limits. A 100K-row
+    // no-match or sparse queue must not walk the account's unrelated mail.
+    #[test]
+    fn arrival_page_and_notice_claim_queries_use_bounded_work_at_100k() {
+        let (db, account_id, inbox) = with_account();
+        seed_arrival_query_rows(&db, &account_id, inbox);
+        let conn = db.conn().unwrap();
+
+        let rule_sql = pending_rule_arrival_sql();
+        let rule_plan = query_plan(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        let (ids, steps) = measured_ids(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        assert!(ids.is_empty());
+        let rule_no_match_steps = steps;
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=100000",
+            [ARRIVAL_RULE_PENDING],
+        )
+        .unwrap();
+        let (ids, steps) = measured_ids(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        assert_eq!(ids, vec![100000]);
+        let rule_sparse_steps = steps;
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE account_id=?2",
+            rusqlite::params![ARRIVAL_RULE_PENDING, account_id],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(
+            db.pending_rule_arrival_ids(&account_id).unwrap(),
+            (1..=100).collect::<Vec<_>>(),
+            "the production page remains capped and oldest-first"
+        );
+
+        let conn = db.conn().unwrap();
+        let notice_sql = consume_new_mail_arrival_select_sql();
+        let clear_sql = consume_new_mail_arrival_clear_sql();
+        let notice_plan = query_plan(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        let (ids, steps) = measured_ids(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        assert!(ids.is_empty());
+        let notice_no_match_steps = steps;
+        let (no_match_updates, notice_update_no_match_steps) = measured_update(
+            &conn,
+            &clear_sql,
+            rusqlite::params![
+                account_id,
+                ARRIVAL_NOTICE_PENDING,
+                RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                NEW_MAIL_NOTICE_CLAIMED
+            ],
+        );
+        assert_eq!(no_match_updates, 0);
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=1",
+            [ARRIVAL_NOTICE_PENDING],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=2",
+            [ARRIVAL_NOTICE_PENDING | RULE_NOTICE_CLAIMED],
+        )
+        .unwrap();
+        let (ids, steps) = measured_ids(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        assert_eq!(ids, vec![1]);
+        let notice_sparse_steps = steps;
+
+        let (changed, steps) = measured_update(
+            &conn,
+            &clear_sql,
+            rusqlite::params![
+                account_id,
+                ARRIVAL_NOTICE_PENDING,
+                RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                NEW_MAIL_NOTICE_CLAIMED
+            ],
+        );
+        assert_eq!(changed, 2);
+        let notice_update_sparse_steps = steps;
+        let states: (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT notification_state FROM messages WHERE id=1),
+                        (SELECT notification_state FROM messages WHERE id=2)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(states, (NEW_MAIL_NOTICE_CLAIMED, RULE_NOTICE_CLAIMED));
+        drop(conn);
+
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET notification_state=?1 WHERE id=3",
+                [ARRIVAL_NOTICE_PENDING],
+            )
+            .unwrap();
+        let claimed = db.consume_new_mail_arrival(&account_id).unwrap().unwrap();
+        assert_eq!(claimed.id, 3);
+        let state: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT notification_state FROM messages WHERE id=3",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, NEW_MAIL_NOTICE_CLAIMED);
+
+        assert!(
+            rule_no_match_steps < 5_000
+                && rule_sparse_steps < 5_000
+                && notice_no_match_steps < 5_000
+                && notice_sparse_steps < 5_000
+                && notice_update_no_match_steps < 5_000
+                && notice_update_sparse_steps < 5_000,
+            "100K-row query VM steps: rule no-match={rule_no_match_steps}, rule sparse={rule_sparse_steps}, notice no-match={notice_no_match_steps}, notice sparse={notice_sparse_steps}, notice update no-match={notice_update_no_match_steps}, notice update sparse={notice_update_sparse_steps}"
+        );
+        assert!(
+            rule_plan.contains("messages_pending_rule_arrival"),
+            "production-shaped rule page missed its partial index: {rule_plan}"
+        );
+        assert!(
+            notice_plan.contains("messages_pending_notice_arrival"),
+            "production-shaped notice select missed its partial index: {notice_plan}"
+        );
     }
 
     /// Search must match what lists show: a snoozed row answers nothing until

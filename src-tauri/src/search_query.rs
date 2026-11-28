@@ -15,7 +15,7 @@
 //! - quotes left open still parse; huge input is truncated;
 //! - conflicting `is:read` / `is:unread` is decided (last wins), not both.
 
-use chrono::{Datelike, NaiveDate};
+use time::Date;
 
 const MAX_INPUT_CHARS: usize = 200;
 const MAX_CLAUSES: usize = 12;
@@ -70,10 +70,10 @@ pub(crate) struct ParsedSearch {
     pub pinned: bool,
     /// `is:important` / `is:high`, or `is:low`. The stored mark, not one header.
     pub importance: Option<&'static str>,
-    pub before: Option<NaiveDate>,
-    pub after: Option<NaiveDate>,
+    pub before: Option<Date>,
+    pub after: Option<Date>,
     /// `on:` one UTC day. The last `on:` wins.
-    pub on: Option<NaiveDate>,
+    pub on: Option<Date>,
 }
 
 fn has_alnum(value: &str) -> bool {
@@ -202,7 +202,7 @@ pub(crate) fn filename_like_pattern(needle: &str) -> String {
     format!("%{escaped}%")
 }
 
-fn parse_date(value: &str) -> Option<NaiveDate> {
+fn parse_date(value: &str) -> Option<Date> {
     let bytes = value.as_bytes();
     let shaped = bytes.len() == 10
         && bytes[4] == b'-'
@@ -214,7 +214,7 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
     if !shaped {
         return None;
     }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+    crate::date_time::parse_iso_date(value).ok()
 }
 
 /// Flag color names in Apple Mail's order. The index is the color value.
@@ -436,12 +436,26 @@ fn imap_any(key: &str, identities: &[String], ascii: &mut bool) -> Option<String
     Some(combined)
 }
 
-fn imap_date(date: NaiveDate) -> String {
+fn imap_date(date: Date) -> String {
+    let month = match date.month() {
+        time::Month::January => 0,
+        time::Month::February => 1,
+        time::Month::March => 2,
+        time::Month::April => 3,
+        time::Month::May => 4,
+        time::Month::June => 5,
+        time::Month::July => 6,
+        time::Month::August => 7,
+        time::Month::September => 8,
+        time::Month::October => 9,
+        time::Month::November => 10,
+        time::Month::December => 11,
+    };
     format!(
         // IMAP date-year is 4DIGIT; `0001` must not become `1`.
         "{}-{}-{:04}",
         date.day(),
-        MONTHS[date.month0() as usize],
+        MONTHS[month],
         date.year()
     )
 }
@@ -611,8 +625,20 @@ impl ParsedSearch {
 mod tests {
     use super::*;
 
-    fn date(value: &str) -> NaiveDate {
-        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    fn date(value: &str) -> Date {
+        crate::date_time::parse_iso_date(value).unwrap()
+    }
+
+    #[test]
+    fn search_dates_keep_leap_day_and_reject_nonleap_day() {
+        assert_eq!(parse("on:2024-02-29").on, Some(date("2024-02-29")));
+        let invalid = parse("on:2023-02-29");
+        assert!(invalid.on.is_none());
+        assert_eq!(invalid.plain[0].text, "on:2023-02-29");
+        assert_eq!(
+            parse("on:2024-02-29").imap_criteria().as_deref(),
+            Some("ON 29-Feb-2024")
+        );
     }
 
     #[test]

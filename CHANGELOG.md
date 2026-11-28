@@ -22,6 +22,19 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 
 ## Changes in `v0.5.4-beta.1:`
 
+- **NEW - Offline recovery:** Review failed local mail changes for each account in Settings > Accounts, then confirm which reviewed changes to dismiss.
+- **IMPROVED - Automatic rules:** Evaluate every rule against the same bounded page of arrivals so overlapping rules can act on the same message.
+- **IMPROVED - Large mailboxes:** Opening folder lists avoids counting every cached message when the server already provides mailbox totals.
+- **IMPROVED - Server search:** Continue an all-folder search with a keyboard-accessible action while keeping partial-result status and selection accurate; changing the query clears stale continuation.
+- **IMPROVED - Window glass:** Splitter gutters stay opaque and readable over native window materials, including reduced-transparency and high-contrast modes.
+- **IMPROVED - Inbox assignments:** The assigned Inbox now drives the read-only watcher and arrival sync, with a safe INBOX fallback before folder discovery.
+- **FIX - Mailbox refresh:** A count-only refresh no longer cancels an in-flight full load or drops delayed draft data.
+- **FIX - Undo moves:** Expired held moves resume after reconnect or restart, and canceled Undo work stays out of the replay queue.
+- **FIX - Refused moves:** If a move fails, the message returns to the current list. Later read or flag changes, the current selection, and unfinished search edits are preserved.
+- **FIX - Inline images:** Removing an attachment from a draft also removes copies of that image from the editor. Separately pasted images can still be removed individually after reopening the draft.
+- **FIX - Open email files:** OS-opened `.eml` files reach the viewer across startup races, multiple opens stay ordered, and Flatpak advertises email-file support. Remote images remain blocked in the viewer.
+- **FIX - Links in opened email:** Clicking linked text or an image inside a link now reaches the viewer’s link confirmation or mail composer.
+
 ## Changes in `v0.5.3:`
 - **Filters:** Updated filers.
 

@@ -107,7 +107,7 @@ fn redirect_headers(
         .filter(|addr| !addr.is_empty())
         .unwrap_or(account.summary.email.as_str());
     let from = redirect_from(&account.summary.display_name, sender_email)?;
-    let date = chrono::Utc::now().to_rfc2822();
+    let date = crate::date_time::format_rfc2822(crate::date_time::now_utc());
     if date.chars().any(char::is_control) {
         return Err("The message envelope is invalid.".into());
     }
@@ -1497,6 +1497,16 @@ mod plain_tests {
         TlsMode,
     };
     use async_imap::Authenticator;
+
+    #[test]
+    fn fixed_utc_rfc2822_header_format_is_stable() {
+        assert_eq!(
+            crate::date_time::format_rfc2822(
+                crate::date_time::parse_rfc3339("2026-03-07T20:14:59Z").unwrap()
+            ),
+            "Sat, 7 Mar 2026 20:14:59 +0000"
+        );
+    }
 
     // Failure modes for plain-text sends:
     // 1. A plain draft still ships text/html or multipart/alternative.

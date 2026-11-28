@@ -23,8 +23,8 @@ interface Options {
   loadersRef: MutableRefObject<{
     loadAccountData: () => Promise<void>;
     loadMailboxCounts: () => Promise<void>;
-    loadMessages: () => Promise<void>;
-    runSearch: () => Promise<void>;
+    loadMessages: () => Promise<boolean>;
+    refreshSubmittedSearch: () => Promise<boolean>;
   }>;
   submittedQueryRef: MutableRefObject<string>;
   setError: AppState["setError"];
@@ -69,7 +69,7 @@ function createQueues(
     if (due.data) void loaders.loadAccountData();
     else if (due.counts) void loaders.loadMailboxCounts();
     if (due.messages) {
-      if (submittedQueryRef.current) void loaders.runSearch();
+      if (submittedQueryRef.current) void loaders.refreshSubmittedSearch();
       else void loaders.loadMessages();
     }
   });

@@ -91,9 +91,10 @@ pub fn describe_certificate(pem: &str) -> Result<CertificateMetadata, String> {
     let certificate = decoded
         .parse_x509()
         .map_err(|_| "The selected certificate is invalid.".to_string())?;
-    let expires = chrono::DateTime::from_timestamp(certificate.validity().not_after.timestamp(), 0)
-        .ok_or("The certificate expiry is invalid.")?
-        .to_rfc3339();
+    let expires =
+        time::OffsetDateTime::from_unix_timestamp(certificate.validity().not_after.timestamp())
+            .map(crate::date_time::format_rfc3339)
+            .map_err(|_| "The certificate expiry is invalid.")?;
     let fingerprint = Sha256::digest(&decoded.contents)
         .iter()
         .map(|byte| format!("{byte:02X}"))

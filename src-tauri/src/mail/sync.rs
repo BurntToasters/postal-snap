@@ -5,8 +5,8 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
+use time::{Duration as TimeDuration, OffsetDateTime, UtcOffset};
 use tokio::sync::Notify;
 
 use async_imap::types::Mailbox;
@@ -29,6 +29,7 @@ use super::{
     MAX_MESSAGE_BYTES,
 };
 use crate::{
+    date_time::{now_utc, parse_rfc3339},
     db::{mailboxes::effective_inbox_name, parse_role, CachedMessage, Database},
     models::{
         mailbox_role_assignment, AccountRecord, AccountSetupRequest, CachePolicy, MailboxRole,
@@ -83,10 +84,10 @@ const BACKFILL_BATCHES_PER_PASS: u32 = 4;
 
 /// Without CONDSTORE, flag changes that do not move UNSEEN (stars) are only
 /// visible to a full flag scan, so rescan at least this often.
-const FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
+const FLAG_SCAN_INTERVAL: TimeDuration = TimeDuration::minutes(15);
 
 /// Without CONDSTORE, a full flag scan runs at most this often per folder.
-const FULL_FLAG_SCAN_INTERVAL: chrono::Duration = chrono::Duration::hours(24);
+const FULL_FLAG_SCAN_INTERVAL: TimeDuration = TimeDuration::hours(24);
 
 /// Newest cached UIDs refreshed by an interval or unread-change flag scan.
 pub(crate) const FLAG_WINDOW_UIDS: usize = 5_000;
@@ -106,8 +107,8 @@ pub(crate) enum FlagScan {
 pub(crate) fn plan_flag_scan(
     due: bool,
     explicit: bool,
-    last_full: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    last_full: Option<OffsetDateTime>,
+    now: OffsetDateTime,
 ) -> FlagScan {
     if explicit {
         return FlagScan::Full;
@@ -130,11 +131,11 @@ pub(crate) fn flag_scan_window(uids: &[u32], limit: usize) -> &[u32] {
 
 /// Last full flag scan per (account, folder). Memory only: a restart costs one
 /// extra full scan per folder.
-type FullScanMap = HashMap<(String, String), DateTime<Utc>>;
+type FullScanMap = HashMap<(String, String), OffsetDateTime>;
 
 static FULL_FLAG_SCANS: LazyLock<Mutex<FullScanMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn last_full_flag_scan(account_id: &str, folder: &str) -> Option<DateTime<Utc>> {
+fn last_full_flag_scan(account_id: &str, folder: &str) -> Option<OffsetDateTime> {
     let scans = FULL_FLAG_SCANS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -143,7 +144,7 @@ fn last_full_flag_scan(account_id: &str, folder: &str) -> Option<DateTime<Utc>> 
         .copied()
 }
 
-fn record_full_flag_scan(account_id: &str, folder: &str, at: DateTime<Utc>) {
+fn record_full_flag_scan(account_id: &str, folder: &str, at: OffsetDateTime) {
     let mut scans = FULL_FLAG_SCANS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -705,8 +706,11 @@ async fn sync_folder<H: SyncHooks>(
         || meta
             .last_flag_scan_at
             .as_deref()
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .is_none_or(|last| Utc::now() - last.with_timezone(&Utc) > FLAG_SCAN_INTERVAL);
+            .and_then(|value| parse_rfc3339(value).ok())
+            .is_none_or(|last| {
+                last.checked_to_offset(UtcOffset::UTC)
+                    .is_none_or(|last| now_utc() - last > FLAG_SCAN_INTERVAL)
+            });
     let flag_scan = if condstore {
         FlagScan::Skip
     } else {
@@ -714,7 +718,7 @@ async fn sync_folder<H: SyncHooks>(
             flag_interval_due,
             hooks.explicit_refresh(),
             last_full_flag_scan(account_id, &folder.name),
-            Utc::now(),
+            now_utc(),
         )
     };
     let unchanged = !purged
@@ -979,7 +983,7 @@ async fn cache_envelopes(
     account_id: &str,
     mailbox_id: i64,
     range: EnvelopeRange,
-    cutoff: Option<&DateTime<Utc>>,
+    cutoff: Option<&OffsetDateTime>,
     arrivals: bool,
 ) -> Result<EnvelopeBatch, String> {
     let query = format!("{ENVELOPE_QUERY_PREFIX}<0.{}>)", MAX_MESSAGE_BYTES + 1);
@@ -1029,11 +1033,12 @@ async fn cache_envelopes(
         colors.push((parsed.uid, flag_color_of(&item)));
         let is_old = cutoff.is_some_and(|cutoff| {
             item.internal_date()
-                .map(|date| date.with_timezone(&Utc) < *cutoff)
+                .map(|date| date < *cutoff)
                 .unwrap_or_else(|| {
-                    DateTime::parse_from_rfc3339(&parsed.received_at)
-                        .map(|received| received.with_timezone(&Utc) < *cutoff)
-                        .unwrap_or(false)
+                    parse_rfc3339(&parsed.received_at)
+                        .ok()
+                        .and_then(|received| received.checked_to_offset(UtcOffset::UTC))
+                        .is_some_and(|received| received < *cutoff)
                 })
         });
         age_marks.push((parsed.uid, is_old));
@@ -1102,7 +1107,7 @@ async fn backfill_batch(
     db: &Database,
     account_id: &str,
     mailbox_id: i64,
-    cutoff: Option<&DateTime<Utc>>,
+    cutoff: Option<&OffsetDateTime>,
 ) -> Result<BackfillStep, String> {
     let Some(oldest) = db.min_uid(mailbox_id)? else {
         return Ok(BackfillStep::Complete);
@@ -1289,7 +1294,7 @@ async fn full_flag_scan(
     }
     db.mark_flag_scan(mailbox_id)?;
     if scope == FlagScan::Full {
-        record_full_flag_scan(account_id, folder, Utc::now());
+        record_full_flag_scan(account_id, folder, now_utc());
     }
     Ok(())
 }
@@ -2027,6 +2032,7 @@ pub async fn server_search<H: SyncHooks>(
     let budget = tokio::time::Instant::now() + SERVER_SEARCH_BUDGET;
     let ceiling = tokio::time::Instant::now() + SERVER_SEARCH_FIRST_FOLDER_CEILING;
     let mut complete = true;
+    let mut partial = false;
     let mut last_finished = None;
     for (index, (mailbox_id, name)) in mailboxes.iter().enumerate() {
         let first = index == 0;
@@ -2061,8 +2067,15 @@ pub async fn server_search<H: SyncHooks>(
         }
         if cut_short {
             complete = false;
-            last_finished =
-                cut_resume_point(query.all_folders, first, *mailbox_id).or(last_finished);
+            let cutoff = cutoff_after_folder(
+                query.all_folders,
+                first,
+                *mailbox_id,
+                last_finished,
+                index + 1 < mailboxes.len(),
+            );
+            partial |= cutoff.partial;
+            last_finished = cutoff.resume_after_mailbox_id;
             break;
         }
         last_finished = Some(*mailbox_id);
@@ -2079,6 +2092,7 @@ pub async fn server_search<H: SyncHooks>(
     Ok(ServerSearchResult {
         messages: results,
         complete,
+        partial,
         resume_after_mailbox_id: resume_point(query.all_folders, complete, last_finished),
     })
 }
@@ -2087,6 +2101,7 @@ fn complete_search(messages: Vec<MessageSummary>) -> ServerSearchResult {
     ServerSearchResult {
         messages,
         complete: true,
+        partial: false,
         resume_after_mailbox_id: None,
     }
 }
@@ -2127,7 +2142,34 @@ fn folder_limit(
     }
 }
 
-/// A first folder cut by its ceiling is skipped past, so the next call advances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchCutoff {
+    resume_after_mailbox_id: Option<i64>,
+    partial: bool,
+}
+
+/// A first-folder ceiling skips that folder. Return a cursor only when a later
+/// folder remains; ordinary cuts resume from the last finished folder.
+fn cutoff_after_folder(
+    all_folders: bool,
+    first: bool,
+    mailbox_id: i64,
+    last_finished: Option<i64>,
+    has_remaining_folder: bool,
+) -> SearchCutoff {
+    let skipped = all_folders && first;
+    let resume_after_mailbox_id = if skipped {
+        cut_resume_point(all_folders, first, mailbox_id).filter(|_| has_remaining_folder)
+    } else {
+        last_finished
+    };
+    SearchCutoff {
+        resume_after_mailbox_id,
+        partial: skipped,
+    }
+}
+
+/// A first folder cut by its ceiling can be skipped past when later folders remain.
 fn cut_resume_point(all_folders: bool, first: bool, mailbox_id: i64) -> Option<i64> {
     (all_folders && first).then_some(mailbox_id)
 }
@@ -2986,6 +3028,45 @@ mod scope_tests {
         assert_eq!(cut_resume_point(true, false, 7), None);
     }
 
+    // Synthetic deadline cases: no wall-clock sleep or 120-second wait.
+    // A first-folder ceiling cut skips that folder; ordinary later cuts resume
+    // from the last finished folder so the clipped folder is retried.
+    #[test]
+    fn server_search_cutoff_decisions_keep_skips_and_terminal_status() {
+        use super::{cutoff_after_folder, SearchCutoff};
+
+        assert_eq!(
+            cutoff_after_folder(true, true, 1, None, true),
+            SearchCutoff {
+                resume_after_mailbox_id: Some(1),
+                partial: true,
+            }
+        );
+        assert_eq!(
+            cutoff_after_folder(true, true, 3, Some(2), false),
+            SearchCutoff {
+                resume_after_mailbox_id: None,
+                partial: true,
+            },
+            "a skipped final folder is terminal but remains partial"
+        );
+        assert_eq!(
+            cutoff_after_folder(true, false, 3, Some(2), true),
+            SearchCutoff {
+                resume_after_mailbox_id: Some(2),
+                partial: false,
+            },
+            "a normal budget cut retries the unfinished folder"
+        );
+        assert_eq!(
+            cutoff_after_folder(false, true, 1, None, false),
+            SearchCutoff {
+                resume_after_mailbox_id: None,
+                partial: false,
+            }
+        );
+    }
+
     // Failure modes for the prefetch rule:
     // 1. A message just over 1 MiB is fetched whole instead of as a prefix.
     // 2. "Keep attachments offline" still fetches prefixes.
@@ -3029,12 +3110,10 @@ mod scope_tests {
 #[cfg(test)]
 mod flag_scan_tests {
     use super::{flag_scan_window, plan_flag_scan, FlagScan, FLAG_WINDOW_UIDS};
-    use chrono::{DateTime, Duration, Utc};
+    use time::{Duration, OffsetDateTime};
 
-    fn now() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-11-08T12:00:00+00:00")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn now() -> OffsetDateTime {
+        crate::date_time::parse_rfc3339("2026-11-08T12:00:00+00:00").unwrap()
     }
 
     #[test]

@@ -10,7 +10,7 @@ use super::*;
 use crate::db::{CachedMessage, Database};
 use crate::models::{
     AccountRecord, AccountSetupRequest, AccountSummary, CachePolicy, ComposeAttachment,
-    ComposeDraft, FilterRule, MailboxRole, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+    ComposeDraft, MailboxRole, ProviderKind, RuleAction, SearchQuery, ServerConfig, TlsMode,
 };
 use futures_util::TryStreamExt;
 use std::time::Duration;
@@ -253,19 +253,23 @@ async fn bridge_recovery_protocol_integration() {
         )
         .unwrap();
     legacy_db
-        .create_filter_rule(&FilterRule {
-            match_mode: "all".into(),
-            conditions: Vec::new(),
-            actions: Vec::new(),
-            id: String::new(),
-            account_id: legacy_account.summary.id.clone(),
-            name: "Legacy folder target".into(),
-            field: "subject".into(),
-            contains: "fixture".into(),
-            action: "move_mailbox".into(),
-            target_mailbox: Some(legacy_japanese_wire.clone()),
-            enabled: true,
-        })
+        .conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO filter_rules(id,account_id,name,field,contains,action,target_mailbox,enabled,position)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![
+                "legacy-folder-target",
+                legacy_account.summary.id,
+                "Legacy folder target",
+                "subject",
+                "fixture",
+                "move_mailbox",
+                legacy_japanese_wire,
+                1,
+                0
+            ],
+        )
         .unwrap();
     drop(legacy_db);
     let old_connection = rusqlite::Connection::open(&legacy_path).unwrap();
@@ -345,7 +349,19 @@ async fn bridge_recovery_protocol_integration() {
             .list_filter_rules(&legacy_account.summary.id)
             .unwrap()
             .iter()
-            .any(|rule| rule.target_mailbox.as_deref() == Some("Projects/日本語")),
+            .find(|rule| rule.id == "legacy-folder-target")
+            .is_some_and(|rule| {
+                rule.field == "subject"
+                    && rule.contains == "fixture"
+                    && rule.action == "move_mailbox"
+                    && rule.target_mailbox.as_deref() == Some("Projects/日本語")
+                    && rule.actions
+                        == vec![RuleAction {
+                            kind: "move_mailbox".into(),
+                            target_mailbox: Some("Projects/日本語".into()),
+                            flag_color: None,
+                        }]
+            }),
     ));
     let startup_queued = legacy_db
         .queued_operations(&legacy_account.summary.id)
@@ -1750,7 +1766,8 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
     };
     let seed_cache = |db: &Database, account: &AccountRecord| {
         db.insert_account(account).unwrap();
-        let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        let received_at =
+            crate::date_time::format_rfc3339(crate::date_time::now_utc() - time::Duration::days(1));
         let mut message_ids = std::collections::HashMap::new();
         for (name, role) in [
             ("INBOX", MailboxRole::Inbox),
@@ -2177,7 +2194,8 @@ async fn bridge_server_search_refuses_missing_examine_uid_validity_integration()
         )
         .unwrap();
     db.set_mailbox_listing(mailbox_id, Some("/")).unwrap();
-    let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+    let received_at =
+        crate::date_time::format_rfc3339(crate::date_time::now_utc() - time::Duration::days(1));
     let message = CachedMessage {
         uid: 1,
         internal_at: None,
@@ -3010,10 +3028,30 @@ impl SyncHooks for QuickPass {
 }
 
 fn imap_date(days_ago: i64, offset_minutes: i64) -> String {
-    (chrono::Utc::now() - chrono::Duration::days(days_ago)
-        + chrono::Duration::minutes(offset_minutes))
-    .format("\"%d-%b-%Y %H:%M:%S +0000\"")
-    .to_string()
+    let stamp = crate::date_time::now_utc() - time::Duration::days(days_ago)
+        + time::Duration::minutes(offset_minutes);
+    let month = match stamp.month() {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    };
+    format!(
+        "\"{:02}-{month}-{:04} {:02}:{:02}:{:02} +0000\"",
+        stamp.day(),
+        stamp.year(),
+        stamp.hour(),
+        stamp.minute(),
+        stamp.second()
+    )
 }
 
 async fn run_until_settled(

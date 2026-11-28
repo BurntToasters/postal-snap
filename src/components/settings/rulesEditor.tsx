@@ -236,9 +236,10 @@ export function RulesEditor({
           id={`rule-name-${account.id}`}
           value={draft.name}
           placeholder={strings.settings.ruleNamePlaceholder}
-          onChange={(event) =>
-            change((current) => ({ ...current, name: event.target.value }))
-          }
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            change((current) => ({ ...current, name: value }));
+          }}
         />
         <fieldset className="rule-group">
           <legend>{strings.settings.conditionsLegend}</legend>
@@ -282,14 +283,15 @@ export function RulesEditor({
                 <select
                   id={`rule-cond-field-${account.id}-${index}`}
                   value={condition.field}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     change((current) => ({
                       ...current,
                       conditions: patchAt(current.conditions, index, {
-                        field: event.target.value,
+                        field: value,
                       }),
-                    }))
-                  }
+                    }));
+                  }}
                 >
                   {FIELDS.map((field) => (
                     <option key={field} value={field}>
@@ -305,14 +307,15 @@ export function RulesEditor({
                   value={condition.value}
                   maxLength={MAX_RULE_VALUE_CHARS}
                   placeholder={strings.settings.ruleMatchPlaceholder}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     change((current) => ({
                       ...current,
                       conditions: patchAt(current.conditions, index, {
-                        value: event.target.value,
+                        value,
                       }),
-                    }))
-                  }
+                    }));
+                  }}
                 />
                 <button
                   type="button"
@@ -367,14 +370,15 @@ export function RulesEditor({
                 <select
                   id={`rule-action-kind-${account.id}-${index}`}
                   value={action.kind}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
                     change((current) => ({
                       ...current,
                       actions: patchAt(current.actions, index, {
-                        kind: event.target.value,
+                        kind: value,
                       }),
-                    }))
-                  }
+                    }));
+                  }}
                 >
                   {ACTION_KINDS.map((kind) => (
                     <option
@@ -396,14 +400,15 @@ export function RulesEditor({
                     <select
                       id={`rule-action-folder-${account.id}-${index}`}
                       value={action.target}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         change((current) => ({
                           ...current,
                           actions: patchAt(current.actions, index, {
-                            target: event.target.value,
+                            target: value,
                           }),
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       <option value="">{strings.settings.chooseFolder}</option>
                       {folders.map((box) => (
@@ -422,14 +427,15 @@ export function RulesEditor({
                     <select
                       id={`rule-action-flag-${account.id}-${index}`}
                       value={action.flagColor}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         change((current) => ({
                           ...current,
                           actions: patchAt(current.actions, index, {
-                            flagColor: event.target.value,
+                            flagColor: value,
                           }),
-                        }))
-                      }
+                        }));
+                      }}
                     >
                       {FLAG_KEYS.map((key, color) => (
                         <option key={key} value={String(color)}>

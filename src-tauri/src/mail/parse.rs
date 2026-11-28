@@ -1,10 +1,15 @@
-use chrono::{DateTime, SecondsFormat, Utc};
 use lettre::message::Mailbox;
 use mail_parser::{MessageParser, MessagePart, MimeHeaders, PartType};
 use sha2::{Digest, Sha256};
 
 use super::{MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS, MAX_MULTIPART_DECLARATIONS};
-use crate::{db::CachedMessage, models::Attachment, security::safe_filename};
+use crate::{
+    date_time::{format_utc_seconds, now_utc, parse_rfc2822},
+    db::CachedMessage,
+    models::Attachment,
+    security::safe_filename,
+};
+use time::{OffsetDateTime, UtcOffset};
 
 pub(crate) fn parse_mailbox(value: &str) -> Result<Mailbox, String> {
     value
@@ -44,14 +49,16 @@ pub(crate) fn parse_envelope(
         .date
         .as_deref()
         .and_then(|raw| std::str::from_utf8(raw).ok())
-        .and_then(|date| DateTime::parse_from_rfc2822(date).ok())
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(|date| parse_rfc2822(date).ok())
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
         .or_else(|| {
             fetch
                 .internal_date()
-                .map(|date| canonical_time(date.with_timezone(&Utc)))
+                .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+                .map(canonical_time)
         })
-        .unwrap_or_else(|| canonical_time(Utc::now()));
+        .unwrap_or_else(|| canonical_time(now_utc()));
     let recipients = to
         .iter()
         .chain(cc.iter())
@@ -288,15 +295,16 @@ fn imap_addresses(addresses: Option<&[async_imap::imap_proto::types::Address<'_>
 
 /// Canonical stored timestamp: whole seconds and an explicit UTC offset, so
 /// text comparison matches time order (see `normalize_received_at`).
-pub(crate) fn canonical_time(date: DateTime<Utc>) -> String {
-    date.to_rfc3339_opts(SecondsFormat::Secs, false)
+pub(crate) fn canonical_time(date: OffsetDateTime) -> String {
+    format_utc_seconds(date)
 }
 
 /// Server arrival time. Unlike the sender-controlled Date header it cannot be
 /// forged into the future, so retention and backfill cutoffs use it.
 pub(crate) fn internal_date(item: &async_imap::types::Fetch) -> Option<String> {
     item.internal_date()
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
 }
 
 /// Match system flags by variant. Keywords are free-form atoms, so a
@@ -343,7 +351,8 @@ pub(crate) fn received_at_fallback(
     cached_received_at: Option<&str>,
 ) -> Option<String> {
     item.internal_date()
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
         .or_else(|| cached_received_at.map(ToOwned::to_owned))
 }
 
@@ -549,10 +558,10 @@ fn cached_message(
     let reply_to = parsed_addresses(message.reply_to()).into_iter().next();
     let received_at = message
         .date()
-        .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0))
+        .and_then(|date| OffsetDateTime::from_unix_timestamp(date.to_timestamp()).ok())
         .map(canonical_time)
         .or_else(|| fallback_received_at.map(ToOwned::to_owned))
-        .unwrap_or_else(|| canonical_time(Utc::now()));
+        .unwrap_or_else(|| canonical_time(now_utc()));
     let recipients = to
         .iter()
         .chain(cc.iter())
@@ -954,7 +963,8 @@ pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        importance_from_headers, normalize_rfc_message_id, parse_message, parse_partial_message,
+        canonical_time, importance_from_headers, normalize_rfc_message_id, parse_message,
+        parse_partial_message,
     };
     use crate::db::CachedMessage;
 
@@ -967,6 +977,19 @@ mod tests {
     // 6. Ids over 998 bytes exceed the RFC 5322 line limit.
     // 7. Empty or bracket-only input must not yield "<>".
     // 8. Normal ids, bracketed or bare, must keep working.
+    #[test]
+    fn canonical_mail_time_keeps_seconds_and_explicit_utc_offset() {
+        let header = crate::date_time::parse_rfc2822("Thu, 29 Feb 2024 23:59:58 +0545")
+            .unwrap()
+            .to_offset(time::UtcOffset::UTC);
+        assert_eq!(canonical_time(header), "2024-02-29T18:14:58+00:00");
+
+        let timestamp = crate::date_time::parse_rfc3339("2024-02-29T23:59:58.987654321-05:00")
+            .unwrap()
+            .to_offset(time::UtcOffset::UTC);
+        assert_eq!(canonical_time(timestamp), "2024-03-01T04:59:58+00:00");
+    }
+
     #[test]
     fn normalize_rejects_unsafe_message_ids() {
         let long = format!("<{}@example.com>", "a".repeat(999));

@@ -237,9 +237,8 @@ fn arrival_text(
 }
 
 fn local_minutes_now() -> u32 {
-    use chrono::Timelike;
-    let now = chrono::Local::now();
-    now.hour() * 60 + now.minute()
+    let now = crate::date_time::now_local();
+    u32::from(now.hour()) * 60 + u32::from(now.minute())
 }
 
 /// System sound for a new-mail alert. Each desktop has its own name.
@@ -267,6 +266,21 @@ mod tests {
             account_id: "account-1".into(),
             message_id,
         }
+    }
+
+    #[test]
+    fn quiet_hour_clock_uses_native_local_wall_time() {
+        let before =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let actual = local_minutes_now();
+        let after =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let minutes =
+            |value: time::OffsetDateTime| u32::from(value.hour()) * 60 + u32::from(value.minute());
+        assert!(
+            actual == minutes(before) || actual == minutes(after),
+            "local quiet-hour minute did not match the native wall clock"
+        );
     }
 
     #[test]

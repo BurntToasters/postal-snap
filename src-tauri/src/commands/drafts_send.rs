@@ -9,6 +9,7 @@ use super::{
     CommandResult,
 };
 use crate::{
+    date_time::{format_rfc3339, now_utc, parse_rfc3339},
     mail,
     models::{
         receipt_mailbox, BodyFormat, ComposeDraft, DraftSaveOutcome, DraftSourceKind, DraftSummary,
@@ -123,17 +124,19 @@ pub(crate) fn resolve_requested_send_at(send_at: Option<&str>) -> Result<Option<
     let Some(requested) = requested else {
         return Ok(None);
     };
-    let when = chrono::DateTime::parse_from_rfc3339(requested)
-        .map_err(|_| "Scheduled send time is invalid.".to_string())?
-        .with_timezone(&chrono::Utc);
-    let now = chrono::Utc::now();
-    if when <= now {
+    let requested =
+        parse_rfc3339(requested).map_err(|_| "Scheduled send time is invalid.".to_string())?;
+    let now = now_utc();
+    if requested <= now {
         return Err("Scheduled send time must be in the future.".to_string());
     }
-    if when > now + chrono::Duration::days(365) {
+    if requested > now + time::Duration::days(365) {
         return Err("Scheduled send time is too far in the future.".to_string());
     }
-    Ok(Some(when.to_rfc3339()))
+    let when = requested
+        .checked_to_offset(time::UtcOffset::UTC)
+        .ok_or_else(|| "Scheduled send time is invalid.".to_string())?;
+    Ok(Some(format_rfc3339(when)))
 }
 
 #[tauri::command]
@@ -207,8 +210,7 @@ pub async fn send_message(
     }
     if delay > 0 {
         let _guard = state.lock_account(&draft.account_id).await?;
-        let send_at =
-            (chrono::Utc::now() + chrono::Duration::seconds(i64::from(delay))).to_rfc3339();
+        let send_at = format_rfc3339(now_utc() + time::Duration::seconds(i64::from(delay)));
         let detail = if offline {
             OutboxReason::WaitingConnection
         } else {

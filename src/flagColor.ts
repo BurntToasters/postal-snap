@@ -46,15 +46,15 @@ export async function setFlagColorFor(
     await api.setMessagesFlagColor(accountId, messageIds, color);
   } catch (cause) {
     const current = useAppStore.getState();
-    current.setError(errorText(cause));
     if (
-      generation !== flagColorGeneration ||
       current.activeAccountId !== accountId ||
       current.activeMailboxId !== snapshotMailboxId ||
       current.activeLocalView !== snapshotView
     ) {
       return;
     }
+    current.setError(errorText(cause));
+    if (generation !== flagColorGeneration) return;
     current.setMessages(
       current.messages.map((item) => {
         const before = previous.get(item.id);

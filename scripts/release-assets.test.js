@@ -31,6 +31,10 @@ import {
   verifyRemoteReleaseCommit,
 } from "./release-identity.js";
 
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 test("release continuation rejects modified source after preparation", async () => {
   await assert.rejects(
     assertReleaseWorktreeClean(async () => " M src/components/Composer.tsx"),
@@ -871,10 +875,34 @@ test("flatpak sideload bundle exports stable without a linted branch field", asy
     join(root, "packaging/flatpak/run.rosie.snap.metainfo.xml"),
     "utf8",
   );
+  const desktop = await readFile(
+    join(root, "packaging/flatpak/run.rosie.snap.desktop"),
+    "utf8",
+  );
+  const version = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  ).version;
+  const escapedVersion = escapeRegex(version);
   assert.match(metainfo, /<id>run\.rosie\.snap<\/id>/);
   assert.match(metainfo, /MPL-2\.0/);
   assert.match(metainfo, /<developer id="run\.rosie">/);
   assert.match(metainfo, /<release version="[^"]+" date="\d{4}-\d{2}-\d{2}"/);
+  assert.match(desktop, /^Exec=postal-snap %U$/m);
+  assert.match(
+    desktop,
+    /^MimeType=.*message\/rfc822;.*x-scheme-handler\/mailto;.*$/m,
+  );
+  assert.match(
+    metainfo,
+    new RegExp(
+      `<release version="${escapedVersion}" date="\\d{4}-\\d{2}-\\d{2}"(?:\\s*/>|>)`,
+    ),
+    "the current package version must have a release entry",
+  );
+  assert.match(
+    metainfo,
+    /<release version="0\.5\.0" date="2026-10-16">[\s\S]*?Postal Snap 0\.5\.0 adds[\s\S]*?<\/release>/,
+  );
   const lintExceptions = JSON.parse(
     await readFile(
       join(root, "packaging/flatpak/lint-exceptions.json"),
@@ -884,6 +912,33 @@ test("flatpak sideload bundle exports stable without a linted branch field", asy
   assert.deepEqual(lintExceptions, {
     "run.rosie.snap": ["appid-url-not-reachable"],
   });
+});
+
+test("package download links advance while audited beta notes remain populated", async () => {
+  const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");
+  const version = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  ).version;
+  const auditedVersion = "0.5.4-beta.1";
+  const start = changelog.indexOf(`## Changes in \`v${auditedVersion}:\``);
+  assert.notEqual(start, -1);
+  const nextHeading = changelog.indexOf("## Changes in ", start + 1);
+  const end = nextHeading === -1 ? changelog.length : nextHeading;
+  const section = changelog.slice(start, end);
+  assert.match(section, /^- \*\*[^*\r\n]+:\*\*\s+\S/m);
+  const escapedVersion = escapeRegex(version);
+  assert.match(
+    changelog.slice(0, start),
+    new RegExp(
+      `releases/download/v${escapedVersion}/Postal-Snap-Windows-x64\\.exe`,
+    ),
+  );
+  assert.match(
+    changelog.slice(0, start),
+    new RegExp(
+      `releases/download/v${escapedVersion}/Postal-Snap-Linux-x64\\.flatpak`,
+    ),
+  );
 });
 
 test("direct updater is GitHub-only and notices are bundled", async () => {

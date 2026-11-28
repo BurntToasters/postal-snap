@@ -204,6 +204,51 @@ impl Database {
         Ok(rows)
     }
 
+    /// Matches one rule against a shared automatic-arrival page.
+    pub fn find_rule_matches_in_arrivals(
+        &self,
+        account_id: &str,
+        rule: &FilterRule,
+        arrival_ids: &[i64],
+    ) -> Result<Vec<(i64, u32, String, i64)>, String> {
+        if arrival_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some((clause, mut bound)) = rule_match_clause(rule) else {
+            return Ok(Vec::new());
+        };
+        bound.push((":account_id".into(), Box::new(account_id.to_string())));
+        let ids = arrival_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let name = format!(":arrival_{index}");
+                bound.push((name.clone(), Box::new(*id)));
+                name
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let effective_role = effective_role_sql("f");
+        let conn = self.read_conn()?;
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT m.id,m.uid,f.name,f.id FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id
+                 WHERE m.account_id=:account_id AND {effective_role}='inbox' AND m.is_read=0 AND m.pending_move_to IS NULL
+                 AND (m.notification_state & 1) != 0 AND m.id IN ({ids}) AND {clause}
+                 ORDER BY m.id ASC"
+            ))
+            .map_err(db_error)?;
+        let refs = named_refs(&bound);
+        let rows = statement
+            .query_map(refs.as_slice(), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        Ok(rows)
+    }
+
     /// Summary for a rule notice. Only rows of this account resolve.
     pub fn rule_notice_message(
         &self,
@@ -790,6 +835,235 @@ mod tests {
         let mut notices = Vec::new();
         apply_filter_rules_notifying(&db, &account, Some(older - 1), &mut |id| notices.push(id));
         assert_eq!(notices, vec![newest]);
+    }
+
+    #[test]
+    fn overlapping_arrival_rules_share_a_bounded_page_and_preserve_account_isolation() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = inbox(&db, "account-1");
+        for uid in 1..=101 {
+            let subject = if uid == 1 {
+                "Old invoice"
+            } else {
+                "Routine mail"
+            };
+            let id = put(
+                &db,
+                "account-1",
+                mailbox,
+                uid,
+                subject,
+                "sender@example.com",
+            );
+            db.record_new_mail_arrival("account-1", id).unwrap();
+        }
+        db.create_filter_rule(&rule(
+            "account-1",
+            "all",
+            &[("from", "example.com")],
+            &[("pin", None, None)],
+        ))
+        .unwrap();
+        db.create_filter_rule(&rule(
+            "account-1",
+            "all",
+            &[("subject", "invoice")],
+            &[("flag", None, Some(3))],
+        ))
+        .unwrap();
+
+        let other_account = AccountRecord {
+            summary: crate::models::AccountSummary {
+                id: "account-2".into(),
+                email: "other@example.com".into(),
+                ..account.summary.clone()
+            },
+            ..account.clone()
+        };
+        db.insert_account(&other_account).unwrap();
+        let other_mailbox = inbox(&db, "account-2");
+        let other_id = put(
+            &db,
+            "account-2",
+            other_mailbox,
+            1,
+            "Isolated message",
+            "sender@example.com",
+        );
+        db.record_new_mail_arrival("account-2", other_id).unwrap();
+        db.create_filter_rule(&rule(
+            "account-2",
+            "all",
+            &[("subject", "isolated")],
+            &[("pin", None, None)],
+        ))
+        .unwrap();
+
+        let first_complete = crate::commands::sync::apply_filter_rules(&db, &account, Some(0));
+        assert!(!first_complete, "the 101st arrival needs another pass");
+        let oldest_after_first = db.message_summary_by_uid(mailbox, 1).unwrap().unwrap();
+        assert!(
+            oldest_after_first.pinned,
+            "the broad rule must see the oldest overlap"
+        );
+        assert_eq!(
+            oldest_after_first.flag_color, 3,
+            "the narrow rule must also apply"
+        );
+        assert!(
+            !db.message_summary_by_uid(mailbox, 101)
+                .unwrap()
+                .unwrap()
+                .pinned,
+            "the first pass is bounded to the oldest 100 arrivals"
+        );
+        assert!(
+            !db.message_summary_by_uid(other_mailbox, 1)
+                .unwrap()
+                .unwrap()
+                .pinned,
+            "a pass must not evaluate another account's arrivals"
+        );
+
+        let mut complete = false;
+        for _ in 0..2 {
+            complete = crate::commands::sync::apply_filter_rules(&db, &account, Some(0));
+            if complete {
+                break;
+            }
+        }
+        assert!(
+            complete,
+            "all pending arrivals should finish after page two"
+        );
+        assert!(
+            db.message_summary_by_uid(mailbox, 101)
+                .unwrap()
+                .unwrap()
+                .pinned
+        );
+        assert!(
+            crate::commands::sync::apply_filter_rules(&db, &other_account, Some(0)),
+            "the other account can evaluate its own arrival"
+        );
+        assert!(
+            db.message_summary_by_uid(other_mailbox, 1)
+                .unwrap()
+                .unwrap()
+                .pinned
+        );
+        assert!(db.pending_rule_arrival_ids("account-2").unwrap().is_empty());
+    }
+
+    // Failure modes for unavailable automatic role targets:
+    // 1. An explicitly assigned but unavailable folder must not pin page one forever.
+    // 2. The resolver must not route the move to another Archive folder.
+    // 3. Later unrelated arrivals must still reach their valid actions.
+    #[test]
+    fn unavailable_assigned_role_does_not_starve_later_arrival_pages() {
+        let db = Database::memory();
+        let account = account();
+        db.insert_account(&account).unwrap();
+        let mailbox = inbox(&db, "account-1");
+        let unavailable_archive = db
+            .upsert_mailbox(
+                "account-1",
+                "Archive",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(1),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let alternate_archive = db
+            .upsert_mailbox(
+                "account-1",
+                "Archive fallback",
+                &MailboxRole::Archive,
+                Some(1),
+                Some(1),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        db.set_folder_assignment("account-1", "archive", Some(unavailable_archive))
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE mailboxes SET server_available=0 WHERE id=?1",
+                [unavailable_archive],
+            )
+            .unwrap();
+
+        for uid in 1..=101 {
+            let subject = if uid == 101 {
+                "pin later arrival"
+            } else {
+                "route to archive"
+            };
+            let id = put(
+                &db,
+                "account-1",
+                mailbox,
+                uid,
+                subject,
+                "sender@example.com",
+            );
+            db.record_new_mail_arrival("account-1", id).unwrap();
+        }
+        db.create_filter_rule(&rule(
+            "account-1",
+            "all",
+            &[("from", "example.com")],
+            &[("move_archive", None, None)],
+        ))
+        .unwrap();
+        db.create_filter_rule(&rule(
+            "account-1",
+            "all",
+            &[("subject", "pin later")],
+            &[("pin", None, None)],
+        ))
+        .unwrap();
+
+        assert!(!crate::commands::sync::apply_filter_rules(
+            &db,
+            &account,
+            Some(0)
+        ));
+        assert_eq!(
+            db.pending_rule_arrival_ids("account-1").unwrap(),
+            db.message_summary_by_uid(mailbox, 101)
+                .unwrap()
+                .map(|message| vec![message.id])
+                .unwrap(),
+            "the unavailable target must not retain the oldest 100 arrivals"
+        );
+        assert!(
+            db.queued_operations("account-1").unwrap().is_empty(),
+            "an unavailable target must not queue a move to an alternate folder"
+        );
+        assert_eq!(db.cached_message_count(alternate_archive).unwrap(), 0);
+
+        assert!(crate::commands::sync::apply_filter_rules(
+            &db,
+            &account,
+            Some(0)
+        ));
+        assert!(db.pending_rule_arrival_ids("account-1").unwrap().is_empty());
+        assert!(
+            db.message_summary_by_uid(mailbox, 101)
+                .unwrap()
+                .unwrap()
+                .pinned
+        );
+        assert!(db.queued_operations("account-1").unwrap().is_empty());
+        assert_eq!(db.cached_message_count(mailbox).unwrap(), 101);
+        assert_eq!(db.cached_message_count(alternate_archive).unwrap(), 0);
     }
 
     #[test]

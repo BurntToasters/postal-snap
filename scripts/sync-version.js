@@ -71,33 +71,50 @@ export function replaceMetainfoReleaseVersion(xml, version, date) {
   if (!releases) {
     throw new Error("Flatpak metainfo is missing a <releases> block.");
   }
-  let replaced = false;
-  const updatedBlock = releases[0].replace(/<release\b[^>]*\/?>/, (tag) => {
-    if (replaced) return tag;
-    replaced = true;
-    const currentVersion = tag.match(/\bversion="([^"]+)"/)?.[1];
-    if (!currentVersion) {
-      throw new Error(
-        "Flatpak metainfo is missing a <release version=...> entry.",
-      );
-    }
-    const currentDate = tag.match(/\bdate="([^"]+)"/)?.[1];
-    const nextDate =
-      currentVersion === version && currentDate ? currentDate : date;
-    let next = tag.replace(/\bversion="[^"]+"/, `version="${version}"`);
-    if (/\bdate="/.test(next)) {
-      return next.replace(/\bdate="[^"]+"/, `date="${nextDate}"`);
-    }
-    if (/\/>/.test(next)) {
-      return next.replace(/\s*\/>/, ` date="${nextDate}" />`);
-    }
-    return next.replace(/>$/, ` date="${nextDate}">`);
-  });
-  if (!replaced) {
+  const firstRelease = /<release\b[^>]*\/?>/.exec(releases[0]);
+  if (!firstRelease) {
     throw new Error(
       "Flatpak metainfo is missing a <release version=...> entry.",
     );
   }
+  const tag = firstRelease[0];
+  const currentVersion = tag.match(/\bversion="([^"]+)"/)?.[1];
+  if (!currentVersion) {
+    throw new Error(
+      "Flatpak metainfo is missing a <release version=...> entry.",
+    );
+  }
+
+  if (!/\/\s*>$/.test(tag)) {
+    if (currentVersion === version) return xml;
+    const lineStart = releases[0].lastIndexOf("\n", firstRelease.index - 1) + 1;
+    const linePrefix = releases[0].slice(lineStart, firstRelease.index);
+    const hasLineIndent = /^[ \t]*$/.test(linePrefix);
+    const insertAt = hasLineIndent ? lineStart : firstRelease.index;
+    const indent = hasLineIndent ? linePrefix : "";
+    const eol = releases[0].includes("\r\n") ? "\r\n" : "\n";
+    const separator = hasLineIndent ? eol : "";
+    const placeholder = `${indent}<release version="${version}" date="${date}" />${separator}`;
+    const updatedBlock =
+      releases[0].slice(0, insertAt) +
+      placeholder +
+      releases[0].slice(insertAt);
+    return xml.replace(releases[0], updatedBlock);
+  }
+
+  const currentDate = tag.match(/\bdate="([^"]+)"/)?.[1];
+  const nextDate =
+    currentVersion === version && currentDate ? currentDate : date;
+  let updatedTag = tag.replace(/\bversion="[^"]+"/, `version="${version}"`);
+  if (/\bdate="/.test(updatedTag)) {
+    updatedTag = updatedTag.replace(/\bdate="[^"]+"/, `date="${nextDate}"`);
+  } else {
+    updatedTag = updatedTag.replace(/\s*\/>$/, ` date="${nextDate}" />`);
+  }
+  const updatedBlock =
+    releases[0].slice(0, firstRelease.index) +
+    updatedTag +
+    releases[0].slice(firstRelease.index + tag.length);
   return xml.replace(releases[0], updatedBlock);
 }
 

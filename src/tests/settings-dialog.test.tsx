@@ -30,6 +30,8 @@ vi.mock("../api", () => ({
     saveSettings: vi.fn(),
     listAccounts: vi.fn(),
     getAccountConnection: vi.fn(),
+    getFailedOfflineOperations: vi.fn(),
+    dismissFailedOfflineOperations: vi.fn(),
     updateAccountConnection: vi.fn(),
     getFolderAssignments: vi.fn(),
     setFolderAssignment: vi.fn(),
@@ -104,6 +106,14 @@ beforeEach(() => {
       tlsMode: "startTls",
       username: account.email,
     },
+  });
+  vi.mocked(api.getFailedOfflineOperations).mockResolvedValue({
+    items: [],
+    totalCount: 0,
+  });
+  vi.mocked(api.dismissFailedOfflineOperations).mockResolvedValue({
+    dismissedCount: 0,
+    blockers: { queuedChanges: 0, unsentMessages: 0 },
   });
   vi.mocked(api.getFolderAssignments).mockResolvedValue([]);
   vi.mocked(api.listAccounts).mockResolvedValue([account]);
@@ -238,9 +248,11 @@ describe("SettingsDialog component", () => {
         maxBytes: 1_073_741_824,
       });
     });
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      strings.settings.accountDownloadSaved,
-    );
+    expect(
+      await screen.findByText(strings.settings.accountDownloadSaved, {
+        selector: '[role="status"]',
+      }),
+    ).toHaveTextContent(strings.settings.accountDownloadSaved);
   });
 
   it("renders accounts tab with existing aliases and allows adding new alias", async () => {

@@ -12,6 +12,8 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
     const { account, summary, params } = mock;
     let duplicatedDraft = false;
     let discardedDraft = false;
+    let pastedImageCount = 0;
+    let savedDuplicateInlineDraft: Record<string, unknown> | undefined;
     let lastSendOutcome: string | undefined;
     let lastSendDetail: string | null = null;
     let lastSendAccountId: string | undefined;
@@ -141,6 +143,8 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           : [original];
       },
       get_draft(args: Record<string, unknown>) {
+        if (params.has("draftDuplicateInline") && savedDuplicateInlineDraft)
+          return structuredClone(savedDuplicateInlineDraft);
         return {
           id: String(args.draftId ?? "draft-1"),
           accountId: account.id,
@@ -152,21 +156,40 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           bodyFormat: location.search.includes("plainDraft") ? "plain" : "html",
           htmlBody: location.search.includes("plainDraft")
             ? ""
-            : "<p>Draft message</p>",
+            : params.has("draftDuplicateInline")
+              ? '<p>Draft image <img src="cid:draft-first@example.test" alt="First image"><img src="cid:draft-second@example.test" alt="Second image"></p>'
+              : "<p>Draft message</p>",
           textBody: location.search.includes("plainDraft")
             ? "Plain draft line\n> quoted line"
             : "Draft message",
-          attachments: location.search.includes("draftInline")
+          attachments: params.has("draftDuplicateInline")
             ? [
                 {
-                  token: "managed-inline",
-                  filename: "photo.png",
+                  token: "draft-inline-first",
+                  filename: "first.png",
                   contentType: "image/png",
                   inline: true,
-                  contentId: "draft-photo@example.test",
+                  contentId: "draft-first@example.test",
+                },
+                {
+                  token: "draft-inline-second",
+                  filename: "second.png",
+                  contentType: "image/png",
+                  inline: true,
+                  contentId: "draft-second@example.test",
                 },
               ]
-            : [],
+            : location.search.includes("draftInline")
+              ? [
+                  {
+                    token: "managed-inline",
+                    filename: "photo.png",
+                    contentType: "image/png",
+                    inline: true,
+                    contentId: "draft-photo@example.test",
+                  },
+                ]
+              : [],
           inReplyTo: null,
           references: null,
           sendAt: null,
@@ -573,10 +596,17 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         ];
       },
       search_server_messages(args: Record<string, unknown>) {
-        return { messages: serverSearchHits(args), complete: true };
+        return {
+          messages: serverSearchHits(args),
+          complete: true,
+          partial: false,
+        };
       },
       save_draft(args: Record<string, unknown>) {
-        const draft = args.draft as { id?: string | null } | undefined;
+        const draft = args.draft as
+          (Record<string, unknown> & { id?: string | null }) | undefined;
+        if (params.has("draftDuplicateInline") && draft)
+          savedDuplicateInlineDraft = structuredClone(draft);
         if (!draft?.id) {
           duplicatedDraft = true;
           return { id: "draft-2", syncState: "localPending" };
@@ -636,8 +666,11 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
         };
       },
       stage_pasted_image() {
+        pastedImageCount += 1;
         return {
-          token: "pasted-token",
+          token: params.has("uniquePastedImageTokens")
+            ? `pasted-token-${pastedImageCount}`
+            : "pasted-token",
           filename: "Pasted image.png",
           contentType: "image/png",
           inline: false,
@@ -796,6 +829,11 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           : [];
       },
       read_compose_image() {
+        if (params.has("composeImageReadReject"))
+          throw mock.mockError(
+            "notFound",
+            "/Users/tester/Private/lease-photo.png is no longer available.",
+          );
         return "data:image/png;base64,iVBORw0KGgo=";
       },
     });

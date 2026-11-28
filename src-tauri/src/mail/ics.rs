@@ -10,7 +10,6 @@
 // - control characters and very long fields pass through
 // - non-calendar text or an empty calendar yields an invite
 
-use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_ICS_BYTES: usize = 64 * 1024;
@@ -156,9 +155,9 @@ fn parse_time(params: &[(String, String)], value: &str) -> Option<IcsTime> {
         .iter()
         .any(|(key, val)| key == "VALUE" && val.eq_ignore_ascii_case("DATE"));
     if date_only || (value.len() == 8 && !value.contains('T')) {
-        let date = NaiveDate::parse_from_str(value, "%Y%m%d").ok()?;
+        let date = crate::date_time::parse_ics_date(value).ok()?;
         return Some(IcsTime {
-            iso: date.format("%Y-%m-%d").to_string(),
+            iso: crate::date_time::format_iso_date(date),
             all_day: true,
             utc: false,
             tzid: None,
@@ -168,7 +167,7 @@ fn parse_time(params: &[(String, String)], value: &str) -> Option<IcsTime> {
         Some(body) => (body, true),
         None => (value, false),
     };
-    let stamp = NaiveDateTime::parse_from_str(body, "%Y%m%dT%H%M%S").ok()?;
+    let stamp = crate::date_time::parse_ics_datetime(body).ok()?;
     let tzid = params
         .iter()
         .find(|(key, _)| key == "TZID")
@@ -181,7 +180,7 @@ fn parse_time(params: &[(String, String)], value: &str) -> Option<IcsTime> {
                     .all(|c| c.is_ascii_alphanumeric() || "/_+-. ".contains(c))
         })
         .map(str::to_string);
-    let mut iso = stamp.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let mut iso = crate::date_time::format_iso_datetime(stamp);
     if utc {
         iso.push('Z');
     }
@@ -318,6 +317,41 @@ mod tests {
         let start = parse_invite(&raw).unwrap().start.unwrap();
         assert!(start.tzid.is_none() && !start.utc);
         assert!(parse_invite(&wrap("SUMMARY:x\r\n")).unwrap().end.is_none());
+    }
+
+    #[test]
+    fn leap_day_keeps_all_day_floating_tzid_and_utc_shapes() {
+        let all_day = parse_invite(&wrap("DTSTART;VALUE=DATE:20240229\r\n"))
+            .unwrap()
+            .start
+            .unwrap();
+        assert_eq!(
+            (all_day.iso.as_str(), all_day.all_day),
+            ("2024-02-29", true)
+        );
+
+        let floating = parse_invite(&wrap("DTSTART:20240229T090807\r\n"))
+            .unwrap()
+            .start
+            .unwrap();
+        assert_eq!(floating.iso, "2024-02-29T09:08:07");
+        assert!(!floating.utc && floating.tzid.is_none());
+
+        let zoned = parse_invite(&wrap(
+            "DTSTART;TZID=America/Los_Angeles:20240229T090807\r\n",
+        ))
+        .unwrap()
+        .start
+        .unwrap();
+        assert_eq!(zoned.iso, "2024-02-29T09:08:07");
+        assert_eq!(zoned.tzid.as_deref(), Some("America/Los_Angeles"));
+
+        let utc = parse_invite(&wrap("DTSTART:20240229T090807Z\r\n"))
+            .unwrap()
+            .start
+            .unwrap();
+        assert_eq!(utc.iso, "2024-02-29T09:08:07Z");
+        assert!(utc.utc && utc.tzid.is_none());
     }
 
     #[test]

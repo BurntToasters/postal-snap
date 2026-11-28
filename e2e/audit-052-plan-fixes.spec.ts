@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+import { expect, test } from "./coverage-fixture";
 import { attachArtifactsAfterEach, emitTauriEvent, ipcCalls } from "./ipc";
 import { installMockIpc } from "./mock-ipc";
 import { revealMenuItem } from "./menu-reveal";

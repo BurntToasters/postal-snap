@@ -310,7 +310,7 @@ pub(crate) async fn run_sync_pass(
                     .unwrap_or(true);
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
-            let now = chrono::Utc::now().to_rfc3339();
+            let now = crate::date_time::format_rfc3339(crate::date_time::now_utc());
             let _ = state.db.set_account_state(account_id, "idle", None);
             let detail = if pending_changes {
                 "Some changes are waiting to sync"
@@ -598,8 +598,12 @@ enum PlannedStep {
     Notify,
 }
 
-fn plan_step(db: &Database, account_id: &str, action: &RuleAction) -> Option<PlannedStep> {
-    match action.kind.as_str() {
+fn plan_step(
+    db: &Database,
+    account_id: &str,
+    action: &RuleAction,
+) -> Result<Option<PlannedStep>, String> {
+    let step = match action.kind.as_str() {
         "mark_read" => Some(PlannedStep::MarkRead),
         "pin" => Some(PlannedStep::Pin),
         "notify" => Some(PlannedStep::Notify),
@@ -609,28 +613,28 @@ fn plan_step(db: &Database, account_id: &str, action: &RuleAction) -> Option<Pla
             .map(PlannedStep::Flag),
         "move_archive" | "move_trash" | "move_junk" => {
             let role = action.kind.strip_prefix("move_").unwrap_or("archive");
-            db.mailbox_for_role(account_id, role).ok().flatten().map(
-                |(destination_id, destination)| PlannedStep::Move {
+            db.mailbox_for_rule_role(account_id, role)?
+                .map(|(destination_id, destination)| PlannedStep::Move {
                     destination_id,
                     destination,
-                },
-            )
+                })
         }
-        "move_mailbox" => action
+        "move_mailbox" => match action
             .target_mailbox
             .as_deref()
             .and_then(|id| id.parse::<i64>().ok())
-            .and_then(|id| {
-                db.mailbox(id)
-                    .ok()
-                    .filter(|(owner, _)| owner == account_id)
-                    .map(|(_, name)| PlannedStep::Move {
-                        destination_id: id,
-                        destination: name,
-                    })
-            }),
+        {
+            Some(id) => db
+                .mailbox_name_for_account(account_id, id)?
+                .map(|destination| PlannedStep::Move {
+                    destination_id: id,
+                    destination,
+                }),
+            None => None,
+        },
         _ => None,
-    }
+    };
+    Ok(step)
 }
 
 /// File newly synced inbox mail through enabled filter rules. Actions
@@ -668,38 +672,63 @@ fn apply_filter_rules_collecting(
     let Ok(rules) = db.list_filter_rules(account_id) else {
         return (false, Vec::new());
     };
+    let arrival_ids = if newer_than_id.is_some() {
+        let Ok(ids) = db.pending_rule_arrival_ids(account_id) else {
+            return (false, Vec::new());
+        };
+        Some(ids)
+    } else {
+        None
+    };
     let mut planned: Vec<(PlannedStep, Vec<RuleHit>)> = Vec::new();
     let mut complete = true;
     let mut notice: Option<i64> = None;
     let mut notify_matched_ids: Vec<i64> = Vec::new();
-    let mut candidates = std::collections::HashSet::new();
     let mut failed = std::collections::HashSet::new();
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
         }
+        let matches = match arrival_ids.as_deref() {
+            Some(ids) => db.find_rule_matches_in_arrivals(account_id, rule, ids),
+            None => db.find_rule_matches(account_id, rule, newer_than_id),
+        };
+        let Ok(matches) = matches else {
+            complete = false;
+            if let Some(ids) = arrival_ids.as_ref() {
+                failed.extend(ids.iter().copied());
+            }
+            continue;
+        };
+        if arrival_ids.is_none() {
+            complete &= matches.len() < 100;
+        }
+        if matches.is_empty() {
+            continue;
+        }
         let mut steps = Vec::new();
         let mut unresolved = false;
+        let mut planning_failed = false;
         for action in &rule.actions {
             match plan_step(db, account_id, action) {
-                Some(step) => steps.push(step),
-                None => {
+                Ok(Some(step)) => steps.push(step),
+                Ok(None) => unresolved = true,
+                Err(_) => {
                     complete = false;
-                    unresolved = true;
+                    planning_failed = true;
                 }
             }
         }
+        // Manual retroactive application remains incomplete when its target
+        // is unavailable; automatic arrivals skip it to avoid page starvation.
+        if unresolved && arrival_ids.is_none() {
+            complete = false;
+        }
+        if planning_failed {
+            failed.extend(matches.iter().map(|(id, _, _, _)| *id));
+        }
         if steps.is_empty() {
             continue;
-        }
-        let Ok(matches) = db.find_rule_matches(account_id, rule, newer_than_id) else {
-            complete = false;
-            continue;
-        };
-        complete &= matches.len() < 100;
-        candidates.extend(matches.iter().map(|(id, _, _, _)| *id));
-        if unresolved {
-            failed.extend(matches.iter().map(|(id, _, _, _)| *id));
         }
         for step in steps {
             match step {
@@ -846,12 +875,25 @@ fn apply_filter_rules_collecting(
     if let Some(message_id) = notice {
         on_notice(message_id);
     }
-    if newer_than_id.is_some() {
-        let handled: Vec<i64> = candidates.difference(&failed).copied().collect();
+    if let Some(ids) = arrival_ids.as_ref() {
+        let handled: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|id| !failed.contains(id))
+            .collect();
         if db
-            .finish_rule_arrivals(account_id, complete, &handled, &notify_matched_ids)
+            .finish_rule_arrivals(account_id, false, &handled, &notify_matched_ids)
             .is_err()
         {
+            complete = false;
+        } else if complete && failed.is_empty() {
+            match db.pending_rule_arrival_ids(account_id) {
+                Ok(remaining) if remaining.is_empty() => {
+                    complete = db.finish_rule_arrivals(account_id, true, &[], &[]).is_ok();
+                }
+                Ok(_) | Err(_) => complete = false,
+            }
+        } else {
             complete = false;
         }
     }
@@ -1203,7 +1245,7 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
             let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }
     }
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = crate::date_time::format_rfc3339(crate::date_time::now_utc());
     if let Ok(ids) = state.db.scheduled_due_outbox_ids(account_id, &now) {
         for id in ids {
             let _ = deliver_outbox_locked(&id, account_id, "scheduled", app, state).await;

@@ -36,6 +36,30 @@ pub fn get_account_connection(
     })
 }
 
+#[tauri::command(async)]
+pub fn get_failed_offline_operations(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<crate::models::FailedOfflineOperations> {
+    Ok(state.db.failed_offline_operations(&account_id)?)
+}
+
+#[tauri::command(async)]
+pub async fn dismiss_failed_offline_operations(
+    account_id: String,
+    operations: Vec<crate::models::FailedOfflineOperationRef>,
+    state: State<'_, AppState>,
+) -> CommandResult<crate::models::FailedOfflineDismissal> {
+    let _guard = state.lock_account(&account_id).await?;
+    let dismissed_count = state
+        .db
+        .dismiss_failed_offline_operations(&account_id, &operations)?;
+    Ok(crate::models::FailedOfflineDismissal {
+        dismissed_count,
+        blockers: state.db.connection_blockers(&account_id)?,
+    })
+}
+
 #[tauri::command]
 pub async fn update_account_connection(
     account_id: String,

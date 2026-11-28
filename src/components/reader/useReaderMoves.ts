@@ -7,6 +7,7 @@ import { deleteLoadedConversation } from "../../deleteConversation";
 import {
   moveLoadedConversation,
   type ConversationMoveRole,
+  type MoveFailureReconciler,
 } from "../../moveConversation";
 import { rememberMoveMailboxId } from "../../recentMailbox";
 import { useAppStore } from "../../store";
@@ -49,6 +50,7 @@ interface Options {
   setMailboxes: Store["setMailboxes"];
   setError: (error?: string) => void;
   moveOperations: RefObject<Map<number, number>>;
+  reconcileMoveFailure?: MoveFailureReconciler;
 }
 
 export function useReaderMoves({
@@ -57,6 +59,7 @@ export function useReaderMoves({
   setMailboxes,
   setError,
   moveOperations,
+  reconcileMoveFailure,
 }: Options) {
   async function deleteForever() {
     const snapshot = useAppStore.getState();
@@ -433,14 +436,19 @@ export function useReaderMoves({
     if (!message) return;
     if (typeof target === "number")
       rememberMoveMailboxId(snapshot.mailboxes, target);
-    void moveLoadedConversation(message, target, (next, openWasMoved) => {
-      if (!openWasMoved) return;
-      if (next) void showNextMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    });
+    void moveLoadedConversation(
+      message,
+      target,
+      (next, openWasMoved) => {
+        if (!openWasMoved) return;
+        if (next) void showNextMessage(next);
+        else {
+          beginMessageOpen();
+          selectMessage(undefined);
+        }
+      },
+      reconcileMoveFailure,
+    );
   }
 
   function moveToInbox() {

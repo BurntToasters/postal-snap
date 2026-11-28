@@ -1,0 +1,1219 @@
+path	subsystem	changed_since_v0.5.3_at_c84824a	audit_change
+.env.example	Build, CI and releases	no	baseline
+.gitattributes	Build, CI and releases	no	baseline
+.github/copilot-instructions.md	Documentation, licensing and release claims	no	baseline
+.github/dependabot.yml	Build, CI and releases	no	baseline
+.github/secret_scanning.yml	Build, CI and releases	no	baseline
+.github/workflows/audit.yml	Packaging and platform policy	no	baseline
+.github/workflows/ci.yml	Packaging and platform policy	no	baseline
+.gitignore	Build, CI and releases	no	baseline
+.npmrc	Dependency policy and licenses	no	baseline
+.prettierignore	Build, CI and releases	no	baseline
+.prettierrc	Build, CI and releases	no	baseline
+AGENTS.md	Documentation, licensing and release claims	yes	baseline
+CHANGELOG.md	Documentation, licensing and release claims	yes	modified
+COPYRIGHT.md	Documentation, licensing and release claims	no	baseline
+LICENSE	Documentation, licensing and release claims	no	baseline
+README.md	Documentation, licensing and release claims	no	baseline
+SECURITY.md	Documentation, licensing and release claims	no	baseline
+docs/0.3.2-FAILURE-INVENTORY.md	Documentation, licensing and release claims	no	baseline
+docs/0.4.2-UI-FAILURE-INVENTORY.md	Documentation, licensing and release claims	no	baseline
+docs/0.4.3-FAILURE-INVENTORY.md	Documentation, licensing and release claims	no	baseline
+docs/0.5.0-DEPENDENCY-REMEDIATION.md	Documentation, licensing and release claims	no	baseline
+docs/0.5.0-FAILURE-INVENTORY.md	Documentation, licensing and release claims	no	baseline
+docs/0.5.1-DEPENDENCY-REMEDIATION.md	Documentation, licensing and release claims	no	baseline
+docs/ARCHITECTURE.md	Documentation, licensing and release claims	no	baseline
+docs/AUDIT_0.5.0_2026-10-16.md	Documentation, licensing and release claims	no	baseline
+docs/AUDIT_0.5.0_2026-10-17.md	Documentation, licensing and release claims	no	baseline
+docs/AUDIT_0.5.0_2026-10-17_POST_FIXES.md	Documentation, licensing and release claims	no	baseline
+docs/AUDIT_REMEDIATION_2026-10-13.md	Documentation, licensing and release claims	no	baseline
+docs/CONTENT_BLOCKING.md	Documentation, licensing and release claims	no	baseline
+docs/DEPENDENCY_UPDATES.md	Documentation, licensing and release claims	no	baseline
+docs/MAIL_COMPATIBILITY.md	Documentation, licensing and release claims	no	baseline
+docs/OAUTH.md	Documentation, licensing and release claims	no	baseline
+docs/RELEASE_CHECKLIST.md	Documentation, licensing and release claims	yes	modified
+docs/RELEASING.md	Documentation, licensing and release claims	yes	baseline
+docs/SYNC_FAILURE_MODES.md	Documentation, licensing and release claims	no	baseline
+docs/THREAT_BLOCKING.md	Documentation, licensing and release claims	no	baseline
+docs/TRACKER_AND_LINK_PROTECTION_RESEARCH.md	Documentation, licensing and release claims	no	baseline
+docs/partially_implemented.md	Documentation, licensing and release claims	yes	modified
+e2e/052-cleanup-audit.spec.ts	Browser workflows	no	baseline
+e2e/052-css-cleanup.spec.ts	Browser workflows	no	baseline
+e2e/account-badges.spec.ts	Browser workflows	no	baseline
+e2e/account-color.spec.ts	Browser workflows	no	baseline
+e2e/account-download.spec.ts	Browser workflows	no	baseline
+e2e/account-identity-save-races.spec.ts	Browser workflows	no	baseline
+e2e/account-order.spec.ts	Browser workflows	no	baseline
+e2e/account-response-merge.spec.ts	Browser workflows	no	baseline
+e2e/accounts.spec.ts	Browser workflows	no	baseline
+e2e/address-actions.spec.ts	Browser workflows	no	baseline
+e2e/address-rule.spec.ts	Browser workflows	no	baseline
+e2e/alias-mutation-safety.spec.ts	Browser workflows	no	modified
+e2e/archive-conversation.spec.ts	Browser workflows	no	baseline
+e2e/archive-focused.spec.ts	Browser workflows	no	baseline
+e2e/arrived-later.spec.ts	Browser workflows	no	baseline
+e2e/attachment-leftovers.spec.ts	Browser workflows	no	baseline
+e2e/audit-052-composer.spec.ts	Browser workflows	no	baseline
+e2e/audit-052-css.spec.ts	Browser workflows	no	baseline
+e2e/audit-052-deep-frontend.spec.ts	Browser workflows	no	modified
+e2e/audit-052-deep-ui.spec.ts	Browser workflows	no	modified
+e2e/audit-052-mail.spec.ts	Browser workflows	no	baseline
+e2e/audit-052-menus.spec.ts	Browser workflows	no	baseline
+e2e/audit-052-plan-fixes.spec.ts	Browser workflows	no	modified
+e2e/audit-052-settings.spec.ts	Browser workflows	no	baseline
+e2e/audit-fixes.spec.ts	Browser workflows	no	baseline
+e2e/audit-reader-controls.spec.ts	Browser workflows	added in audit	new
+e2e/audit-settings-account-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/axe-inpage.ts	Browser harness and fixtures	no	baseline
+e2e/badge-scope.spec.ts	Browser workflows	no	baseline
+e2e/bcc-self.spec.ts	Browser workflows	no	baseline
+e2e/block-domain.spec.ts	Browser workflows	no	baseline
+e2e/block-own-and-shared.spec.ts	Browser workflows	no	baseline
+e2e/block-sender.spec.ts	Browser workflows	no	baseline
+e2e/check-focused.spec.ts	Browser workflows	no	baseline
+e2e/collapse-folder.spec.ts	Browser workflows	no	baseline
+e2e/collapse-folders.spec.ts	Browser workflows	no	baseline
+e2e/collapsed-unread.spec.ts	Browser workflows	no	baseline
+e2e/command-palette.spec.ts	Browser workflows	no	baseline
+e2e/compatibility-settings.spec.ts	Browser workflows	yes	baseline
+e2e/compose-attach-warning.spec.ts	Browser workflows	no	baseline
+e2e/compose-audience-warning.spec.ts	Browser workflows	no	baseline
+e2e/compose-drop.spec.ts	Browser workflows	no	baseline
+e2e/compose-duplicate-recipient.spec.ts	Browser workflows	no	baseline
+e2e/compose-empty-message.spec.ts	Browser workflows	no	baseline
+e2e/compose-file-size.spec.ts	Browser workflows	no	baseline
+e2e/compose-focus.spec.ts	Browser workflows	no	baseline
+e2e/compose-from-address.spec.ts	Browser workflows	no	baseline
+e2e/compose-hidden-recipients.spec.ts	Browser workflows	no	baseline
+e2e/compose-noreply.spec.ts	Browser workflows	no	baseline
+e2e/compose-original.spec.ts	Browser workflows	no	baseline
+e2e/compose-paste-addresses.spec.ts	Browser workflows	no	baseline
+e2e/compose-paste-image.spec.ts	Browser workflows	no	baseline
+e2e/compose-paste-plain.spec.ts	Browser workflows	no	baseline
+e2e/compose-place.spec.ts	Browser workflows	no	baseline
+e2e/compose-plaintext.spec.ts	Browser workflows	no	baseline
+e2e/compose-preview-image.spec.ts	Browser workflows	no	baseline
+e2e/compose-quote.spec.ts	Browser workflows	no	baseline
+e2e/compose-remove-files.spec.ts	Browser workflows	no	baseline
+e2e/compose-remove-link.spec.ts	Browser workflows	no	baseline
+e2e/compose-reply-to.spec.ts	Browser workflows	no	baseline
+e2e/compose-window-size.spec.ts	Browser workflows	no	baseline
+e2e/composer-attachment-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/composer-replacement-no-editor.spec.ts	Browser workflows	no	baseline
+e2e/composer-replacement-races.spec.ts	Browser workflows	no	baseline
+e2e/composer-replacement-save.spec.ts	Browser workflows	no	baseline
+e2e/composer-window.spec.ts	Browser workflows	no	baseline
+e2e/continue-draft.spec.ts	Browser workflows	no	baseline
+e2e/conversation-drag.spec.ts	Browser workflows	no	baseline
+e2e/conversation-fold.spec.ts	Browser workflows	no	baseline
+e2e/conversation-index-sender.spec.ts	Browser workflows	no	baseline
+e2e/conversation-index-unread.spec.ts	Browser workflows	no	baseline
+e2e/conversation-index.spec.ts	Browser workflows	no	baseline
+e2e/conversation-marks.spec.ts	Browser workflows	no	baseline
+e2e/conversation-neighbor.spec.ts	Browser workflows	no	baseline
+e2e/conversation-people.spec.ts	Browser workflows	no	baseline
+e2e/conversation-unread-count.spec.ts	Browser workflows	no	baseline
+e2e/conversation-unread.spec.ts	Browser workflows	no	baseline
+e2e/copy-conversation-text.spec.ts	Browser workflows	no	baseline
+e2e/copy-conversation.spec.ts	Browser workflows	no	baseline
+e2e/copy-message-text.spec.ts	Browser workflows	no	baseline
+e2e/copy-recipients.spec.ts	Browser workflows	no	baseline
+e2e/copy-selection-text.spec.ts	Browser workflows	no	baseline
+e2e/copy-sender.spec.ts	Browser workflows	no	baseline
+e2e/copy-subject.spec.ts	Browser workflows	no	baseline
+e2e/coverage-fixture.ts	Browser harness and fixtures	no	modified
+e2e/coverage-lifecycle.spec.ts	Browser workflows	added in audit	new
+e2e/css-token-matrix.spec.ts	Browser workflows	no	baseline
+e2e/day-count.spec.ts	Browser workflows	no	baseline
+e2e/deep-audit-composer.spec.ts	Browser workflows	no	baseline
+e2e/deep-audit-list.spec.ts	Browser workflows	no	baseline
+e2e/deep-audit-reader.spec.ts	Browser workflows	no	baseline
+e2e/deep-audit-sidebar.spec.ts	Browser workflows	no	baseline
+e2e/delete-conversation.spec.ts	Browser workflows	no	baseline
+e2e/density-matrix-0.5.2.spec.ts	Browser workflows	yes	baseline
+e2e/density-tokens-0.4.3.spec.ts	Browser workflows	no	modified
+e2e/design-dark-mail.spec.ts	Browser workflows	no	baseline
+e2e/details-stay-open.spec.ts	Browser workflows	no	baseline
+e2e/discard-draft.spec.ts	Browser workflows	no	baseline
+e2e/download-older-mail.spec.ts	Browser workflows	no	baseline
+e2e/download-progress.spec.ts	Browser workflows	no	baseline
+e2e/draft-files.spec.ts	Browser workflows	no	baseline
+e2e/draft-from.spec.ts	Browser workflows	no	baseline
+e2e/draft-kind.spec.ts	Browser workflows	no	baseline
+e2e/draft-preview.spec.ts	Browser workflows	no	baseline
+e2e/draft-saved-time.spec.ts	Browser workflows	no	baseline
+e2e/duplicate-draft.spec.ts	Browser workflows	no	baseline
+e2e/edit-queued.spec.ts	Browser workflows	no	baseline
+e2e/eml-viewer-frame-link.spec.ts	Browser workflows	yes	modified
+e2e/eml-viewer.spec.ts	Browser workflows	yes	modified
+e2e/exact-message-time.spec.ts	Browser workflows	no	baseline
+e2e/filter-open.spec.ts	Browser workflows	no	baseline
+e2e/find-mailbox.spec.ts	Browser workflows	no	baseline
+e2e/find-matches.spec.ts	Browser workflows	no	baseline
+e2e/find-previous.spec.ts	Browser workflows	no	baseline
+e2e/fix-composer-cost.spec.ts	Browser workflows	no	baseline
+e2e/fix-error-redaction.spec.ts	Browser workflows	no	modified
+e2e/fix-reader-keyboard.spec.ts	Browser workflows	no	baseline
+e2e/fix-reader-security.spec.ts	Browser workflows	no	baseline
+e2e/fix-row-memo.spec.ts	Browser workflows	no	baseline
+e2e/fix-state-perf.spec.ts	Browser workflows	no	baseline
+e2e/flags-colors.spec.ts	Browser workflows	no	baseline
+e2e/folder-banner.spec.ts	Browser workflows	no	baseline
+e2e/folder-list-view.spec.ts	Browser workflows	no	baseline
+e2e/folder-menu.spec.ts	Browser workflows	no	baseline
+e2e/folder-summary.spec.ts	Browser workflows	no	baseline
+e2e/folder-total.spec.ts	Browser workflows	no	baseline
+e2e/forget-recent-search.spec.ts	Browser workflows	no	baseline
+e2e/forward-conversation-limit.spec.ts	Browser workflows	no	baseline
+e2e/forward-conversation.spec.ts	Browser workflows	no	baseline
+e2e/forward-remote-image.spec.ts	Browser workflows	no	baseline
+e2e/forward-selection.spec.ts	Browser workflows	no	baseline
+e2e/from-you.spec.ts	Browser workflows	no	baseline
+e2e/go-to-inbox.spec.ts	Browser workflows	no	baseline
+e2e/go-to-sent.spec.ts	Browser workflows	no	baseline
+e2e/grouped-row-action-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/grouped-selection-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/hide-mailbox.spec.ts	Browser workflows	no	baseline
+e2e/high-importance.spec.ts	Browser workflows	no	baseline
+e2e/invitation-filter.spec.ts	Browser workflows	no	baseline
+e2e/invite-card.spec.ts	Browser workflows	no	baseline
+e2e/ipc.ts	Browser harness and fixtures	no	baseline
+e2e/junk-conversation.spec.ts	Browser workflows	no	baseline
+e2e/junk-focused.spec.ts	Browser workflows	no	baseline
+e2e/junk-read-receipt.spec.ts	Browser workflows	no	baseline
+e2e/keep-expanded.spec.ts	Browser workflows	no	baseline
+e2e/keyboard.ts	Browser harness and fixtures	yes	baseline
+e2e/large-list.spec.ts	Browser workflows	no	baseline
+e2e/large-text-layout.spec.ts	Browser workflows	no	baseline
+e2e/last-checked.spec.ts	Browser workflows	no	baseline
+e2e/lazy-attachment-open.spec.ts	Browser workflows	no	baseline
+e2e/letter-scroll.spec.ts	Browser workflows	no	baseline
+e2e/link-text-address.spec.ts	Browser workflows	no	baseline
+e2e/list-1000-rows-artifact.spec.ts	Browser workflows	no	baseline
+e2e/list-formatting-regression.spec.ts	Browser workflows	no	baseline
+e2e/list-message-time.spec.ts	Browser workflows	no	baseline
+e2e/list-read.spec.ts	Browser workflows	no	baseline
+e2e/list-row-actions.spec.ts	Browser workflows	no	baseline
+e2e/list-row-layout.spec.ts	Browser workflows	no	baseline
+e2e/list-scroll.spec.ts	Browser workflows	no	baseline
+e2e/list-star.spec.ts	Browser workflows	no	baseline
+e2e/list-virtual-drag.spec.ts	Browser workflows	no	baseline
+e2e/list-virtual-keyboard.spec.ts	Browser workflows	no	baseline
+e2e/low-importance.spec.ts	Browser workflows	no	baseline
+e2e/mac-breakpoints.spec.ts	Browser workflows	no	modified
+e2e/mac-buttons-forms.spec.ts	Browser workflows	no	baseline
+e2e/mac-composer.spec.ts	Browser workflows	no	baseline
+e2e/mac-list.spec.ts	Browser workflows	no	baseline
+e2e/mac-menus.spec.ts	Browser workflows	yes	baseline
+e2e/mac-notices.spec.ts	Browser workflows	no	baseline
+e2e/mac-reader.spec.ts	Browser workflows	no	baseline
+e2e/mac-settings.spec.ts	Browser workflows	no	baseline
+e2e/mac-setup-dialogs.spec.ts	Browser workflows	yes	baseline
+e2e/mac-sidebar.spec.ts	Browser workflows	no	baseline
+e2e/mac-tokens.spec.ts	Browser workflows	no	baseline
+e2e/mac-toolbar.spec.ts	Browser workflows	no	baseline
+e2e/mail-event-coalescing.spec.ts	Browser workflows	no	baseline
+e2e/mail-flow.spec.ts	Browser workflows	no	baseline
+e2e/mail-header-layout.spec.ts	Browser workflows	no	baseline
+e2e/mail-mutation-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/mail-shell-overhaul.spec.ts	Browser workflows	no	baseline
+e2e/mailbox-filter-segments.spec.ts	Browser workflows	no	baseline
+e2e/mailbox-refresh-race.spec.ts	Browser workflows	yes	baseline
+e2e/mailing-list.spec.ts	Browser workflows	no	baseline
+e2e/mailto-link.spec.ts	Browser workflows	no	baseline
+e2e/mark-read-selection-race.spec.ts	Browser workflows	no	modified
+e2e/mbox.spec.ts	Browser workflows	no	baseline
+e2e/menu-print-pin.spec.ts	Browser workflows	no	baseline
+e2e/menu-reveal.ts	Browser harness and fixtures	no	baseline
+e2e/menu-submenu-placement.spec.ts	Browser workflows	no	baseline
+e2e/message-arrived.spec.ts	Browser workflows	no	baseline
+e2e/message-bcc.spec.ts	Browser workflows	no	baseline
+e2e/message-cc.spec.ts	Browser workflows	no	baseline
+e2e/message-file-count.spec.ts	Browser workflows	no	baseline
+e2e/message-file-kind.spec.ts	Browser workflows	no	baseline
+e2e/message-file-size.spec.ts	Browser workflows	no	baseline
+e2e/message-header-size.spec.ts	Browser workflows	no	baseline
+e2e/message-navigation.spec.ts	Browser workflows	no	baseline
+e2e/message-place.spec.ts	Browser workflows	no	baseline
+e2e/message-previews.spec.ts	Browser workflows	no	baseline
+e2e/message-reply-to.spec.ts	Browser workflows	no	baseline
+e2e/message-size.spec.ts	Browser workflows	no	baseline
+e2e/message-source.spec.ts	Browser workflows	no	baseline
+e2e/messages-from-sender.spec.ts	Browser workflows	no	baseline
+e2e/messages-with-subject.spec.ts	Browser workflows	no	baseline
+e2e/mock-ipc.ts	Browser harness and fixtures	no	baseline
+e2e/mock/accounts-setup.ts	Browser harness and fixtures	yes	modified
+e2e/mock/context.ts	Browser harness and fixtures	no	baseline
+e2e/mock/drafts-outbox.ts	Browser harness and fixtures	yes	modified
+e2e/mock/fixtures.ts	Browser harness and fixtures	no	baseline
+e2e/mock/folders.ts	Browser harness and fixtures	no	baseline
+e2e/mock/messages.ts	Browser harness and fixtures	no	baseline
+e2e/mock/reading.ts	Browser harness and fixtures	no	modified
+e2e/mock/remote-security.ts	Browser harness and fixtures	yes	baseline
+e2e/mock/settings-system.ts	Browser harness and fixtures	no	baseline
+e2e/mock/state.ts	Browser harness and fixtures	no	baseline
+e2e/mock/updater.ts	Browser harness and fixtures	no	baseline
+e2e/mock/window-events.ts	Browser harness and fixtures	no	baseline
+e2e/move-conversation-folder.spec.ts	Browser workflows	no	baseline
+e2e/move-folder.spec.ts	Browser workflows	no	baseline
+e2e/mute-conversation.spec.ts	Browser workflows	no	baseline
+e2e/muted-mark.spec.ts	Browser workflows	no	baseline
+e2e/narrow-200-forced-colors.spec.ts	Browser workflows	no	baseline
+e2e/native-command-flows.spec.ts	Browser workflows	no	baseline
+e2e/nested-role-move-labels.spec.ts	Browser workflows	no	baseline
+e2e/nested-row-hit-area.spec.ts	Browser workflows	no	baseline
+e2e/new-mail-sound.spec.ts	Browser workflows	no	baseline
+e2e/new-message-to-sender.spec.ts	Browser workflows	no	baseline
+e2e/new-messages.spec.ts	Browser workflows	no	baseline
+e2e/new-subfolder.spec.ts	Browser workflows	no	baseline
+e2e/next-unread-mailbox.spec.ts	Browser workflows	no	baseline
+e2e/notices-a11y.spec.ts	Browser workflows	no	baseline
+e2e/notification-open.spec.ts	Browser workflows	no	baseline
+e2e/offline-attachment.spec.ts	Browser workflows	no	baseline
+e2e/offline-attention-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/oldest-first.spec.ts	Browser workflows	no	baseline
+e2e/onboarding.spec.ts	Browser workflows	no	baseline
+e2e/open-earlier-button.spec.ts	Browser workflows	no	baseline
+e2e/open-earlier.spec.ts	Browser workflows	no	baseline
+e2e/outbox-files.spec.ts	Browser workflows	no	baseline
+e2e/outbox-open.spec.ts	Browser workflows	no	baseline
+e2e/outbox-preview.spec.ts	Browser workflows	no	baseline
+e2e/outbox-queued-time.spec.ts	Browser workflows	no	baseline
+e2e/outbox-reason.spec.ts	Browser workflows	no	baseline
+e2e/pane-account.spec.ts	Browser workflows	no	baseline
+e2e/pdf-preview.spec.ts	Browser workflows	no	baseline
+e2e/pin-mailbox.spec.ts	Browser workflows	no	baseline
+e2e/pin-message.spec.ts	Browser workflows	no	baseline
+e2e/pin-selection.spec.ts	Browser workflows	no	baseline
+e2e/pinned-filter.spec.ts	Browser workflows	no	baseline
+e2e/pointer-hit.ts	Browser harness and fixtures	no	baseline
+e2e/post-send-archive-warning.spec.ts	Browser workflows	no	baseline
+e2e/preview-next-file.spec.ts	Browser workflows	no	baseline
+e2e/preview-zoom.spec.ts	Browser workflows	no	baseline
+e2e/previous-unread-mailbox.spec.ts	Browser workflows	no	baseline
+e2e/print-conversation.spec.ts	Browser workflows	no	baseline
+e2e/print-files.spec.ts	Browser workflows	no	baseline
+e2e/print-selection.spec.ts	Browser workflows	no	baseline
+e2e/queued-draft-ownership.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply-all.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply-keep.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply-layout.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply-refused.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply-to.spec.ts	Browser workflows	no	baseline
+e2e/quick-reply.spec.ts	Browser workflows	no	baseline
+e2e/quiet-hours-status.spec.ts	Browser workflows	no	baseline
+e2e/quiet-hours.spec.ts	Browser workflows	no	baseline
+e2e/quit-saves-draft.spec.ts	Browser workflows	no	baseline
+e2e/read-receipt.spec.ts	Browser workflows	no	baseline
+e2e/reader-body.spec.ts	Browser workflows	no	baseline
+e2e/reader-chrome.spec.ts	Browser workflows	no	baseline
+e2e/reader-content-race.spec.ts	Browser workflows	no	modified
+e2e/reader-crash.spec.ts	Browser workflows	no	baseline
+e2e/reader-fit.spec.ts	Browser workflows	no	baseline
+e2e/reader-keys.spec.ts	Browser workflows	no	baseline
+e2e/reader-native-menu-recovery.spec.ts	Browser workflows	added in audit	new
+e2e/reader-shortcut-hints.spec.ts	Browser workflows	no	baseline
+e2e/reader-star.spec.ts	Browser workflows	no	baseline
+e2e/reader-toolbar-groups.spec.ts	Browser workflows	no	baseline
+e2e/received-recipient-suggestions.spec.ts	Browser workflows	no	baseline
+e2e/recent-folder.spec.ts	Browser workflows	no	baseline
+e2e/recent-search.spec.ts	Browser workflows	no	baseline
+e2e/recipient-preview.spec.ts	Browser workflows	no	baseline
+e2e/release-051-audit.spec.ts	Browser workflows	no	baseline
+e2e/remember-list.spec.ts	Browser workflows	no	baseline
+e2e/remembered-image-sender.spec.ts	Browser workflows	no	baseline
+e2e/remote-image-hosts.spec.ts	Browser workflows	no	baseline
+e2e/remove-account-settings.spec.ts	Browser workflows	no	baseline
+e2e/rename-nested-folder.spec.ts	Browser workflows	no	baseline
+e2e/replied-state.spec.ts	Browser workflows	no	baseline
+e2e/reply-focused.spec.ts	Browser workflows	no	baseline
+e2e/reply-from-address.spec.ts	Browser workflows	no	baseline
+e2e/reply-recipients.spec.ts	Browser workflows	no	baseline
+e2e/reply-to-address.spec.ts	Browser workflows	no	baseline
+e2e/reply-to-all-pref.spec.ts	Browser workflows	no	baseline
+e2e/reply-with-attachments.spec.ts	Browser workflows	no	baseline
+e2e/reply-without-quoting.spec.ts	Browser workflows	no	baseline
+e2e/reset-cleanup-failure.spec.ts	Browser workflows	no	baseline
+e2e/retry-all-outbox.spec.ts	Browser workflows	no	baseline
+e2e/return-message.spec.ts	Browser workflows	no	baseline
+e2e/review-fixes-0.4.3.spec.ts	Browser workflows	no	baseline
+e2e/rich-signature-plain-preview.spec.ts	Browser workflows	no	baseline
+e2e/rich-signature-save-races.spec.ts	Browser workflows	no	baseline
+e2e/rich-signature-unformatted-fallback.spec.ts	Browser workflows	no	baseline
+e2e/rich-signature.spec.ts	Browser workflows	no	baseline
+e2e/rule-form-safety.spec.ts	Browser workflows	no	modified
+e2e/rules-v2.spec.ts	Browser workflows	no	modified
+e2e/save-chosen-files.spec.ts	Browser workflows	no	baseline
+e2e/save-conversation-files.spec.ts	Browser workflows	no	baseline
+e2e/save-message.spec.ts	Browser workflows	no	baseline
+e2e/save-selection-files.spec.ts	Browser workflows	no	baseline
+e2e/save-selection-messages.spec.ts	Browser workflows	no	baseline
+e2e/scheduled-long-delay.spec.ts	Browser workflows	no	baseline
+e2e/scroll-next-message.spec.ts	Browser workflows	no	baseline
+e2e/search-all-mailboxes.spec.ts	Browser workflows	no	baseline
+e2e/search-escape.spec.ts	Browser workflows	no	baseline
+e2e/search-highlight.spec.ts	Browser workflows	no	baseline
+e2e/search-local-text.spec.ts	Browser workflows	no	baseline
+e2e/search-operators.spec.ts	Browser workflows	no	baseline
+e2e/search-snoozed.spec.ts	Browser workflows	no	baseline
+e2e/select-conversation.spec.ts	Browser workflows	no	baseline
+e2e/select-day.spec.ts	Browser workflows	no	baseline
+e2e/select-from-sender.spec.ts	Browser workflows	no	baseline
+e2e/select-unread.spec.ts	Browser workflows	no	baseline
+e2e/send-during-autosave.spec.ts	Browser workflows	no	baseline
+e2e/sender-address.spec.ts	Browser workflows	no	baseline
+e2e/sender-name-conflict.spec.ts	Browser workflows	no	baseline
+e2e/sent-recipients.spec.ts	Browser workflows	no	baseline
+e2e/server-search-continuation.spec.ts	Browser workflows	yes	modified
+e2e/settings-focus-audit-fixes.spec.ts	Browser workflows	no	baseline
+e2e/settings-layout-audit-fixes.spec.ts	Browser workflows	no	baseline
+e2e/settings-state-retention.spec.ts	Browser workflows	no	baseline
+e2e/setup-density-preview.spec.ts	Browser workflows	no	baseline
+e2e/setup-errors.spec.ts	Browser workflows	no	baseline
+e2e/setup-fixes.spec.ts	Browser workflows	no	baseline
+e2e/shortcut-overlay.spec.ts	Browser workflows	no	baseline
+e2e/shortcuts-typing.spec.ts	Browser workflows	no	baseline
+e2e/show-files.spec.ts	Browser workflows	no	baseline
+e2e/show-in-folder.spec.ts	Browser workflows	no	baseline
+e2e/signature-above-quote.spec.ts	Browser workflows	no	baseline
+e2e/snooze-conversation.spec.ts	Browser workflows	no	baseline
+e2e/snooze-later-today.spec.ts	Browser workflows	no	baseline
+e2e/snooze-selection.spec.ts	Browser workflows	no	baseline
+e2e/sort-reverse.spec.ts	Browser workflows	no	baseline
+e2e/star-conversation.spec.ts	Browser workflows	no	baseline
+e2e/subject-rule.spec.ts	Browser workflows	no	baseline
+e2e/theme-resolution.spec.ts	Browser workflows	no	baseline
+e2e/to-me-filter.spec.ts	Browser workflows	no	baseline
+e2e/toolbar-fit.spec.ts	Browser workflows	no	baseline
+e2e/trash-focused.spec.ts	Browser workflows	no	baseline
+e2e/ui-audit.spec.ts	Browser workflows	no	baseline
+e2e/ui-matrix-0.4.2.spec.ts	Browser workflows	no	baseline
+e2e/ui-polish-0.4.3.spec.ts	Browser workflows	no	baseline
+e2e/ui-polish.spec.ts	Browser workflows	no	baseline
+e2e/unblock-sender.spec.ts	Browser workflows	no	baseline
+e2e/undo-after-restart.spec.ts	Browser workflows	no	baseline
+e2e/undo-archive.spec.ts	Browser workflows	no	baseline
+e2e/undo-bulk-move.spec.ts	Browser workflows	no	baseline
+e2e/undo-long-pause.spec.ts	Browser workflows	no	baseline
+e2e/unread-folders.spec.ts	Browser workflows	no	baseline
+e2e/unsubscribe.spec.ts	Browser workflows	no	baseline
+e2e/updater-safety.spec.ts	Browser workflows	no	modified
+e2e/updater.spec.ts	Browser workflows	no	baseline
+e2e/vibrancy.spec.ts	Browser workflows	yes	baseline
+e2e/view-recovery.spec.ts	Browser workflows	no	baseline
+e2e/window-chrome.spec.ts	Browser workflows	yes	baseline
+e2e/window-title.spec.ts	Browser workflows	no	baseline
+eslint.config.js	Build, CI and releases	no	baseline
+index.html	Build, CI and releases	no	baseline
+package-lock.json	Dependency policy and licenses	yes	modified
+package.json	Build, CI and releases	yes	modified
+packaging/flatpak/lint-exceptions.json	Packaging and platform policy	no	baseline
+packaging/flatpak/run.rosie.snap.desktop	Packaging and platform policy	no	modified
+packaging/flatpak/run.rosie.snap.metainfo.xml	Packaging and platform policy	yes	modified
+packaging/flatpak/run.rosie.snap.yml	Packaging and platform policy	no	baseline
+playwright.config.ts	Build, CI and releases	no	modified
+rust-toolchain.toml	Dependency policy and licenses	no	baseline
+scripts/artifact-signing-tools.ps1	Build, CI and releases	no	baseline
+scripts/audit-cargo.js	Dependency policy and licenses	no	baseline
+scripts/build-flatpak.js	Build, CI and releases	no	baseline
+scripts/build-mas-args.js	Build, CI and releases	no	baseline
+scripts/build-mas.js	Build, CI and releases	no	baseline
+scripts/build-mas.test.js	Tooling regression suites	no	baseline
+scripts/cargo-safe-update.mjs	Dependency policy and licenses	no	baseline
+scripts/cargo/check-update-policy.test.mjs	Tooling regression suites	no	baseline
+scripts/cargo/safe-update.test.mjs	Tooling regression suites	no	baseline
+scripts/check-cargo-update-policy.mjs	Dependency policy and licenses	no	baseline
+scripts/check-ipc-contract.js	Build, CI and releases	no	baseline
+scripts/check-ipc-contract.test.js	Tooling regression suites	no	baseline
+scripts/check-native-process-policy.js	Build, CI and releases	no	baseline
+scripts/check-tauri-alignment.mjs	Build, CI and releases	no	baseline
+scripts/content-filters.js	Build, CI and releases	no	baseline
+scripts/content-filters.test.js	Tooling regression suites	no	baseline
+scripts/deps-majors.mjs	Dependency policy and licenses	no	baseline
+scripts/deps-majors.test.mjs	Tooling regression suites	no	baseline
+scripts/dist-tools.js	Build, CI and releases	no	baseline
+scripts/ensure-draft-release.js	Build, CI and releases	no	baseline
+scripts/ensure-draft-release.test.js	Tooling regression suites	no	baseline
+scripts/finalize-release.js	Build, CI and releases	no	baseline
+scripts/finalize-release.test.js	Tooling regression suites	no	baseline
+scripts/generate-cargo-licenses.js	Dependency policy and licenses	no	baseline
+scripts/generate-licenses.test.js	Tooling regression suites	no	baseline
+scripts/generate-npm-licenses.js	Dependency policy and licenses	no	baseline
+scripts/git-prune-local-branches.js	Build, CI and releases	no	baseline
+scripts/github-cli.js	Build, CI and releases	no	baseline
+scripts/github-cli.test.js	Tooling regression suites	no	baseline
+scripts/headless-coverage.js	Build, CI and releases	no	baseline
+scripts/hooks/pre-commit	Build, CI and releases	no	baseline
+scripts/install-git-hooks.js	Build, CI and releases	no	baseline
+scripts/install-git-hooks.test.js	Tooling regression suites	no	baseline
+scripts/lib/artifacts.js	Build, CI and releases	no	baseline
+scripts/lib/changelog.js	Build, CI and releases	no	baseline
+scripts/lib/changelog.test.js	Tooling regression suites	no	baseline
+scripts/lib/e2e-port.d.ts	Build, CI and releases	no	baseline
+scripts/lib/e2e-port.js	Build, CI and releases	no	baseline
+scripts/lib/gpg-verify.js	Build, CI and releases	no	baseline
+scripts/lib/gpg-verify.test.js	Tooling regression suites	no	baseline
+scripts/lib/json.js	Build, CI and releases	no	baseline
+scripts/lib/paths.js	Build, CI and releases	no	baseline
+scripts/lib/spawn.js	Build, CI and releases	no	baseline
+scripts/lib/utils.test.js	Tooling regression suites	no	baseline
+scripts/lib/versions.js	Build, CI and releases	no	baseline
+scripts/line-endings.test.js	Tooling regression suites	no	baseline
+scripts/lint-comments.mjs	Build, CI and releases	no	baseline
+scripts/linux-preflight.js	Build, CI and releases	no	baseline
+scripts/mac-keychain-ssh.sh	Build, CI and releases	no	baseline
+scripts/mac-keychain-ssh.test.js	Tooling regression suites	no	baseline
+scripts/msstore-pack.js	Build, CI and releases	no	baseline
+scripts/normalize-icons.js	Build, CI and releases	no	baseline
+scripts/normalize-icons.test.js	Tooling regression suites	no	baseline
+scripts/npm-safe-update.mjs	Dependency policy and licenses	no	baseline
+scripts/open-vs-dev-shell.js	Build, CI and releases	no	baseline
+scripts/open-vs-dev-shell.test.js	Tooling regression suites	no	baseline
+scripts/prerelease-prepare.js	Build, CI and releases	no	baseline
+scripts/release-assets.test.js	Tooling regression suites	yes	modified
+scripts/release-dry-run.js	Build, CI and releases	no	baseline
+scripts/release-dry-run.test.js	Tooling regression suites	no	baseline
+scripts/release-identity.js	Build, CI and releases	no	baseline
+scripts/release-session.js	Build, CI and releases	no	baseline
+scripts/release-warning.js	Build, CI and releases	no	baseline
+scripts/run-e2e.js	Build, CI and releases	no	baseline
+scripts/run-e2e.test.js	Tooling regression suites	no	baseline
+scripts/run-linux-release.js	Build, CI and releases	no	baseline
+scripts/run-linux-release.test.js	Tooling regression suites	no	baseline
+scripts/run-release-asset-tests.js	Tooling regression suites	no	baseline
+scripts/rust-toolchain.mjs	Build, CI and releases	no	baseline
+scripts/setup-flatpak.js	Build, CI and releases	no	baseline
+scripts/setup-macos-ci-keychain.sh	Build, CI and releases	no	baseline
+scripts/setup-windows-artifact-signing.ps1	Build, CI and releases	no	baseline
+scripts/sign-release.js	Build, CI and releases	no	baseline
+scripts/sync-version.js	Build, CI and releases	no	modified
+scripts/sync-version.test.js	Tooling regression suites	no	modified
+scripts/tauri-build-args.js	Build, CI and releases	no	baseline
+scripts/tauri-build.js	Build, CI and releases	no	baseline
+scripts/tauri-build.test.js	Tooling regression suites	no	baseline
+scripts/tauri-signing-env.js	Build, CI and releases	no	baseline
+scripts/tauri-signing-env.test.js	Tooling regression suites	no	baseline
+scripts/test-all.js	Tooling regression suites	no	baseline
+scripts/test-all.test.js	Tooling regression suites	no	baseline
+scripts/test-mail-integration.js	Tooling regression suites	no	modified
+scripts/test-vendored-imap.js	Tooling regression suites	no	baseline
+scripts/test-vendored-imap.test.js	Tooling regression suites	no	baseline
+scripts/updater-pubkey.js	Build, CI and releases	no	baseline
+scripts/updater-pubkey.test.js	Tooling regression suites	no	baseline
+scripts/validate-macos-entitlements.js	Build, CI and releases	no	baseline
+scripts/validate-updater-live.js	Build, CI and releases	no	baseline
+scripts/validate-updater-manifest.js	Build, CI and releases	no	baseline
+scripts/verify-macos-updater.sh	Build, CI and releases	no	baseline
+scripts/verify-macos-updater.swift	Build, CI and releases	no	baseline
+scripts/verify-release-directory.js	Build, CI and releases	no	baseline
+scripts/verify-release-draft.js	Build, CI and releases	no	baseline
+scripts/verify-tauri-signature.js	Build, CI and releases	no	baseline
+scripts/verify-tauri-signature.test.js	Tooling regression suites	no	baseline
+scripts/verify-windows-authenticode.ps1	Build, CI and releases	no	baseline
+scripts/vi.js	Build, CI and releases	no	baseline
+scripts/windows-artifact-sign.ps1	Build, CI and releases	no	baseline
+scripts/zip-macos.js	Build, CI and releases	no	baseline
+src-tauri/Cargo.lock	Dependency policy and licenses	yes	modified
+src-tauri/Cargo.toml	Dependency policy and licenses	yes	modified
+src-tauri/Info.plist	Packaging and platform policy	no	baseline
+src-tauri/build.rs	Packaging and platform policy	no	baseline
+src-tauri/capabilities/direct/default.json	Packaging and platform policy	no	baseline
+src-tauri/capabilities/store/store.json	Packaging and platform policy	no	baseline
+src-tauri/entitlements.mas.plist	Packaging and platform policy	no	baseline
+src-tauri/entitlements.plist	Packaging and platform policy	no	baseline
+src-tauri/filters/LICENSE-CC-BY-SA-3.0.txt	Filter data and notices	no	baseline
+src-tauri/filters/LICENSE-CC0-1.0.txt	Filter data and notices	no	baseline
+src-tauri/filters/easylist.txt	Filter data and notices	no	baseline
+src-tauri/filters/easyprivacy.txt	Filter data and notices	no	baseline
+src-tauri/filters/sources.json	Filter data and notices	no	baseline
+src-tauri/filters/tweetfeed-domains.txt	Filter data and notices	no	baseline
+src-tauri/filters/tweetfeed-urls.txt	Filter data and notices	no	baseline
+src-tauri/icons/128x128.png	Packaged visual assets	no	baseline
+src-tauri/icons/128x128@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/32x32.png	Packaged visual assets	no	baseline
+src-tauri/icons/64x64.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square107x107Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square142x142Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square150x150Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square284x284Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square30x30Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square310x310Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square44x44Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square71x71Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/Square89x89Logo.png	Packaged visual assets	no	baseline
+src-tauri/icons/StoreLogo.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-hdpi/ic_launcher.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-mdpi/ic_launcher.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png	Packaged visual assets	no	baseline
+src-tauri/icons/android/values/ic_launcher_background.xml	Packaged visual assets	no	baseline
+src-tauri/icons/app-icon-macos.png	Packaged visual assets	no	baseline
+src-tauri/icons/app-icon.png	Packaged visual assets	no	baseline
+src-tauri/icons/icon.icns	Packaged visual assets	no	baseline
+src-tauri/icons/icon.ico	Packaged visual assets	no	baseline
+src-tauri/icons/icon.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-20x20@1x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-20x20@2x-1.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-20x20@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-20x20@3x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-29x29@1x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-29x29@2x-1.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-29x29@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-29x29@3x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-40x40@1x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-40x40@2x-1.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-40x40@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-40x40@3x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-512@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-60x60@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-60x60@3x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-76x76@1x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-76x76@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png	Packaged visual assets	no	baseline
+src-tauri/icons/macos_statusbaricn.png	Packaged visual assets	no	baseline
+src-tauri/src/app_nap.rs	Native desktop and updater	no	baseline
+src-tauri/src/bounded_file.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/bridge.rs	Message, file and network boundaries	no	modified
+src-tauri/src/commands.rs	Native IPC and account ownership	yes	modified
+src-tauri/src/commands/accounts.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/attachments.rs	Native IPC and account ownership	yes	baseline
+src-tauri/src/commands/badge.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/cache_policy.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/compatibility.rs	Native IPC and account ownership	yes	modified
+src-tauri/src/commands/deferred_integration_tests.rs	Native IPC and account ownership	no	modified
+src-tauri/src/commands/drafts_send.rs	Native IPC and account ownership	no	modified
+src-tauri/src/commands/drag.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/drag_drop.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/flags.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/folders.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/import_export.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/messages.rs	Native IPC and account ownership	yes	modified
+src-tauri/src/commands/opened.rs	Native IPC and account ownership	no	modified
+src-tauri/src/commands/outbox.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/replied.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/security_net.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/settings_system.rs	Native IPC and account ownership	no	baseline
+src-tauri/src/commands/snooze_filters.rs	Native IPC and account ownership	no	modified
+src-tauri/src/commands/sync.rs	Native IPC and account ownership	yes	modified
+src-tauri/src/content_blocking.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/credentials.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/date_time.rs	IMAP, SMTP and MIME	added in audit	new
+src-tauri/src/db.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/accounts.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/db/compatibility.rs	SQLite storage and recovery	yes	baseline
+src-tauri/src/db/drafts.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/db/files_cache.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/db/mailboxes.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/messages.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/migrations.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/offline_ops.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/outbox.rs	SQLite storage and recovery	no	modified
+src-tauri/src/db/read_conn_guard.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/db/recent_searches.rs	SQLite storage and recovery	no	modified
+src-tauri/src/db/rules.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/db/snooze.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/db/snooze_transfers.rs	SQLite storage and recovery	yes	baseline
+src-tauri/src/db/tests.rs	SQLite storage and recovery	yes	modified
+src-tauri/src/download_mark.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/html_sanitize.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/mail.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/append.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/connect.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/failure.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/flowed.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/folders.rs	IMAP, SMTP and MIME	yes	baseline
+src-tauri/src/mail/icloud.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/ics.rs	IMAP, SMTP and MIME	no	modified
+src-tauri/src/mail/keywords.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/list_status.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/list_unsubscribe.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/parse.rs	IMAP, SMTP and MIME	no	modified
+src-tauri/src/mail/pool.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/qresync.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/remote_drafts.rs	IMAP, SMTP and MIME	no	modified
+src-tauri/src/mail/send.rs	IMAP, SMTP and MIME	no	modified
+src-tauri/src/mail/source.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/sync.rs	IMAP, SMTP and MIME	yes	modified
+src-tauri/src/mail/tests.rs	IMAP, SMTP and MIME	yes	modified
+src-tauri/src/mail/utf7.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/mail/watch.rs	IMAP, SMTP and MIME	yes	baseline
+src-tauri/src/main.rs	Native desktop and updater	yes	modified
+src-tauri/src/mbox.rs	Message, file and network boundaries	no	modified
+src-tauri/src/models.rs	Native types and validation	no	baseline
+src-tauri/src/models/dto.rs	Native types and validation	yes	modified
+src-tauri/src/models/folder_role.rs	Native types and validation	no	baseline
+src-tauri/src/models/ipc_error.rs	Native types and validation	no	baseline
+src-tauri/src/models/tests.rs	Native types and validation	no	baseline
+src-tauri/src/models/validate.rs	Native types and validation	no	baseline
+src-tauri/src/notify.rs	Native desktop and updater	yes	modified
+src-tauri/src/oauth.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/opened_mail.rs	Message, file and network boundaries	no	modified
+src-tauri/src/outbox_reason.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/pdf_preview.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/providers.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/resume_watch.rs	IMAP, SMTP and MIME	no	baseline
+src-tauri/src/search_query.rs	IMAP, SMTP and MIME	no	modified
+src-tauri/src/security.rs	Message, file and network boundaries	yes	baseline
+src-tauri/src/settings.rs	SQLite storage and recovery	no	modified
+src-tauri/src/storage.rs	SQLite storage and recovery	no	baseline
+src-tauri/src/strings.rs	Native desktop and updater	no	baseline
+src-tauri/src/threat_blocking.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/tray.rs	Native desktop and updater	no	baseline
+src-tauri/src/unsubscribe.rs	Message, file and network boundaries	no	baseline
+src-tauri/src/update_relaunch.rs	Native desktop and updater	no	baseline
+src-tauri/src/update_schedule.rs	Native desktop and updater	no	baseline
+src-tauri/src/window_fx.rs	Native desktop and updater	no	baseline
+src-tauri/src/window_snap.rs	Native desktop and updater	no	baseline
+src-tauri/tauri.conf.json	Packaging and platform policy	yes	baseline
+src-tauri/tauri.direct.conf.json	Packaging and platform policy	no	baseline
+src-tauri/tauri.flatpak.conf.json	Packaging and platform policy	no	baseline
+src-tauri/tauri.mas.conf.json	Packaging and platform policy	no	baseline
+src-tauri/tauri.msstore.conf.json	Packaging and platform policy	no	baseline
+src-tauri/vendor/async-imap/.cargo-ok	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/.cargo_vcs_info.json	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/.cirrus.yml	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/.github/workflows/ci.yml	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/.gitignore	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/CHANGELOG.md	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/Cargo.toml	Vendored async-imap	no	modified
+src-tauri/vendor/async-imap/Cargo.toml.orig	Vendored async-imap	no	modified
+src-tauri/vendor/async-imap/LICENSE-APACHE	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/LICENSE-MIT	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/POSTAL-SNAP.md	Vendored async-imap	no	modified
+src-tauri/vendor/async-imap/README.md	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/rustfmt.toml	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/authenticator.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/client.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/error.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/extensions/compress.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/extensions/id.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/extensions/idle.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/extensions/mod.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/extensions/quota.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/imap_stream.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/lib.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/mock_stream.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/parse.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/capabilities.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/fetch.rs	Vendored async-imap	no	modified
+src-tauri/vendor/async-imap/src/types/id_generator.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/mailbox.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/mod.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/name.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/quota.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/request.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/async-imap/src/types/response_data.rs	Vendored async-imap	no	baseline
+src-tauri/vendor/serde_with/.cargo_vcs_info.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/CHANGELOG.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/Cargo.lock	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/Cargo.toml	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/Cargo.toml.orig	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/LICENSE-APACHE	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/LICENSE-MIT	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/POSTAL-SNAP.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/README.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/base58.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/base64.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/content/de.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/content/mod.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/content/ser.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/de/duplicates.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/de/impls.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/de/mod.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/de/skip_error.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/duplicate_key_impls/error_on_duplicate.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/duplicate_key_impls/first_value_wins.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/duplicate_key_impls/last_value_wins.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/duplicate_key_impls/mod.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/enum_map.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/flatten_maybe.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/formats.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/guide.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/guide/feature_flags.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/guide/serde_as.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/guide/serde_as_transformations.md	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/hex.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/jiff_0_2.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/json.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/key_value_map.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/lib.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/rust.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/schemars_0_8.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/schemars_0_9.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/schemars_1.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/ser/duplicates.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/ser/impls.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/ser/mod.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/ser/skip_error.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/serde_conv.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/time_0_3.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/utils.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/utils/duration.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/with_prefix.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/src/with_suffix.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/base58.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/base64.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/derives/deserialize_fromstr.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/derives/lib.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/derives/serialize_display.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/hashbrown_0_14.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/hashbrown_0_15.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/hashbrown_0_16.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/hashbrown_0_17.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/hex.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/indexmap_1.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/indexmap_2.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/jiff_0_2.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/json.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/rust.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/main.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/schemars_basic.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/schemars_deserialize_only_bug_735.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/bytes.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/default_on_null.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/duration.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/enum_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/from_into.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/key_value_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/key_value_map_enum.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/key_value_map_flatten.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/map_fixed.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/one_or_many_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/one_or_many_prefer_one.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/pickfirst.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/pickfirst_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/set_last_value_wins.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/set_last_value_wins_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/set_prevent_duplicates.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/set_prevent_duplicates_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/snapshots/string_with_separator.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/option.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/set.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/tuples.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/vec.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/test_std/vec_deque.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_8/utils.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/main.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/schemars_basic.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/schemars_deserialize_only_bug_735.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/bytes.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/default_on_null.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/duration.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/enum_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/from_into.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/key_value_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/key_value_map_enum.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/key_value_map_flatten.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/map_fixed.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/one_or_many_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/one_or_many_prefer_one.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/pickfirst.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/pickfirst_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/set_last_value_wins.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/set_last_value_wins_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/set_prevent_duplicates.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/set_prevent_duplicates_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/snapshots/string_with_separator.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/option.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/set.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/tuples.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/vec.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/test_std/vec_deque.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_0_9/utils.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/main.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/schemars_basic.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/schemars_deserialize_only_bug_735.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/bytes.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/default_on_null.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/duration.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/enum_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/from_into.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/key_value_map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/key_value_map_enum.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/key_value_map_flatten.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/map_fixed.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/one_or_many_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/one_or_many_prefer_one.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/pickfirst.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/pickfirst_nested.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/set_last_value_wins.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/set_last_value_wins_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/set_prevent_duplicates.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/set_prevent_duplicates_displaysfromstr.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/snapshots/string_with_separator.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/map.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/option.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/set.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/tuples.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/vec.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/test_std/vec_deque.json	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/schemars_1/utils.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/collections.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/default_on.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/enum_map.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/frominto.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/fromintoref.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/key_value_map.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/lib.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/map_tuple_list.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/pickfirst.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/serde_as_macro.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/serde_conv.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/serde_as/time.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/smallvec_1.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/time_0_3.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/utils.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/version_numbers.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/with_prefix.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/serde_with/tests/with_suffix.rs	Vendored serde_with	added in audit	new
+src-tauri/vendor/tauri-plugin-updater/Cargo.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/LICENSE.spdx	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/LICENSE_APACHE-2.0	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/LICENSE_MIT	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/POSTAL-SNAP.md	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/README.md	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/api-iife.js	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/build.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/autogenerated/commands/check.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/autogenerated/commands/download.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/autogenerated/commands/download_and_install.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/autogenerated/commands/install.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/autogenerated/reference.md	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/default.toml	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/permissions/schemas/schema.json	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/commands.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/config.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/error.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/lib.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/macos_install.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/vendor/tauri-plugin-updater/src/updater.rs	Vendored tauri-plugin-updater	no	baseline
+src-tauri/windows/installer-hooks.nsh	Packaging and platform policy	no	baseline
+src/App.tsx	App shell, data and actions	no	modified
+src/accountMerge.ts	App shell, data and actions	no	baseline
+src/accountSessions.ts	App shell, data and actions	no	baseline
+src/accountStatus.ts	App shell, data and actions	no	baseline
+src/actions/bus.ts	App shell, data and actions	no	baseline
+src/actions/fuzzy.ts	App shell, data and actions	no	baseline
+src/actions/match.ts	App shell, data and actions	no	baseline
+src/actions/registry.ts	App shell, data and actions	no	baseline
+src/actions/textScale.ts	App shell, data and actions	no	baseline
+src/actions/types.ts	App shell, data and actions	no	baseline
+src/api.ts	App shell, data and actions	yes	modified
+src/blockedSenders.ts	App shell, data and actions	no	baseline
+src/breakpoints.ts	App shell, data and actions	no	baseline
+src/bulk.ts	App shell, data and actions	no	baseline
+src/components/AppMark.tsx	App shell and navigation	no	baseline
+src/components/Composer.tsx	Compose, drafts and outbox	no	modified
+src/components/ContextMenu.tsx	App shell and navigation	no	baseline
+src/components/EmlViewer.tsx	Reader and attachments	no	modified
+src/components/ErrorBoundary.tsx	App shell and navigation	no	baseline
+src/components/ErrorRecovery.tsx	App shell and navigation	no	baseline
+src/components/HighlightedText.tsx	App shell and navigation	no	baseline
+src/components/MailShell.tsx	App shell and navigation	yes	modified
+src/components/MessageReader.tsx	Reader and attachments	no	modified
+src/components/NoticeRegion.tsx	App shell and navigation	no	baseline
+src/components/SettingsDialog.tsx	Account and general settings	no	baseline
+src/components/SetupFlow.tsx	Setup and account identity	no	baseline
+src/components/SetupWizard.tsx	Setup and account identity	no	baseline
+src/components/WindowChrome.tsx	App shell and navigation	no	baseline
+src/components/composer/addressFields.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/attachmentPreview.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/composerHeader.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/composerSeed.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/composerValidate.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/confirmDialog.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/extensions/fontSize.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/extensions/indentation.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/extensions/index.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/extensions/remoteImage.ts	Compose, drafts and outbox	no	modified
+src/components/composer/extensions/safeLink.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/formatToolbar.tsx	Compose, drafts and outbox	no	modified
+src/components/composer/pasteImage.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/plainText.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/recipientField.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/recipientFieldUtils.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/schedule.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/sendBar.tsx	Compose, drafts and outbox	no	baseline
+src/components/composer/sendMenuPlacement.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/useComposerAttachments.ts	Compose, drafts and outbox	no	modified
+src/components/composer/useComposerDraftPersistence.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/useComposerEditor.ts	Compose, drafts and outbox	no	modified
+src/components/composer/useComposerPlacement.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/useComposerSend.ts	Compose, drafts and outbox	no	baseline
+src/components/composer/useComposerWarnings.ts	Compose, drafts and outbox	no	baseline
+src/components/externalLink.ts	App shell and navigation	no	baseline
+src/components/focusable.ts	App shell and navigation	no	baseline
+src/components/frameLinkRouter.ts	App shell and navigation	no	baseline
+src/components/mail/MboxProgressNotice.tsx	Mailbox workflows	no	baseline
+src/components/mail/ServerSearchNotice.tsx	Mailbox workflows	yes	baseline
+src/components/mail/accountSwitcher.tsx	Mailbox workflows	no	baseline
+src/components/mail/folderButton.tsx	Mailbox workflows	no	baseline
+src/components/mail/folderIcons.ts	Mailbox workflows	no	baseline
+src/components/mail/folderTree.tsx	Mailbox workflows	no	baseline
+src/components/mail/folderTreeModel.ts	Mailbox workflows	no	baseline
+src/components/mail/localLists.tsx	Mailbox workflows	no	baseline
+src/components/mail/mailContextActions.ts	Mailbox workflows	no	modified
+src/components/mail/mailDialogs.tsx	Mailbox workflows	no	baseline
+src/components/mail/mailSearch.ts	Mailbox workflows	yes	baseline
+src/components/mail/mailToolbar.tsx	Mailbox workflows	no	baseline
+src/components/mail/mboxOperations.ts	Mailbox workflows	no	baseline
+src/components/mail/messageList.tsx	Mailbox workflows	yes	baseline
+src/components/mail/messagePaneChrome.tsx	Mailbox workflows	no	baseline
+src/components/mail/messageRow.tsx	Mailbox workflows	no	baseline
+src/components/mail/paneSplitter.tsx	Mailbox workflows	no	baseline
+src/components/mail/rowActions.tsx	Mailbox workflows	no	baseline
+src/components/mail/searchScopeMenu.tsx	Mailbox workflows	no	baseline
+src/components/mail/searchTips.tsx	Mailbox workflows	no	baseline
+src/components/mail/selectionMenu.ts	Mailbox workflows	no	baseline
+src/components/mail/sidebar.tsx	Mailbox workflows	no	baseline
+src/components/mail/syncStatus.tsx	Mailbox workflows	no	baseline
+src/components/mail/unreadBadge.tsx	Mailbox workflows	no	baseline
+src/components/mail/useAccountRefresh.ts	Mailbox workflows	no	modified
+src/components/mail/useFolderDialog.ts	Mailbox workflows	no	baseline
+src/components/mail/useLocalListActions.ts	Mailbox workflows	no	modified
+src/components/mail/useMailEvents.ts	Mailbox workflows	no	modified
+src/components/mail/useMessageOpening.ts	Mailbox workflows	no	baseline
+src/components/mail/useMessageSelection.ts	Mailbox workflows	no	modified
+src/components/mail/useNotificationOpen.ts	Mailbox workflows	no	baseline
+src/components/mail/useOverlayFocus.ts	Mailbox workflows	no	baseline
+src/components/mail/useRowActions.ts	Mailbox workflows	no	modified
+src/components/menuIcons.ts	App shell and navigation	no	baseline
+src/components/palette/CommandPalette.tsx	Mailbox workflows	no	baseline
+src/components/palette/ShortcutOverlay.tsx	Mailbox workflows	no	baseline
+src/components/popupPlacement.ts	App shell and navigation	no	baseline
+src/components/reader/attachmentKinds.ts	Reader and attachments	no	baseline
+src/components/reader/attachmentList.tsx	Reader and attachments	no	baseline
+src/components/reader/buildReaderActions.ts	Reader and attachments	no	baseline
+src/components/reader/conversationIndex.tsx	Reader and attachments	no	baseline
+src/components/reader/inviteCard.tsx	Reader and attachments	no	baseline
+src/components/reader/inviteTime.ts	Reader and attachments	no	baseline
+src/components/reader/messageBody.tsx	Reader and attachments	no	baseline
+src/components/reader/messageHeader.tsx	Reader and attachments	no	baseline
+src/components/reader/originalDialog.tsx	Reader and attachments	no	baseline
+src/components/reader/quickReply.tsx	Reader and attachments	no	baseline
+src/components/reader/readerActions.ts	Reader and attachments	no	baseline
+src/components/reader/readerNotices.tsx	Reader and attachments	no	baseline
+src/components/reader/readerToolbar.tsx	Reader and attachments	no	baseline
+src/components/reader/readerUtils.ts	Reader and attachments	no	baseline
+src/components/reader/snoozePanel.tsx	Reader and attachments	no	baseline
+src/components/reader/snoozeTimes.ts	Reader and attachments	no	baseline
+src/components/reader/useConversationState.ts	Reader and attachments	no	baseline
+src/components/reader/useFrameLinks.ts	Reader and attachments	no	modified
+src/components/reader/useMessageFrame.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderAttachments.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderCompose.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderFind.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderFlags.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderMenuActions.ts	Reader and attachments	no	baseline
+src/components/reader/useReaderMoves.ts	Reader and attachments	no	modified
+src/components/reader/useRemoteImages.ts	Reader and attachments	no	baseline
+src/components/reader/useReplyNotes.ts	Reader and attachments	no	baseline
+src/components/reader/useSenderRules.ts	Reader and attachments	no	baseline
+src/components/settings/SignatureEditor.tsx	Account and general settings	no	baseline
+src/components/settings/aboutTab.tsx	Account and general settings	no	baseline
+src/components/settings/accountDownload.tsx	Account and general settings	no	baseline
+src/components/settings/accountsTab.tsx	Account and general settings	no	baseline
+src/components/settings/advancedTab.tsx	Account and general settings	no	baseline
+src/components/settings/appearanceTab.tsx	Account and general settings	no	baseline
+src/components/settings/bodyFormatControl.tsx	Account and general settings	no	baseline
+src/components/settings/bridgeCertificate.tsx	Account and general settings	no	baseline
+src/components/settings/closeToTray.tsx	Account and general settings	no	baseline
+src/components/settings/connectionPanel.tsx	Account and general settings	no	modified
+src/components/settings/creditsDialog.tsx	Account and general settings	no	baseline
+src/components/settings/displayChoices.ts	Account and general settings	no	baseline
+src/components/settings/generalTab.tsx	Account and general settings	no	baseline
+src/components/settings/helpers.ts	Account and general settings	no	baseline
+src/components/settings/notificationsTab.tsx	Account and general settings	no	baseline
+src/components/settings/primitives.tsx	Account and general settings	no	baseline
+src/components/settings/readingTab.tsx	Account and general settings	no	baseline
+src/components/settings/rulesEditor.tsx	Account and general settings	no	modified
+src/components/settings/settingsSearch.ts	Account and general settings	no	baseline
+src/components/settings/shortcutsTab.tsx	Account and general settings	no	baseline
+src/components/settings/storageTab.tsx	Account and general settings	no	baseline
+src/components/settings/updatesTab.tsx	Account and general settings	no	baseline
+src/components/settings/useSettingsAccountManagement.ts	Account and general settings	no	baseline
+src/components/settings/useSettingsCapabilities.ts	Account and general settings	no	baseline
+src/components/settings/useSettingsFilterRules.ts	Account and general settings	no	modified
+src/components/settings/useSettingsSave.ts	Account and general settings	no	baseline
+src/components/settings/useSettingsStorage.ts	Account and general settings	no	baseline
+src/components/settings/useSettingsThreatProtection.ts	Account and general settings	no	baseline
+src/components/settings/useSettingsUpdates.ts	Account and general settings	no	baseline
+src/components/setup/displayOptions.tsx	Setup and account identity	no	baseline
+src/components/setup/request.ts	Setup and account identity	no	baseline
+src/components/setup/serverFields.tsx	Setup and account identity	no	baseline
+src/components/setupFlow/steps.tsx	Setup and account identity	no	baseline
+src/components/setupFlow/useSetupProgress.ts	Setup and account identity	no	baseline
+src/components/toolbarNav.ts	App shell and navigation	no	baseline
+src/components/useDialogFocus.ts	App shell and navigation	yes	modified
+src/components/useInertBackground.ts	App shell and navigation	no	baseline
+src/components/usePopupMenu.ts	App shell and navigation	no	baseline
+src/composerSize.ts	App shell, data and actions	no	baseline
+src/contextMenu.ts	App shell, data and actions	no	baseline
+src/copyConversation.ts	App shell, data and actions	no	baseline
+src/copyMessageText.ts	App shell, data and actions	no	baseline
+src/deleteConversation.ts	App shell, data and actions	no	baseline
+src/devPerf.ts	App shell, data and actions	no	baseline
+src/draftFlush.ts	App shell, data and actions	no	baseline
+src/errors.ts	App shell, data and actions	no	baseline
+src/flagColor.ts	App shell, data and actions	no	modified
+src/flagColors.ts	App shell, data and actions	no	baseline
+src/folderMove.ts	App shell, data and actions	no	baseline
+src/format.ts	App shell, data and actions	no	baseline
+src/forwardConversation.ts	App shell, data and actions	no	baseline
+src/fromAddress.ts	App shell, data and actions	no	baseline
+src/hooks/useAppShortcuts.ts	App shell, data and actions	no	baseline
+src/hooks/useColorScheme.ts	App shell, data and actions	no	baseline
+src/hooks/useMailShortcuts.ts	App shell, data and actions	no	baseline
+src/hooks/useMailboxMessages.ts	App shell, data and actions	yes	modified
+src/hooks/useMediaQuery.ts	App shell, data and actions	no	baseline
+src/hooks/useScheduledOutbox.ts	App shell, data and actions	no	baseline
+src/hooks/useUnreadBadge.ts	App shell, data and actions	no	baseline
+src/i18n.ts	App shell, data and actions	no	baseline
+src/i18n/common.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/composer.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/contextMenu.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/errors.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/mail.ts	Appearance, accessibility and strings	yes	baseline
+src/i18n/notices.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/palette.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/reader.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/settings.ts	Appearance, accessibility and strings	no	modified
+src/i18n/setup.ts	Appearance, accessibility and strings	no	baseline
+src/i18n/update.ts	Appearance, accessibility and strings	no	baseline
+src/letterScroll.ts	App shell, data and actions	no	baseline
+src/listFilter.ts	App shell, data and actions	no	baseline
+src/listScroll.ts	App shell, data and actions	no	baseline
+src/listSort.ts	App shell, data and actions	no	baseline
+src/lruMap.ts	App shell, data and actions	no	baseline
+src/mailboxView.ts	App shell, data and actions	no	baseline
+src/mailto.ts	App shell, data and actions	no	baseline
+src/main.tsx	App shell, data and actions	no	baseline
+src/markConversation.ts	App shell, data and actions	no	modified
+src/markRead.ts	App shell, data and actions	no	baseline
+src/menuModel.ts	App shell, data and actions	no	baseline
+src/messageDrag.ts	App shell, data and actions	no	baseline
+src/messageOpen.ts	App shell, data and actions	no	baseline
+src/moveConversation.ts	App shell, data and actions	no	modified
+src/notices.ts	App shell, data and actions	no	baseline
+src/openedMessage.ts	App shell, data and actions	no	modified
+src/outboxDetail.ts	App shell, data and actions	no	baseline
+src/pinConversation.ts	App shell, data and actions	no	baseline
+src/pinnedMailboxes.ts	App shell, data and actions	no	baseline
+src/printConversation.ts	App shell, data and actions	no	baseline
+src/quietHours.ts	App shell, data and actions	no	baseline
+src/recentMailbox.ts	App shell, data and actions	no	baseline
+src/recentMessage.ts	App shell, data and actions	no	baseline
+src/root.css	Appearance, accessibility and strings	no	baseline
+src/saveConversation.ts	App shell, data and actions	no	modified
+src/searchHighlight.ts	App shell, data and actions	no	baseline
+src/security.ts	App shell, data and actions	no	modified
+src/selectionRange.ts	App shell, data and actions	no	baseline
+src/senderName.ts	App shell, data and actions	no	baseline
+src/settings.ts	App shell, data and actions	no	baseline
+src/shortcuts.ts	App shell, data and actions	no	baseline
+src/snoozeConversation.ts	App shell, data and actions	no	baseline
+src/starConversation.ts	App shell, data and actions	no	modified
+src/store.ts	App shell, data and actions	no	baseline
+src/styles.css	App shell, data and actions	no	baseline
+src/styles/a11y.css	Appearance, accessibility and strings	no	baseline
+src/styles/avatars.css	Appearance, accessibility and strings	no	baseline
+src/styles/base.css	Appearance, accessibility and strings	no	baseline
+src/styles/buttons.css	Appearance, accessibility and strings	no	baseline
+src/styles/composer.css	Appearance, accessibility and strings	no	baseline
+src/styles/density.css	Appearance, accessibility and strings	no	baseline
+src/styles/dialogs.css	Appearance, accessibility and strings	no	baseline
+src/styles/drag.css	Appearance, accessibility and strings	no	baseline
+src/styles/forms.css	Appearance, accessibility and strings	no	baseline
+src/styles/mail-list.css	Appearance, accessibility and strings	yes	baseline
+src/styles/mail-sidebar.css	Appearance, accessibility and strings	no	baseline
+src/styles/mail-toolbar-popups.css	Appearance, accessibility and strings	no	baseline
+src/styles/mail-toolbar.css	Appearance, accessibility and strings	yes	baseline
+src/styles/mail.css	Appearance, accessibility and strings	yes	baseline
+src/styles/menus.css	Appearance, accessibility and strings	no	baseline
+src/styles/notices.css	Appearance, accessibility and strings	no	baseline
+src/styles/palette.css	Appearance, accessibility and strings	no	baseline
+src/styles/reader.css	Appearance, accessibility and strings	no	baseline
+src/styles/responsive.css	Appearance, accessibility and strings	no	baseline
+src/styles/settings.css	Appearance, accessibility and strings	no	baseline
+src/styles/setup.css	Appearance, accessibility and strings	no	baseline
+src/styles/status.css	Appearance, accessibility and strings	no	baseline
+src/styles/variables.css	Appearance, accessibility and strings	yes	baseline
+src/styles/window-chrome.css	Appearance, accessibility and strings	no	baseline
+src/styles/window-fx.css	Appearance, accessibility and strings	yes	baseline
+src/tests/api-settings.test.ts	Frontend unit regressions	no	baseline
+src/tests/app-mark.test.tsx	Frontend unit regressions	no	baseline
+src/tests/app.test.tsx	Frontend unit regressions	no	baseline
+src/tests/composer-fields.test.tsx	Frontend unit regressions	no	baseline
+src/tests/composer-parts.test.tsx	Frontend unit regressions	no	modified
+src/tests/composer-size.test.ts	Frontend unit regressions	no	baseline
+src/tests/composer.test.tsx	Frontend unit regressions	no	baseline
+src/tests/context-menu.test.tsx	Frontend unit regressions	no	baseline
+src/tests/dialog-focus.test.tsx	Frontend unit regressions	yes	baseline
+src/tests/errors.test.ts	Frontend unit regressions	no	baseline
+src/tests/formatDate.test.ts	Frontend unit regressions	no	baseline
+src/tests/from-address.test.ts	Frontend unit regressions	no	baseline
+src/tests/helpers/api-mocks.ts	Frontend unit regressions	no	baseline
+src/tests/helpers/fixtures.ts	Frontend unit regressions	no	baseline
+src/tests/helpers/settings.ts	Frontend unit regressions	no	baseline
+src/tests/helpers/store.ts	Frontend unit regressions	no	baseline
+src/tests/i18n-namespaces.test.ts	Frontend unit regressions	no	baseline
+src/tests/list-filter.test.ts	Frontend unit regressions	no	baseline
+src/tests/mail-parts.test.tsx	Frontend unit regressions	no	baseline
+src/tests/mail-shell.test.tsx	Frontend unit regressions	yes	baseline
+src/tests/mailto.test.ts	Frontend unit regressions	no	baseline
+src/tests/mark-read.test.ts	Frontend unit regressions	no	baseline
+src/tests/message-drag.test.ts	Frontend unit regressions	no	baseline
+src/tests/message-reader.test.tsx	Frontend unit regressions	no	baseline
+src/tests/navigation-components.test.tsx	Frontend unit regressions	no	baseline
+src/tests/pinned-mailboxes.test.ts	Frontend unit regressions	no	baseline
+src/tests/reader-controls.test.tsx	Frontend unit regressions	no	baseline
+src/tests/reader-parts.test.tsx	Frontend unit regressions	no	baseline
+src/tests/recent-mailbox.test.ts	Frontend unit regressions	no	baseline
+src/tests/search-highlight-fold.test.ts	Frontend unit regressions	no	baseline
+src/tests/security.test.ts	Frontend unit regressions	no	baseline
+src/tests/selection-range.test.ts	Frontend unit regressions	no	baseline
+src/tests/sender-name.test.ts	Frontend unit regressions	no	baseline
+src/tests/settings-appearance.test.ts	Frontend unit regressions	no	baseline
+src/tests/settings-dialog.test.tsx	Frontend unit regressions	no	modified
+src/tests/settings-patch.test.ts	Frontend unit regressions	no	baseline
+src/tests/settings-tabs.test.tsx	Frontend unit regressions	no	baseline
+src/tests/settings-update.test.ts	Frontend unit regressions	no	baseline
+src/tests/setup-flow.test.tsx	Frontend unit regressions	no	baseline
+src/tests/setup-wizard.test.tsx	Frontend unit regressions	no	baseline
+src/tests/setup.ts	Frontend unit regressions	no	baseline
+src/tests/store.test.ts	Frontend unit regressions	no	baseline
+src/tests/style-tokens.test.ts	Frontend unit regressions	no	baseline
+src/tests/threads.test.ts	Frontend unit regressions	no	baseline
+src/tests/window-chrome.test.tsx	Frontend unit regressions	no	baseline
+src/tests/window-fx.test.ts	Frontend unit regressions	no	baseline
+src/tests/window-title.test.ts	Frontend unit regressions	no	baseline
+src/threadExpand.ts	App shell, data and actions	no	baseline
+src/threads.ts	App shell, data and actions	no	baseline
+src/types.ts	App shell, data and actions	yes	modified
+src/undoMove.ts	App shell, data and actions	no	baseline
+src/update.ts	App shell, data and actions	no	baseline
+src/window-fx.ts	App shell, data and actions	no	baseline
+src/windowTitle.ts	App shell, data and actions	no	baseline
+tests/mail/compatibility-fixture.mjs	TLS mail fixtures	no	baseline
+tests/mail/docker-compose.yml	TLS mail fixtures	no	baseline
+tsconfig.e2e.json	Build, CI and releases	no	baseline
+tsconfig.json	Build, CI and releases	no	baseline
+vite.config.ts	Build, CI and releases	no	baseline
+vitest.config.ts	Build, CI and releases	no	baseline

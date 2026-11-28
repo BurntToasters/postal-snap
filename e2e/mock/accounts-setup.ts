@@ -47,6 +47,96 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
     let connectionLoadAttempts = 0;
     let folderLoadAttempts = 0;
     let accountOrder: string[] | null = null;
+    type OfflineFixtureOperation = {
+      id: number;
+      kind: string;
+      state: "queued" | "needs_attention";
+      reviewToken: string;
+      payload?: string;
+    };
+    const offlineFixtureKey = "postal-snap-e2e-offline-recovery";
+    let offlineOperations: Record<string, OfflineFixtureOperation[]> = {};
+    let offlineDismissedIds: Record<string, number[]> = {};
+    let offlineUnsentMessages: Record<string, number> = {};
+    if (params.has("offlineAttentionRecovery")) {
+      try {
+        const stored = localStorage.getItem(offlineFixtureKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as {
+            operations?: Record<string, OfflineFixtureOperation[]>;
+            dismissedIds?: Record<string, number[]>;
+            unsentMessages?: Record<string, number>;
+          };
+          offlineOperations = parsed.operations ?? {};
+          offlineDismissedIds = parsed.dismissedIds ?? {};
+          offlineUnsentMessages = parsed.unsentMessages ?? {};
+        }
+      } catch {
+        offlineOperations = {};
+      }
+      if (params.has("offlineNoFailures")) {
+        offlineOperations = { "account-1": [], "account-2": [] };
+        offlineDismissedIds = {};
+        offlineUnsentMessages = {};
+      } else if (!offlineOperations["account-2"]) {
+        offlineOperations = {
+          "account-1": [
+            {
+              id: 201,
+              kind: "keyword",
+              state: "needs_attention",
+              reviewToken: "review-account-1-201-v1",
+              payload: "PRIVATE_SUBJECT Sam@icloud.com",
+            },
+          ],
+          "account-2": [
+            {
+              id: 101,
+              kind: "move",
+              state: "needs_attention",
+              reviewToken: "review-account-2-101-v1",
+              payload: "PRIVATE_SUBJECT reader@fastmail.com",
+            },
+            {
+              id: 102,
+              kind: "flags",
+              state: "queued",
+              reviewToken: "",
+              payload: "PRIVATE_SUBJECT reader@fastmail.com",
+            },
+          ],
+        };
+        offlineDismissedIds = {};
+        offlineUnsentMessages = { "account-2": 1 };
+      }
+      localStorage.setItem(
+        offlineFixtureKey,
+        JSON.stringify({
+          operations: offlineOperations,
+          dismissedIds: offlineDismissedIds,
+          unsentMessages: offlineUnsentMessages,
+        }),
+      );
+    }
+    function saveOfflineFixture() {
+      localStorage.setItem(
+        offlineFixtureKey,
+        JSON.stringify({
+          operations: offlineOperations,
+          dismissedIds: offlineDismissedIds,
+          unsentMessages: offlineUnsentMessages,
+        }),
+      );
+    }
+    function blockers(id: string) {
+      if (params.has("pendingConnectionWork"))
+        return { queuedChanges: 2, unsentMessages: 1 };
+      const operations = offlineOperations[id] ?? [];
+      return {
+        queuedChanges: operations.length,
+        unsentMessages: offlineUnsentMessages[id] ?? 0,
+      };
+    }
     let accountPolicy = {
       mode: "recent",
       days: 90,
@@ -91,9 +181,7 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       };
       return {
         ...connections[item.id],
-        blockers: params.has("pendingConnectionWork")
-          ? { queuedChanges: 2, unsentMessages: 1 }
-          : { queuedChanges: 0, unsentMessages: 0 },
+        blockers: blockers(item.id),
       };
     }
     function folderAssignments(id: unknown) {
@@ -146,7 +234,11 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       update_account_connection(args: Record<string, unknown>) {
         const item = ownedAccount(args.accountId);
-        if (params.has("pendingConnectionWork"))
+        if (
+          params.has("pendingConnectionWork") ||
+          blockers(item.id).queuedChanges > 0 ||
+          blockers(item.id).unsentMessages > 0
+        )
           throw {
             code: "pendingOperations",
             message:
@@ -177,6 +269,60 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
         };
         return structuredClone(connections[item.id]);
       },
+      get_failed_offline_operations(args: Record<string, unknown>) {
+        const item = ownedAccount(args.accountId);
+        const operations = (offlineOperations[item.id] ?? []).filter(
+          (operation) => operation.state === "needs_attention",
+        );
+        const limit = Math.max(1, Math.min(Number(args.limit) || 100, 100));
+        return {
+          items: operations
+            .slice(0, limit)
+            .map(({ id, kind, reviewToken }) => ({ id, kind, reviewToken })),
+          totalCount: operations.length,
+        };
+      },
+      dismiss_failed_offline_operations(args: Record<string, unknown>) {
+        const item = ownedAccount(args.accountId);
+        const reviewed = Array.isArray(args.operations)
+          ? (args.operations as Array<{ id: number; reviewToken: string }>)
+          : [];
+        const ids = reviewed.map((operation) => Number(operation.id));
+        const uniqueIds = new Set(ids);
+        const operations = offlineOperations[item.id] ?? [];
+        if (
+          reviewed.length === 0 ||
+          reviewed.length > 100 ||
+          uniqueIds.size !== reviewed.length ||
+          reviewed.some(
+            ({ id, reviewToken }) =>
+              !operations.some(
+                (operation) =>
+                  operation.id === Number(id) &&
+                  operation.state === "needs_attention" &&
+                  operation.reviewToken === reviewToken,
+              ),
+          )
+        )
+          throw {
+            code: "invalidInput",
+            message:
+              "Some selected failed changes have changed. Refresh the list and try again.",
+            retryable: false,
+          };
+        offlineOperations[item.id] = operations.filter(
+          (operation) => !uniqueIds.has(operation.id),
+        );
+        offlineDismissedIds[item.id] = [
+          ...(offlineDismissedIds[item.id] ?? []),
+          ...ids,
+        ];
+        saveOfflineFixture();
+        return {
+          dismissedCount: ids.length,
+          blockers: blockers(item.id),
+        };
+      },
       import_bridge_certificate() {
         if (params.has("invalidCertificate"))
           throw {
@@ -198,12 +344,16 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             message: "Import a public certificate first.",
             retryable: false,
           };
-        if (args.accountId)
-          connection(args.accountId).certificate = { ...approved };
+        if (args.accountId) {
+          const item = ownedAccount(args.accountId);
+          connection(item.id);
+          connections[item.id]!.certificate = { ...approved };
+        }
         return approved.reference;
       },
       remove_bridge_certificate(args: Record<string, unknown>) {
-        delete connection(args.accountId).certificate;
+        const item = ownedAccount(args.accountId);
+        delete connections[item.id]?.certificate;
         return undefined;
       },
       get_folder_assignments(args: Record<string, unknown>) {
@@ -661,6 +811,36 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       erase_all_data() {
         state.added = false;
         return 1;
+      },
+    });
+    Object.assign(mock, {
+      offlineFixture: {
+        add(accountId: string, operation: OfflineFixtureOperation) {
+          const item = ownedAccount(accountId);
+          offlineOperations[item.id] ??= [];
+          offlineOperations[item.id].push(structuredClone(operation));
+          saveOfflineFixture();
+        },
+        failAgain(accountId: string, replacement: OfflineFixtureOperation) {
+          const item = ownedAccount(accountId);
+          const operations = offlineOperations[item.id] ?? [];
+          const current = operations.find(
+            (operation) => operation.id === replacement.id,
+          );
+          if (!current) throw new Error("Fixture operation not found.");
+          current.state = "queued";
+          current.reviewToken = "";
+          Object.assign(current, structuredClone(replacement));
+          saveOfflineFixture();
+        },
+        snapshot(accountId: string) {
+          const item = ownedAccount(accountId);
+          return {
+            operations: structuredClone(offlineOperations[item.id] ?? []),
+            dismissedIds: structuredClone(offlineDismissedIds[item.id] ?? []),
+            unsentMessages: offlineUnsentMessages[item.id] ?? 0,
+          };
+        },
       },
     });
   });

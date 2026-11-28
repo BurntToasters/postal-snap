@@ -68,6 +68,21 @@ test("D2 & D3 Modal focus restoration and central inert stack isolation", async 
   }));
   expect(stackedInert.viewport).toBe(true);
   expect(stackedInert.settingsLayer).toBe(true);
+  const topTrap = await page.evaluate(() => {
+    const active = document.activeElement;
+    const trap =
+      active instanceof Element
+        ? active.closest<HTMLElement>("[data-dialog-focus-trap]")
+        : null;
+    return {
+      focusedInsideCredits: Boolean(
+        document.querySelector(".license-credits-dialog")?.contains(active),
+      ),
+      activeTrapLabel: trap?.getAttribute("aria-labelledby"),
+    };
+  });
+  expect(topTrap.focusedInsideCredits).toBe(true);
+  expect(topTrap.activeTrapLabel).toBe("license-credits-title");
 
   await page.keyboard.press("Escape");
   await expect(
@@ -89,11 +104,20 @@ test("D2 & D3 Modal focus restoration and central inert stack isolation", async 
       document.querySelector(".app-viewport")?.hasAttribute("inert"),
     ),
   ).toBe(true);
+  const composer = page.getByRole("dialog", { name: "New message" });
+  const messageOptions = composer.getByRole("button", {
+    name: "Message options",
+  });
+  await messageOptions.click();
+  const optionsMenu = composer.getByRole("menu", { name: "Message options" });
+  await expect(optionsMenu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(optionsMenu).toHaveCount(0);
+  await expect(composer).toBeVisible();
+  await expect(messageOptions).toBeFocused();
   await emitTauriEvent(page, "shortcut-help", null).catch(() => undefined);
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "New message" })).toHaveCount(
-    0,
-  );
+  await expect(composer).toHaveCount(0);
 
   await page.setViewportSize({ width: 700, height: 800 });
   await page
@@ -107,6 +131,69 @@ test("D2 & D3 Modal focus restoration and central inert stack isolation", async 
   }));
   expect(overlayInert.toolbar).toBe(true);
   expect(overlayInert.messages).toBe(true);
+});
+
+test("D2 visible top dialog owns focus before deferred focus timers", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    type TestWindow = Window & { __pendingDialogFocus?: Array<() => void> };
+    const testWindow = window as TestWindow;
+    testWindow.__pendingDialogFocus = [];
+    const nativeTimeout = window.setTimeout.bind(window);
+    const patchedTimeout = (...args: Parameters<typeof window.setTimeout>) => {
+      const [handler, delay, ...handlerArgs] = args;
+      const stack = new Error().stack ?? "";
+      if (
+        delay === 0 &&
+        stack.includes("useDialogFocus") &&
+        typeof handler === "function"
+      ) {
+        testWindow.__pendingDialogFocus?.push(() => handler(...handlerArgs));
+        return 0;
+      }
+      return nativeTimeout(...args);
+    };
+    window.setTimeout = patchedTimeout as typeof window.setTimeout;
+  });
+  await page.setViewportSize({ width: 1200, height: 820 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("tab", { name: "About", exact: true }).click();
+  const opener = page.getByRole("button", {
+    name: "Licenses and credits",
+    exact: true,
+  });
+  await opener.focus();
+  await opener.click();
+  const credits = page.getByRole("dialog", { name: "Licenses and credits" });
+  await expect(credits).toBeVisible();
+  await expect(page.locator(".settings-layer")).toHaveAttribute("inert", "");
+
+  const focusState = await page.evaluate(() => {
+    const active = document.activeElement;
+    const trap =
+      active instanceof Element
+        ? active.closest<HTMLElement>("[data-dialog-focus-trap]")
+        : null;
+    const testWindow = window as Window & {
+      __pendingDialogFocus?: Array<() => void>;
+    };
+    return {
+      focusedInsideCredits: Boolean(
+        document.querySelector(".license-credits-dialog")?.contains(active),
+      ),
+      activeTrapLabel: trap?.getAttribute("aria-labelledby"),
+      pendingFocusTimers: testWindow.__pendingDialogFocus?.length ?? 0,
+    };
+  });
+  expect(focusState.focusedInsideCredits).toBe(true);
+  expect(focusState.activeTrapLabel).toBe("license-credits-title");
+  expect(focusState.pendingFocusTimers).toBe(0);
+
+  await page.keyboard.press("Escape");
+  await expect(credits).toHaveCount(0);
+  await expect(opener).toBeFocused();
 });
 
 test.describe("D4, D5 & D7 Vibrancy generation guard, warnings/settings contrast, and a11y override", () => {
@@ -246,9 +333,37 @@ test("D6 accountsTab avoids button inside button and notificationsTab falls back
   ).toBeVisible();
 });
 
+// Failure cases: stale toolbar state, lost toolbar handoff/return selections,
+// wrong pointer caret restoration, and formatting applied to the wrong text.
 test("D8 Toolbar and radiogroup roving Arrow navigation preserves native select arrows", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    type TestWindow = Window & {
+      __holdComposerSelectionChanges?: boolean;
+      __heldComposerSelectionChanges?: number;
+      __releaseComposerSelectionChanges?: () => number;
+    };
+    const testWindow = window as TestWindow;
+    testWindow.__holdComposerSelectionChanges = false;
+    testWindow.__heldComposerSelectionChanges = 0;
+    window.addEventListener(
+      "selectionchange",
+      (event) => {
+        if (!testWindow.__holdComposerSelectionChanges) return;
+        testWindow.__heldComposerSelectionChanges =
+          (testWindow.__heldComposerSelectionChanges ?? 0) + 1;
+        event.stopImmediatePropagation();
+      },
+      true,
+    );
+    testWindow.__releaseComposerSelectionChanges = () => {
+      testWindow.__holdComposerSelectionChanges = false;
+      const held = testWindow.__heldComposerSelectionChanges ?? 0;
+      if (held > 0) document.dispatchEvent(new Event("selectionchange"));
+      return held;
+    };
+  });
   await page.goto("/");
 
   await page.getByRole("button", { name: "Select", exact: true }).click();
@@ -315,9 +430,217 @@ test("D8 Toolbar and radiogroup roving Arrow navigation preserves native select 
     name: "Font",
     exact: true,
   });
+  const editor = composer.locator(".composer-editor");
+  const boldButton = composer.getByRole("button", {
+    name: "Bold",
+    exact: true,
+  });
+  await editor.fill("Bold state");
+  await editor.press("ControlOrMeta+A");
+  await editor.press("ControlOrMeta+B");
+  await expect(boldButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor.locator("strong")).toHaveText("Bold state");
+  await editor.press("ControlOrMeta+A");
+  await editor.press("ControlOrMeta+B");
+  await expect(boldButton).toHaveAttribute("aria-pressed", "false");
+  await expect(editor.locator("strong")).toHaveCount(0);
+
+  await editor.fill("Keyboard selection");
+  await editor.press("ControlOrMeta+A");
   await fontSelect.focus();
+  // Native ArrowRight can change a select on Linux; focus must stay native.
   await page.keyboard.press("ArrowRight");
   await expect(fontSelect).toBeFocused();
+  // Typeahead chooses the same option across platforms where ArrowRight differs.
+  await fontSelect.press("G");
+  await expect(fontSelect).toHaveValue("Georgia");
+  await expect(fontSelect).toBeFocused();
+  const selectedFont = editor.locator("span[style*='font-family']");
+  await expect(selectedFont).toHaveText("Keyboard selection");
+  expect(
+    await selectedFont.evaluate(
+      (element) => (element as HTMLElement).style.fontFamily,
+    ),
+  ).toBe("Georgia");
+
+  const caretAtEditorEnd = async (expectedText: string) =>
+    editor.evaluate((node, text) => {
+      const selection = window.getSelection();
+      if (
+        !selection?.isCollapsed ||
+        !selection.anchorNode ||
+        !node.contains(selection.anchorNode)
+      ) {
+        return false;
+      }
+      const prefix = document.createRange();
+      prefix.selectNodeContents(node);
+      prefix.setEnd(selection.anchorNode, selection.anchorOffset);
+      return prefix.toString() === text;
+    }, expectedText);
+  await editor.focus();
+  await editor.evaluate((node) => {
+    const testWindow = window as Window & {
+      __holdComposerSelectionChanges?: boolean;
+      __heldComposerSelectionChanges?: number;
+    };
+    testWindow.__heldComposerSelectionChanges = 0;
+    testWindow.__holdComposerSelectionChanges = true;
+    const text = node.querySelector("span[style*='font-family']")?.firstChild;
+    if (!(text instanceof Text)) throw new Error("Font text node is missing");
+    window.getSelection()?.collapse(text, text.textContent?.length ?? 0);
+  });
+  expect(await caretAtEditorEnd("Keyboard selection")).toBe(true);
+
+  const fontSizeSelect = composer.getByRole("combobox", {
+    name: "Font size",
+    exact: true,
+  });
+  await fontSizeSelect.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(fontSizeSelect).toBeFocused();
+  await fontSizeSelect.press("L");
+  await expect(fontSizeSelect).toHaveValue("20px");
+  await expect(fontSizeSelect).toBeFocused();
+  await editor.focus();
+  await editor.pressSequentially("!");
+  await expect(editor).toHaveText("Keyboard selection!");
+  expect(await caretAtEditorEnd("Keyboard selection!")).toBe(true);
+  const caretFontSize = editor.locator("span[style*='font-size']");
+  await expect(caretFontSize).toHaveCount(1);
+  await expect(caretFontSize).toHaveText("!");
+  expect(
+    await caretFontSize.evaluate(
+      (element) => (element as HTMLElement).style.fontSize,
+    ),
+  ).toBe("20px");
+  const heldSelectionChanges = await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __releaseComposerSelectionChanges?: () => number;
+    };
+    return testWindow.__releaseComposerSelectionChanges?.() ?? 0;
+  });
+  expect(heldSelectionChanges).toBeGreaterThan(0);
+
+  await editor.fill("Keep these words");
+  await editor.press("ControlOrMeta+A");
+  await composer
+    .getByRole("button", { name: "More formatting", exact: true })
+    .click();
+  await composer
+    .getByRole("button", { name: "Clear formatting", exact: true })
+    .click();
+  await editor.focus();
+  await editor.evaluate((node) => {
+    const testWindow = window as Window & {
+      __holdComposerSelectionChanges?: boolean;
+      __heldComposerSelectionChanges?: number;
+    };
+    testWindow.__heldComposerSelectionChanges = 0;
+    testWindow.__holdComposerSelectionChanges = true;
+    const text = node.querySelector("p")?.firstChild;
+    if (!(text instanceof Text))
+      throw new Error("Composer text node is missing");
+    window.getSelection()?.collapse(text, text.textContent?.length ?? 0);
+  });
+  await fontSelect.focus();
+  await expect(fontSelect).toBeFocused();
+  await editor.focus();
+
+  await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __heldComposerSelectionChanges?: number;
+    };
+    testWindow.__heldComposerSelectionChanges = 0;
+  });
+  await editor.evaluate((node) => {
+    const text = node.querySelector("p")?.firstChild;
+    if (!(text instanceof Text))
+      throw new Error("Composer text node is missing");
+    const selection = window.getSelection();
+    if (!selection) throw new Error("Native selection is missing");
+    const end = text.textContent?.length ?? 0;
+    selection.setBaseAndExtent(text, end, text, end - 5);
+  });
+  const readEditorSelection = async () =>
+    editor.evaluate((node) => {
+      const selection = window.getSelection();
+      const anchorNode = selection?.anchorNode;
+      const focusNode = selection?.focusNode;
+      const insideEditor = Boolean(
+        anchorNode &&
+        focusNode &&
+        node.contains(anchorNode) &&
+        node.contains(focusNode),
+      );
+      let backwards = false;
+      if (insideEditor && selection?.anchorNode && selection.focusNode) {
+        const anchor = document.createRange();
+        anchor.setStart(selection.anchorNode, selection.anchorOffset);
+        anchor.collapse(true);
+        const focus = document.createRange();
+        focus.setStart(selection.focusNode, selection.focusOffset);
+        focus.collapse(true);
+        backwards =
+          !selection.isCollapsed &&
+          anchor.compareBoundaryPoints(Range.START_TO_START, focus) > 0;
+      }
+      return {
+        text: selection?.toString() ?? "",
+        backwards,
+        insideEditor,
+      };
+    });
+  expect(await readEditorSelection()).toEqual({
+    text: "words",
+    backwards: true,
+    insideEditor: true,
+  });
+
+  await fontSelect.focus();
+  await expect(fontSelect).toBeFocused();
+  await fontSelect.press("G");
+  await expect(fontSelect).toHaveValue("Georgia");
+  await expect(fontSelect).toBeFocused();
+  await expect(editor).toHaveText("Keep these words");
+  const selectedWord = editor.locator("span[style*='font-family']");
+  await expect(selectedWord).toHaveCount(1);
+  await expect(selectedWord).toHaveText("words");
+  expect(
+    await selectedWord.evaluate(
+      (element) => (element as HTMLElement).style.fontFamily,
+    ),
+  ).toBe("Georgia");
+  await editor.focus();
+  await expect.poll(readEditorSelection).toEqual({
+    text: "words",
+    backwards: true,
+    insideEditor: true,
+  });
+  await editor.pressSequentially("X");
+  await expect(editor).toHaveText("Keep these X");
+  const heldRangeSelectionChanges = await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __releaseComposerSelectionChanges?: () => number;
+    };
+    return testWindow.__releaseComposerSelectionChanges?.() ?? 0;
+  });
+  expect(heldRangeSelectionChanges).toBeGreaterThan(0);
+
+  const firstCharacterPoint = await editor.evaluate((node) => {
+    const text = node.querySelector("p")?.firstChild;
+    if (!(text instanceof Text))
+      throw new Error("Composer text node is missing");
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 1);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + 1, y: rect.top + rect.height / 2 };
+  });
+  await fontSelect.focus();
+  await page.mouse.click(firstCharacterPoint.x, firstCharacterPoint.y);
+  await page.keyboard.type("Y");
+  await expect(editor).toHaveText("YKeep these X");
 });
 
 test("D9 & D10 ContextMenu restores focus from child span/svg and renders block scroll fade", async ({

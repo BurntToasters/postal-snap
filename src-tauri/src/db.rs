@@ -39,17 +39,17 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use migrations::migrate_schema;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+use crate::date_time::{format_utc_seconds, now_utc, parse_rfc3339};
 #[cfg(test)]
 use crate::models::{
     AccountRecord, AccountSummary, CachePolicy, FilterRule, SearchQuery, ServerConfig,
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 45;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 46;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
@@ -614,12 +614,8 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
 /// Fractional seconds would otherwise sort on the wrong side of the
 /// text-compared `received_at` cursor used by message pagination.
 pub(crate) fn normalize_received_at(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|parsed| {
-            parsed
-                .with_timezone(&Utc)
-                .to_rfc3339_opts(SecondsFormat::Secs, false)
-        })
+    parse_rfc3339(value)
+        .map(format_utc_seconds)
         .unwrap_or_else(|_| value.to_string())
 }
 
@@ -647,7 +643,7 @@ fn recover_fts_index(connection: &Connection) -> Result<(), String> {
         .optional()
         .map_err(db_error)?;
     let due = last_checked
-        .map(|seconds| Utc::now().timestamp().saturating_sub(seconds) >= 86_400)
+        .map(|seconds| now_utc().unix_timestamp().saturating_sub(seconds) >= 86_400)
         .unwrap_or(true);
     if !due {
         return Ok(());
@@ -677,7 +673,7 @@ fn mark_fts_checked(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "INSERT OR REPLACE INTO settings(key,value) VALUES('fts_checked_at',?1)",
-            [Utc::now().timestamp().to_string()],
+            [now_utc().unix_timestamp().to_string()],
         )
         .map_err(db_error)?;
     Ok(())

@@ -15,6 +15,8 @@ import { errorText } from "../../errors";
 export const MAX_RULE_CONDITIONS = 10;
 export const MAX_RULE_ACTIONS = 5;
 export const MAX_RULE_VALUE_CHARS = 320;
+const EMPTY_CONDITION_ROW_ID = "rule-empty-condition";
+const EMPTY_ACTION_ROW_ID = "rule-empty-action";
 
 export interface RuleSeed {
   accountId: string;
@@ -441,9 +443,14 @@ export function emptyRuleDraft(): RuleDraft {
   return {
     name: "",
     matchMode: "all",
-    conditions: [{ id: nextRuleRowId(), field: "from", value: "" }],
+    conditions: [{ id: EMPTY_CONDITION_ROW_ID, field: "from", value: "" }],
     actions: [
-      { id: nextRuleRowId(), kind: "mark_read", target: "", flagColor: "0" },
+      {
+        id: EMPTY_ACTION_ROW_ID,
+        kind: "mark_read",
+        target: "",
+        flagColor: "0",
+      },
     ],
   };
 }

@@ -182,6 +182,45 @@ pub struct ConnectionBlockers {
     pub unsent_messages: u32,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FailedOfflineKind {
+    Move,
+    Copy,
+    Flags,
+    Keyword,
+    Other,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperation {
+    pub id: i64,
+    pub kind: FailedOfflineKind,
+    pub review_token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperationRef {
+    pub id: i64,
+    pub review_token: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperations {
+    pub items: Vec<FailedOfflineOperation>,
+    pub total_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineDismissal {
+    pub dismissed_count: u32,
+    pub blockers: ConnectionBlockers,
+}
+
 /// Avatar colors an account may use. Kept in sync with the frontend tokens.
 pub const ACCOUNT_COLORS: [&str; 8] = [
     "blue", "teal", "green", "amber", "orange", "red", "pink", "purple",
@@ -615,13 +654,14 @@ pub struct SearchQuery {
     pub resume_after_mailbox_id: Option<i64>,
 }
 
-/// One server search call. `complete` is false when a deadline stopped the
-/// search; pass `resume_after_mailbox_id` back to continue after it.
+/// One server search call. `complete` is false when a deadline stopped this
+/// page. `partial` records UIDs skipped by the first-folder ceiling.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSearchResult {
     pub messages: Vec<MessageSummary>,
     pub complete: bool,
+    pub partial: bool,
     pub resume_after_mailbox_id: Option<i64>,
 }
 
@@ -685,9 +725,9 @@ impl CachePolicy {
     }
 
     /// Oldest server arrival time whose body belongs in the cache, if any.
-    pub fn cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn cutoff(&self) -> Option<time::OffsetDateTime> {
         (self.mode == "recent")
-            .then(|| chrono::Utc::now() - chrono::Duration::days(i64::from(self.days)))
+            .then(|| crate::date_time::now_utc() - time::Duration::days(i64::from(self.days)))
     }
 
     /// True when `self` keeps mail that `previous` did not, so backfill that

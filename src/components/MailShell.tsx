@@ -98,6 +98,7 @@ import {
 import { hydrateRecentMoveMailbox } from "../recentMailbox";
 import { starLoadedConversation, toggleListedStar } from "../starConversation";
 import { beginMessageOpen } from "../messageOpen";
+import type { MoveFailureReconciler } from "../moveConversation";
 import {
   adjacentMessage,
   conversationNeighbor,
@@ -516,8 +517,10 @@ export function MailShell({ onOpenSettings }: Props) {
   ]);
 
   // Mailbox counts only; used after a read flag change.
-  const loadMailboxCounts = useCallback(async () => {
-    if (!activeAccountId) return;
+  const refreshMailboxCounts = useCallback(async (): Promise<
+    "refreshed" | "failed" | "superseded"
+  > => {
+    if (!activeAccountId) return "superseded";
     const accountId = activeAccountId;
     const request = ++countsRequest.current;
     try {
@@ -526,12 +529,17 @@ export function MailShell({ onOpenSettings }: Props) {
         request !== countsRequest.current ||
         useAppStore.getState().activeAccountId !== accountId
       )
-        return;
+        return "superseded";
       setMailboxes(mailboxes);
+      return "refreshed";
     } catch (cause) {
       if (request === countsRequest.current) setError(errorText(cause));
+      return "failed";
     }
   }, [activeAccountId, setError, setMailboxes]);
+  const loadMailboxCounts = useCallback(async () => {
+    await refreshMailboxCounts();
+  }, [refreshMailboxCounts]);
 
   const { scheduledSendInFlight, isScheduledSendInFlight, sendScheduledNow } =
     useScheduledOutbox(
@@ -546,6 +554,7 @@ export function MailShell({ onOpenSettings }: Props) {
     loadMessages,
     loadMoreMessages,
     runSearch,
+    refreshSubmittedSearch,
     canDownloadOlder,
     loadingMessages,
     serverSearchMore,
@@ -553,7 +562,9 @@ export function MailShell({ onOpenSettings }: Props) {
   } = useMailboxMessages({
     listFilter,
     listSort,
+    query,
     submittedQuery,
+    allFolders,
     setSubmittedQuery,
     setRecentByAccount,
     messageRequestRef: messageRequest,
@@ -608,9 +619,72 @@ export function MailShell({ onOpenSettings }: Props) {
     loadAccountData,
     loadAccountCounts,
     loadMessages,
-    runSearch,
+    refreshSubmittedSearch,
     setError,
   });
+
+  const loadersRef = useRef({
+    loadAccountData,
+    loadMailboxCounts,
+    refreshMailboxCounts,
+    loadMessages,
+    runSearch,
+    refreshSubmittedSearch,
+  });
+  useEffect(() => {
+    loadersRef.current = {
+      loadAccountData,
+      loadMailboxCounts,
+      refreshMailboxCounts,
+      loadMessages,
+      runSearch,
+      refreshSubmittedSearch,
+    };
+  });
+
+  const reconcileMoveFailure: MoveFailureReconciler = async (
+    accountId,
+    mailboxId,
+    localView,
+  ) => {
+    const current = useAppStore.getState();
+    if (
+      current.activeAccountId !== accountId ||
+      current.activeMailboxId !== mailboxId ||
+      current.activeLocalView !== localView
+    )
+      return { counts: false, messages: false };
+    const currentLoaders = loadersRef.current;
+    const [initialCountStatus, messages] = await Promise.all([
+      currentLoaders.refreshMailboxCounts(),
+      submittedQueryRef.current
+        ? currentLoaders.refreshSubmittedSearch()
+        : currentLoaders.loadMessages(),
+    ]);
+    let countStatus = initialCountStatus;
+    let latest = useAppStore.getState();
+    if (
+      countStatus === "superseded" &&
+      latest.activeAccountId === accountId &&
+      latest.activeMailboxId === mailboxId &&
+      latest.activeLocalView === localView
+    ) {
+      countStatus = await loadersRef.current.refreshMailboxCounts();
+      latest = useAppStore.getState();
+    }
+    return {
+      counts:
+        countStatus === "refreshed" &&
+        latest.activeAccountId === accountId &&
+        latest.activeMailboxId === mailboxId &&
+        latest.activeLocalView === localView,
+      messages:
+        messages &&
+        latest.activeAccountId === accountId &&
+        latest.activeMailboxId === mailboxId &&
+        latest.activeLocalView === localView,
+    };
+  };
 
   const {
     openFolderDialog,
@@ -712,6 +786,7 @@ export function MailShell({ onOpenSettings }: Props) {
     selectMessage,
     setError,
     openComposer,
+    reconcileMoveFailure,
   });
 
   useEffect(() => {
@@ -722,21 +797,6 @@ export function MailShell({ onOpenSettings }: Props) {
     const timer = window.setTimeout(() => void loadMessages(), 0);
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
-
-  const loadersRef = useRef({
-    loadAccountData,
-    loadMailboxCounts,
-    loadMessages,
-    runSearch,
-  });
-  useEffect(() => {
-    loadersRef.current = {
-      loadAccountData,
-      loadMailboxCounts,
-      loadMessages,
-      runSearch,
-    };
-  });
 
   useMailEvents({
     loadAccountCounts,
@@ -863,6 +923,7 @@ export function MailShell({ onOpenSettings }: Props) {
   useEffect(() => {
     contextActionRef.current = {
       refreshAccount,
+      reconcileMoveFailure,
       selectAccount,
       onOpenSettings,
       openComposer,
@@ -1674,6 +1735,7 @@ export function MailShell({ onOpenSettings }: Props) {
         focusSelector='#reader-pane [role="toolbar"] button'
       >
         <MessageReader
+          reconcileMoveFailure={reconcileMoveFailure}
           onSnoozed={handleSnoozedMessage}
           onConversationSnoozed={handleConversationSnoozed}
           onPrevious={

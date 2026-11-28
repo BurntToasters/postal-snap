@@ -448,6 +448,7 @@ export interface SearchQuery {
 export interface ServerSearchResult {
   messages: MessageSummary[];
   complete: boolean;
+  partial?: boolean;
   resumeAfterMailboxId?: number | null;
 }
 
@@ -695,11 +696,33 @@ export interface BridgeCertificate {
   fingerprint: string;
   expiresAt: string;
 }
+export type FailedOfflineKind = "move" | "copy" | "flags" | "keyword" | "other";
+export interface FailedOfflineOperation {
+  id: number;
+  kind: FailedOfflineKind;
+  reviewToken: string;
+}
+export interface FailedOfflineOperationRef {
+  id: number;
+  reviewToken: string;
+}
+export interface FailedOfflineOperations {
+  items: FailedOfflineOperation[];
+  totalCount: number;
+}
+export interface ConnectionBlockers {
+  queuedChanges: number;
+  unsentMessages: number;
+}
+export interface FailedOfflineDismissal {
+  dismissedCount: number;
+  blockers: ConnectionBlockers;
+}
 export interface AccountConnection {
   imap: ServerConfig;
   smtp: ServerConfig;
   certificate?: BridgeCertificate | null;
-  blockers?: { queuedChanges: number; unsentMessages: number };
+  blockers?: ConnectionBlockers;
 }
 export interface FolderAssignment {
   role: "inbox" | "sent" | "drafts" | "archive" | "junk" | "trash";

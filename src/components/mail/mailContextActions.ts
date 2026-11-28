@@ -40,6 +40,7 @@ import { deleteLoadedConversation } from "../../deleteConversation";
 import {
   moveLoadedConversation,
   type ConversationMoveRole,
+  type MoveFailureReconciler,
 } from "../../moveConversation";
 import { beginMessageOpen } from "../../messageOpen";
 import { conversationMessages } from "../../threads";
@@ -51,6 +52,7 @@ type OutboxState = AppState["outbox"][number]["state"];
 
 export interface ContextActionCtx {
   refreshAccount: (accountId: string) => Promise<void>;
+  reconcileMoveFailure: MoveFailureReconciler;
   selectAccount: AppState["selectAccount"];
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
   openComposer: AppState["openComposer"];
@@ -71,7 +73,7 @@ export interface ContextActionCtx {
   selectMailbox: AppState["selectMailbox"];
   selectLocalView: AppState["selectLocalView"];
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
-  loadMessages: () => Promise<void>;
+  loadMessages: () => Promise<boolean>;
   markMailboxReadById: (mailboxId: number) => Promise<void>;
   emptyTrashFolders: () => Promise<void>;
   emptyJunkFolders: () => Promise<void>;
@@ -101,6 +103,7 @@ export interface ContextActionCtx {
 export function handleContextAction(event: Event, ctx: ContextActionCtx) {
   const {
     refreshAccount,
+    reconcileMoveFailure,
     selectAccount,
     onOpenSettings,
     openComposer,
@@ -212,28 +215,38 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
             : id === "move-conversation-inbox"
               ? "inbox"
               : "archive";
-      void moveLoadedConversation(summary, role, (next, openWasMoved) => {
-        if (!openWasMoved) return;
-        if (next) void chooseMessage(next);
-        else {
-          beginMessageOpen();
-          selectMessage(undefined);
-        }
-      });
+      void moveLoadedConversation(
+        summary,
+        role,
+        (next, openWasMoved) => {
+          if (!openWasMoved) return;
+          if (next) void chooseMessage(next);
+          else {
+            beginMessageOpen();
+            selectMessage(undefined);
+          }
+        },
+        reconcileMoveFailure,
+      );
       return;
     }
     if (id.startsWith("move-conversation:")) {
       const mailboxId = Number(id.slice("move-conversation:".length));
       if (!Number.isFinite(mailboxId)) return;
       rememberMoveMailboxId(current.mailboxes, mailboxId);
-      void moveLoadedConversation(summary, mailboxId, (next, openWasMoved) => {
-        if (!openWasMoved) return;
-        if (next) void chooseMessage(next);
-        else {
-          beginMessageOpen();
-          selectMessage(undefined);
-        }
-      });
+      void moveLoadedConversation(
+        summary,
+        mailboxId,
+        (next, openWasMoved) => {
+          if (!openWasMoved) return;
+          if (next) void chooseMessage(next);
+          else {
+            beginMessageOpen();
+            selectMessage(undefined);
+          }
+        },
+        reconcileMoveFailure,
+      );
       return;
     }
     if (id === "delete-conversation") {

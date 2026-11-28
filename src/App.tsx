@@ -17,8 +17,10 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
-import { errorText } from "./errors";
-import { OPENED_MESSAGE_EVENT } from "./openedMessage";
+import {
+  OPENED_MESSAGE_EVENT,
+  subscribeOsOpenedMessages,
+} from "./openedMessage";
 import type { OpenedMessage } from "./types";
 import { reconcileAccountList } from "./accountMerge";
 import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
@@ -283,34 +285,14 @@ export default function App() {
     });
   }, [accounts, activeAccountId, mailboxes]);
 
-  // A token that arrives before this listener is registered is not replayed;
-  // the file flow and the viewer's own actions never depend on it.
   useEffect(() => {
-    let active = true;
-    const unlisten: Array<() => void> = [];
     const onOpened = (event: Event) =>
       showViewer((event as CustomEvent<OpenedMessage>).detail);
     window.addEventListener(OPENED_MESSAGE_EVENT, onOpened);
-    void api
-      .onEmlOpened(({ token }) => {
-        if (viewerRef.current?.token === token) return;
-        api
-          .getOpenedMessage(token)
-          .then((opened) => {
-            if (active) showViewer(opened);
-          })
-          .catch((cause) => {
-            if (active) setError(errorText(cause));
-          });
-      })
-      .then((stop) => {
-        if (active) unlisten.push(stop);
-        else stop();
-      });
+    const unsubscribe = subscribeOsOpenedMessages(showViewer, setError);
     return () => {
-      active = false;
       window.removeEventListener(OPENED_MESSAGE_EVENT, onOpened);
-      unlisten.forEach((stop) => stop());
+      unsubscribe();
     };
   }, [showViewer, setError]);
 
