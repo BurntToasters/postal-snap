@@ -738,8 +738,8 @@ test("finalize-release uses draft identity before upload and strict identity aft
     "utf8",
   );
   const draftIndex = finalize.indexOf("await verifyDraftReleaseCommit");
-  const uploadIndex = finalize.indexOf(
-    'runGitHub([\n    "release",\n    "upload",',
+  const uploadIndex = finalize.search(
+    /runGitHub\(\[\s*"release",\s*"upload",\s*tag,/,
   );
   const hardIndex = finalize.indexOf("await runHardFinalize({");
   const publishIndex = finalize.indexOf(
@@ -1850,4 +1850,15 @@ test("native transparency is opt-in only for supported window glass", async () =
     /#\[cfg\(any\(\s*target_os = "windows",\s*all\(target_os = "macos", feature = "macos-vibrancy"\)\s*\)\)\]\s*let window_builder = window_builder\.transparent\(true\);/,
   );
   assert.equal((main.match(/\.transparent\(true\)/g) ?? []).length, 1);
+});
+
+test("Windows updater re-sign binds the signature to the app version", async () => {
+  const build = await readFile(join(root, "scripts/tauri-build.js"), "utf8");
+  const resign = build.slice(
+    build.indexOf("async function resignWindowsUpdaterSignatures"),
+  );
+  assert.match(
+    resign.slice(0, resign.indexOf("\n}\n")),
+    /"signer",\s*"sign",\s*"--app-version",\s*version,/,
+  );
 });

@@ -16,6 +16,7 @@ import {
   runGitHub,
 } from "./github-cli.js";
 import { validateManifest } from "./validate-updater-manifest.js";
+import { assertSignedVersion } from "./verify-tauri-signature.js";
 import {
   verifiedReleaseSession,
   verifyDraftReleaseCommit,
@@ -175,6 +176,19 @@ export function buildUpdaterManifests({
   return out;
 }
 
+// Parses the .sig (base64 minisign text) and checks its signed version.
+export function assertSignedForVersion(signature, version, payload) {
+  const text = Buffer.from(String(signature), "base64").toString("utf8");
+  const comment = text
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("trusted comment: "));
+  assertSignedVersion(
+    comment?.slice("trusted comment: ".length) ?? "",
+    version,
+    payload,
+  );
+}
+
 export function betaManifestUploadArgs(stableTag, files) {
   return [
     "release",
@@ -212,6 +226,29 @@ export async function runHardFinalize({
   await verifyPublished();
   if (prerelease) await reconcileBetaManifests();
   else if (reconcileNewerPrerelease) await reconcileNewerPrerelease();
+}
+
+// Draft upload; a beta also syncs its beta manifests onto the latest stable
+// release. Until the draft is published, beta clients see the update but its
+// download 404s (accepted). Hard finalize runs its own guarded sync.
+export async function runDraftFinalize({
+  prerelease,
+  hard,
+  upload,
+  verifyDraftIdentity,
+  syncBetaManifests,
+} = {}) {
+  await upload();
+  if (!prerelease || hard) return;
+  await verifyDraftIdentity();
+  try {
+    await syncBetaManifests();
+  } catch (error) {
+    throw new Error(
+      "Assets were uploaded to the draft, but beta manifests were not synced to the latest stable release.\nRecover by re-running: npm run release:finalize",
+      { cause: error },
+    );
+  }
 }
 
 function resolveLatestStableTag() {
@@ -425,6 +462,7 @@ async function main() {
     } catch {
       throw new Error(`Missing embedded Tauri signature for ${payload}`);
     }
+    assertSignedForVersion(signature, pkg.version, payload);
     for (const { filename, manifest } of manifestsForPayload({
       version: pkg.version,
       tag,
@@ -441,16 +479,24 @@ async function main() {
     .map((name) => join(directory, name));
   if (!upload.length) throw new Error("Nothing is staged in release/.");
   console.log("[3/3] Uploading to GitHub...");
-  runGitHub([
-    "release",
-    "upload",
-    tag,
-    ...upload,
-    "--repo",
-    repository,
-    "--clobber",
-  ]);
-  for (const filePath of upload) console.log(`  ^ ${basename(filePath)}`);
+  await runDraftFinalize({
+    prerelease,
+    hard: hardFinalize,
+    upload: async () => {
+      runGitHub([
+        "release",
+        "upload",
+        tag,
+        ...upload,
+        "--repo",
+        repository,
+        "--clobber",
+      ]);
+      for (const filePath of upload) console.log(`  ^ ${basename(filePath)}`);
+    },
+    verifyDraftIdentity: () => verifyDraftReleaseCommit(repository, session),
+    syncBetaManifests: () => syncLocalBetaManifests(directory),
+  });
 
   if (hardFinalize) {
     await runHardFinalize({

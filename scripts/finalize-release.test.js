@@ -3,11 +3,13 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assertSignedForVersion,
   betaManifestUploadArgs,
   buildUpdaterManifests,
   fetchAllReleases,
   parseFromTag,
   reconcileNewerPrereleaseFor,
+  runDraftFinalize,
   syncRemoteBetaManifests,
   runHardFinalize,
   selectBetaManifests,
@@ -143,6 +145,107 @@ test("stable finalize never touches beta manifests", async () => {
     "publish",
     "verifyPublished",
   ]);
+});
+
+// Default (draft) finalize failure modes:
+// 1. A beta draft finalize leaves the beta feed unsynced.
+// 2. Beta manifests sync before their payloads are uploaded.
+// 3. A stable draft overwrites the live stable release's beta manifests.
+// 4. A failed upload or draft identity mismatch still mutates the stable release.
+// 5. A sync failure is silent or gives no recovery step.
+// 6. Hard finalize syncs twice or before its own identity checks.
+const draftCalls = (calls, overrides = {}) => ({
+  upload: async () => calls.push("upload"),
+  verifyDraftIdentity: async () => calls.push("verifyDraftIdentity"),
+  syncBetaManifests: async () => calls.push("syncBeta"),
+  ...overrides,
+});
+
+test("beta draft finalize syncs beta manifests after upload", async () => {
+  const calls = [];
+  await runDraftFinalize({
+    prerelease: true,
+    hard: false,
+    ...draftCalls(calls),
+  });
+  assert.deepEqual(calls, ["upload", "verifyDraftIdentity", "syncBeta"]);
+});
+
+test("stable draft finalize never touches beta manifests", async () => {
+  const calls = [];
+  await runDraftFinalize({
+    prerelease: false,
+    hard: false,
+    ...draftCalls(calls),
+  });
+  assert.deepEqual(calls, ["upload"]);
+});
+
+test("a failed draft upload never syncs beta manifests", async () => {
+  const calls = [];
+  await assert.rejects(
+    () =>
+      runDraftFinalize({
+        prerelease: true,
+        hard: false,
+        ...draftCalls(calls, {
+          upload: async () => {
+            calls.push("upload");
+            throw new Error("upload failed");
+          },
+        }),
+      }),
+    /upload failed/,
+  );
+  assert.deepEqual(calls, ["upload"]);
+});
+
+test("a draft identity mismatch blocks the default beta sync", async () => {
+  const calls = [];
+  await assert.rejects(
+    () =>
+      runDraftFinalize({
+        prerelease: true,
+        hard: false,
+        ...draftCalls(calls, {
+          verifyDraftIdentity: async () => {
+            calls.push("verifyDraftIdentity");
+            throw new Error("draft identity mismatch");
+          },
+        }),
+      }),
+    /draft identity mismatch/,
+  );
+  assert.deepEqual(calls, ["upload", "verifyDraftIdentity"]);
+});
+
+test("a failed default beta sync fails loudly with a recovery step", async () => {
+  await assert.rejects(
+    () =>
+      runDraftFinalize({
+        prerelease: true,
+        hard: false,
+        ...draftCalls([], {
+          syncBetaManifests: async () => {
+            throw new Error("no stable release");
+          },
+        }),
+      }),
+    (error) =>
+      /uploaded to the draft/.test(error.message) &&
+      /npm run release:finalize/.test(error.message) &&
+      /no stable release/.test(error.cause?.message ?? ""),
+  );
+});
+
+test("hard finalize leaves the beta sync to runHardFinalize", async () => {
+  const calls = [];
+  await runDraftFinalize({
+    prerelease: true,
+    hard: true,
+    ...draftCalls(calls),
+  });
+  assert.deepEqual(calls, ["upload"]);
 });
 
 const sig = "s".repeat(80);
@@ -464,4 +567,43 @@ test("parseFromTag accepts only prerelease tags", () => {
     assert.throws(() => parseFromTag(["--from", bad]));
   }
   assert.throws(() => parseFromTag(["--from"]));
+});
+
+// Finalize must not publish manifests whose signature clients will reject:
+// missing `version:` (Windows re-sign without --app-version) or another version.
+const sigFile = (comment) =>
+  Buffer.from(
+    `untrusted comment: x\nRUQ=\ntrusted comment: ${comment}\nQQ==\n`,
+  ).toString("base64");
+
+test("finalize refuses an updater signature without a signed version", () => {
+  assert.throws(
+    () =>
+      assertSignedForVersion(
+        sigFile("timestamp:1\tfile:Postal Snap_x64-setup.exe"),
+        "0.5.4-beta.1",
+        "Postal-Snap-Windows-x64.exe",
+      ),
+    /Postal-Snap-Windows-x64\.exe.*not bound to version 0\.5\.4-beta\.1/,
+  );
+});
+
+test("finalize refuses an updater signature for another version", () => {
+  assert.throws(
+    () =>
+      assertSignedForVersion(
+        sigFile("timestamp:1\tfile:a\tversion:0.5.3"),
+        "0.5.4-beta.1",
+        "a",
+      ),
+    /signed for 0\.5\.3/,
+  );
+});
+
+test("finalize accepts an updater signature for the release version", () => {
+  assertSignedForVersion(
+    sigFile("timestamp:1\tfile:a\tversion:0.5.4-beta.1"),
+    "0.5.4-beta.1",
+    "a",
+  );
 });

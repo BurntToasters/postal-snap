@@ -102,6 +102,7 @@ for (const name of updaterPayloads) {
     join(directory, name),
     join(directory, `${name}.sig`),
     updaterPublicKey,
+    pkg.version,
   );
 }
 
