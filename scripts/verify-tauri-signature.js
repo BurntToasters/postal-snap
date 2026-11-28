@@ -81,10 +81,36 @@ function verifyEd25519(publicKeyRaw, data, signature) {
   return verify(null, data, ed25519Key(publicKeyRaw), signature);
 }
 
+// The `version:` field the Tauri CLI writes into the trusted comment.
+export function signedVersion(trustedComment) {
+  const field = String(trustedComment ?? "")
+    .split("	")
+    .find((part) => part.startsWith("version:"));
+  return field ? field.slice("version:".length) : null;
+}
+
+// Clients use requireSignedVersion, so an unbound or mismatched version fails.
+export function assertSignedVersion(trustedComment, expectedVersion, label) {
+  const expected = String(expectedVersion).replace(/^v/, "");
+  const signed = signedVersion(trustedComment);
+  const prefix = label ? `${label}: ` : "";
+  if (signed === null) {
+    throw new Error(
+      `${prefix}updater signature is not bound to version ${expected}. Re-sign with --app-version.`,
+    );
+  }
+  if (signed.replace(/^v/, "") !== expected) {
+    throw new Error(
+      `${prefix}updater signature was signed for ${signed}, not ${expected}.`,
+    );
+  }
+}
+
 export function verifyTauriSignatureBytes({
   payload,
   signatureText,
   publicKeyBase64,
+  expectedVersion,
 }) {
   const key = parseMinisignPublicKey(publicKeyBase64);
   const signature = parseMinisignSignature(signatureText);
@@ -109,12 +135,16 @@ export function verifyTauriSignatureBytes({
   if (!verifyEd25519(key.publicKey, comment, signature.globalSignature)) {
     throw new Error("Updater signature trusted comment does not verify.");
   }
+  if (expectedVersion !== undefined) {
+    assertSignedVersion(signature.trustedComment, expectedVersion);
+  }
 }
 
 export async function verifyTauriSignatureFile(
   payloadPath,
   signaturePath,
   publicKeyBase64,
+  expectedVersion,
 ) {
   const [payload, signatureText] = await Promise.all([
     readFile(payloadPath),
@@ -124,6 +154,7 @@ export async function verifyTauriSignatureFile(
     payload,
     signatureText,
     publicKeyBase64,
+    expectedVersion,
   });
 }
 

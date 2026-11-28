@@ -244,7 +244,7 @@ if (!noBundle) {
         { env: signerEnv },
       );
     }
-    await resignWindowsUpdaterSignatures(bundleOutputDir);
+    await resignWindowsUpdaterSignatures(bundleOutputDir, pkg.version);
     await run(
       "powershell.exe",
       artifactSigningPowershellArgs(
@@ -376,7 +376,7 @@ if (!noBundle) {
   console.log(`Collected ${pkg.name} ${pkg.version} artifacts in release/`);
 }
 
-async function resignWindowsUpdaterSignatures(bundleDir) {
+async function resignWindowsUpdaterSignatures(bundleDir, version) {
   const setup = await newestMatching(bundleDir, (path) =>
     path.endsWith("-setup.exe"),
   );
@@ -384,12 +384,17 @@ async function resignWindowsUpdaterSignatures(bundleDir) {
   console.log(
     `[tauri-build] Replacing updater signature after Authenticode: ${setup}`,
   );
-  await run("npm", ["run", "tauri", "--", "signer", "sign", setup], {
-    env: envForChild(process.env, [
-      "TAURI_SIGNING_PRIVATE_KEY",
-      "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-    ]),
-  });
+  // --app-version keeps the version requireSignedVersion clients check.
+  await run(
+    "npm",
+    ["run", "tauri", "--", "signer", "sign", "--app-version", version, setup],
+    {
+      env: envForChild(process.env, [
+        "TAURI_SIGNING_PRIVATE_KEY",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+      ]),
+    },
+  );
 }
 
 async function notarizeAppleArtifact(path) {

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assertSignedForVersion,
   betaManifestUploadArgs,
   buildUpdaterManifests,
   fetchAllReleases,
@@ -566,4 +567,43 @@ test("parseFromTag accepts only prerelease tags", () => {
     assert.throws(() => parseFromTag(["--from", bad]));
   }
   assert.throws(() => parseFromTag(["--from"]));
+});
+
+// Finalize must not publish manifests whose signature clients will reject:
+// missing `version:` (Windows re-sign without --app-version) or another version.
+const sigFile = (comment) =>
+  Buffer.from(
+    `untrusted comment: x\nRUQ=\ntrusted comment: ${comment}\nQQ==\n`,
+  ).toString("base64");
+
+test("finalize refuses an updater signature without a signed version", () => {
+  assert.throws(
+    () =>
+      assertSignedForVersion(
+        sigFile("timestamp:1\tfile:Postal Snap_x64-setup.exe"),
+        "0.5.4-beta.1",
+        "Postal-Snap-Windows-x64.exe",
+      ),
+    /Postal-Snap-Windows-x64\.exe.*not bound to version 0\.5\.4-beta\.1/,
+  );
+});
+
+test("finalize refuses an updater signature for another version", () => {
+  assert.throws(
+    () =>
+      assertSignedForVersion(
+        sigFile("timestamp:1\tfile:a\tversion:0.5.3"),
+        "0.5.4-beta.1",
+        "a",
+      ),
+    /signed for 0\.5\.3/,
+  );
+});
+
+test("finalize accepts an updater signature for the release version", () => {
+  assertSignedForVersion(
+    sigFile("timestamp:1\tfile:a\tversion:0.5.4-beta.1"),
+    "0.5.4-beta.1",
+    "a",
+  );
 });

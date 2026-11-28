@@ -1851,3 +1851,14 @@ test("native transparency is opt-in only for supported window glass", async () =
   );
   assert.equal((main.match(/\.transparent\(true\)/g) ?? []).length, 1);
 });
+
+test("Windows updater re-sign binds the signature to the app version", async () => {
+  const build = await readFile(join(root, "scripts/tauri-build.js"), "utf8");
+  const resign = build.slice(
+    build.indexOf("async function resignWindowsUpdaterSignatures"),
+  );
+  assert.match(
+    resign.slice(0, resign.indexOf("\n}\n")),
+    /"signer",\s*"sign",\s*"--app-version",\s*version,/,
+  );
+});
