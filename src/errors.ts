@@ -64,13 +64,48 @@ export function errorText(cause: unknown): string {
   return normalizeIpcError(cause).message;
 }
 
+export interface SetupErrorContext {
+  providerId?: string | null;
+  providerName?: string | null;
+  appPasswordPolicy?: "required" | "requiredWith2fa" | "none" | null;
+  appPasswordUrl?: string | null;
+}
+
 export function describeSetupError(
   cause: unknown,
   provider: ProviderKind,
-): { text: string; hint?: string; showAppPasswordLink?: boolean } {
+  context?: SetupErrorContext,
+): {
+  text: string;
+  hint?: string;
+  showAppPasswordLink?: boolean;
+  appPasswordUrl?: string;
+} {
   const error = cause instanceof PostalError ? cause : normalizeIpcError(cause);
   const endpoint = error.stage;
+  const usesAppPassword =
+    provider === "icloud" ||
+    context?.appPasswordPolicy === "required" ||
+    context?.appPasswordPolicy === "requiredWith2fa";
+  const helpUrl = context?.appPasswordUrl ?? undefined;
+  const label =
+    context?.providerName ??
+    (provider === "icloud" ? "iCloud Mail" : undefined);
   if (error.code === "authenticationFailed") {
+    const hint =
+      provider === "icloud"
+        ? strings.setup.authHintIcloud
+        : provider === "protonBridge"
+          ? strings.setup.bridgePasswordHint
+          : context?.appPasswordPolicy === "required"
+            ? strings.setup.authHintAppPassword(
+                label ?? strings.setup.unnamedProvider,
+              )
+            : context?.appPasswordPolicy === "requiredWith2fa"
+              ? strings.setup.authHintAppPassword2fa(
+                  label ?? strings.setup.unnamedProvider,
+                )
+              : strings.setup.authHintManual;
     return {
       text:
         endpoint === "imap"
@@ -78,13 +113,10 @@ export function describeSetupError(
           : endpoint === "smtp"
             ? strings.setup.smtpSignInFailed
             : error.message,
-      hint:
-        provider === "icloud"
-          ? strings.setup.authHintIcloud
-          : provider === "protonBridge"
-            ? strings.setup.bridgePasswordHint
-            : strings.setup.authHintManual,
-      showAppPasswordLink: provider === "icloud",
+      hint,
+      showAppPasswordLink:
+        provider === "icloud" || (usesAppPassword && Boolean(helpUrl)),
+      appPasswordUrl: helpUrl,
     };
   }
   if (error.code === "pendingOperations" || error.code === "certificateInvalid")
@@ -98,13 +130,19 @@ export function describeSetupError(
       hint:
         provider === "protonBridge"
           ? strings.setup.bridgeCertificateHint
-          : undefined,
+          : strings.setup.serverCertificateHint,
     };
   }
   if (provider === "protonBridge" && error.code === "certificateFailed") {
     return {
       text: strings.errors.certificateFailed,
       hint: strings.setup.bridgeCertificateHint,
+    };
+  }
+  if (error.code === "certificateFailed") {
+    return {
+      text: strings.errors.certificateFailed,
+      hint: strings.setup.serverCertificateHint,
     };
   }
   if (error.code === "connectionFailed" && endpoint) {

@@ -947,6 +947,10 @@ fn account() -> AccountRecord {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -7982,4 +7986,68 @@ fn effective_inbox_assignment_drives_counts_rules_arrivals_and_targets() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].1, "flags");
     assert!(queued[0].2.contains(&custom_message.to_string()));
+}
+
+// Failure modes for Phase 2C SQLite fixes:
+// 1. Custom-assigned Trash rejects permanent deletion because trash_row checks raw f.role.
+// 2. Non-UTF-8 body bytes break References header parsing and reply threading.
+// 3. Partial body save clears envelope has_attachments=true when later parts hold files.
+// 4. PREFETCH_CANDIDATES_SQL loses index range scan with julianday().
+#[test]
+fn custom_trash_and_non_utf8_references_and_partial_attachments_work() {
+    let db = Database::memory();
+    let acc = account();
+    db.insert_account(&acc).unwrap();
+    let custom_trash = mailbox(&db, &acc.summary.id, "Bin Custom", &MailboxRole::Other);
+    let inbox = mailbox(&db, &acc.summary.id, "INBOX", &MailboxRole::Inbox);
+    db.set_folder_assignment(&acc.summary.id, "trash", Some(custom_trash))
+        .unwrap();
+
+    let mut msg = message(10, "2026-08-18T12:00:00Z");
+    msg.message_id = Some("<ref10@example.test>".into());
+    msg.raw_message = b"References: <root@example.test>\r\nSubject: Hi\r\n\r\n\xff\xfe".to_vec();
+    db.upsert_message(&acc.summary.id, custom_trash, &msg)
+        .unwrap();
+    let bin_id = db
+        .message_summary_by_uid(custom_trash, 10)
+        .unwrap()
+        .unwrap()
+        .id;
+    assert_eq!(
+        db.message_references(bin_id, &acc.summary.id).unwrap(),
+        vec!["<root@example.test>".to_string()]
+    );
+    let plan = db.trash_expunge_plan(&acc.summary.id, &[bin_id]).unwrap();
+    assert_eq!(plan.uids, vec![10]);
+
+    // Partial body with no parsed prefix attachments keeps envelope attachment flag.
+    let mut env = message(11, "2026-08-18T12:01:00Z");
+    env.has_attachments = true;
+    db.upsert_envelopes(&acc.summary.id, inbox, &[env]).unwrap();
+    let mut partial = message(11, "2026-08-18T12:01:00Z");
+    partial.attachments.clear();
+    db.attach_partial_body_if_current(inbox, 1, &partial)
+        .unwrap();
+    let summary = db.message_summary_by_uid(inbox, 11).unwrap().unwrap();
+    assert!(summary.has_attachments);
+
+    // Batched flag/reply/color reconciliation updates in one call.
+    db.reconcile_flag_batch(
+        inbox,
+        &[(11, true, true)],
+        &[(11, true, false)],
+        &[(11, 3)],
+        &[11],
+    )
+    .unwrap();
+    let updated = db.message_summary_by_uid(inbox, 11).unwrap().unwrap();
+    assert!(updated.is_read && updated.is_starred && updated.is_answered);
+    assert_eq!(updated.flag_color, 3);
+}
+
+#[test]
+fn prefetch_candidates_sql_avoids_julianday_wrapper() {
+    assert!(!files_cache::PREFETCH_CANDIDATES_SQL
+        .to_ascii_lowercase()
+        .contains("julianday("));
 }

@@ -23,7 +23,7 @@ interface Options {
   loadersRef: MutableRefObject<{
     loadAccountData: () => Promise<void>;
     loadMailboxCounts: () => Promise<void>;
-    loadMessages: () => Promise<boolean>;
+    loadMessages: (preserveCount?: boolean) => Promise<boolean>;
     refreshSubmittedSearch: () => Promise<boolean>;
   }>;
   submittedQueryRef: MutableRefObject<string>;
@@ -70,7 +70,7 @@ function createQueues(
     else if (due.counts) void loaders.loadMailboxCounts();
     if (due.messages) {
       if (submittedQueryRef.current) void loaders.refreshSubmittedSearch();
-      else void loaders.loadMessages();
+      else void loaders.loadMessages(true);
     }
   });
   const badges = coalesce(() => void loadAccountCounts());

@@ -32,6 +32,12 @@ html[data-window-fx="vibrant"] .folder-pane {
   border-right: 1px solid var(--border-soft);
 }
 
+@media (max-width: 899.98px) {
+  html[data-window-fx="vibrant"] .mail-shell .folder-pane {
+    background: var(--sidebar-bg);
+  }
+}
+
 /* 4. Opaque content and chrome. */
 html[data-window-fx="vibrant"] .app-toolbar,
 html[data-window-fx="vibrant"] .message-pane,

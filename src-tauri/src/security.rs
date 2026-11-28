@@ -166,6 +166,19 @@ pub fn authorize_external_open(check: &ExternalLinkCheck, open_anyway: bool) -> 
     Ok(())
 }
 
+pub fn is_allowed_image_content_type(content_type: &str) -> bool {
+    let normalized = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized == "application/octet-stream" {
+        return true;
+    }
+    normalized.starts_with("image/") && !normalized.contains("svg")
+}
+
 pub fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
@@ -376,10 +389,7 @@ async fn fetch_public_image_inner(
             .unwrap_or("application/octet-stream")
             .trim()
             .to_ascii_lowercase();
-        if !matches!(
-            content_type.as_str(),
-            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-        ) {
+        if !is_allowed_image_content_type(&content_type) {
             return Err("The remote resource is not a supported image.".into());
         }
         if response
@@ -406,7 +416,7 @@ async fn fetch_public_image_inner(
         }
         let sniffed = detect_image_mime(&bytes)
             .ok_or_else(|| "The remote resource is not a supported image.".to_string())?;
-        if sniffed != content_type || !image_within_pixel_limit(&bytes, sniffed) {
+        if !image_within_pixel_limit(&bytes, sniffed) {
             return Err("The remote resource is not a supported image.".into());
         }
         return Ok(RemoteImageResult::Loaded {
@@ -1205,5 +1215,16 @@ mod tests {
         let message = redact_error(&secret, "Connection");
         assert!(!message.contains("person"));
         assert!(!message.contains("hunter2"));
+    }
+
+    #[test]
+    fn image_content_type_accepts_browser_variants_and_rejects_svg_or_html() {
+        assert!(is_allowed_image_content_type("image/png"));
+        assert!(is_allowed_image_content_type("image/jpg"));
+        assert!(is_allowed_image_content_type("image/pjpeg"));
+        assert!(is_allowed_image_content_type("application/octet-stream"));
+        assert!(!is_allowed_image_content_type("image/svg+xml"));
+        assert!(!is_allowed_image_content_type("text/html"));
+        assert!(!is_allowed_image_content_type("application/javascript"));
     }
 }

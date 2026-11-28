@@ -254,10 +254,12 @@ async fn test_imap_with_icloud_fallback(
             Ok(imap.clone())
         }
         Err(first_error)
-            if request.provider == ProviderKind::Icloud && imap.username != request.email =>
+            if first_error.kind == FailureKind::SignInRejected
+                && request.provider == ProviderKind::Icloud
+                && !imap.username.eq_ignore_ascii_case(&request.email) =>
         {
             let mut fallback = imap.clone();
-            fallback.username = request.email.to_lowercase();
+            fallback.username = request.email.trim().to_lowercase();
             match connect_imap(&fallback, password).await {
                 Ok(mut session) => {
                     let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.logout()).await;
@@ -275,6 +277,7 @@ struct ListedFolder {
     delimiter: Option<String>,
     role: MailboxRole,
     role_source: &'static str,
+    is_all_mail: bool,
     /// Junk, Trash and `\All` bodies are never prefetched: they are either
     /// unwanted or duplicate every other folder (Gmail-style All Mail).
     skip_prefetch: bool,
@@ -329,7 +332,18 @@ fn folders_from_listing(
         .iter()
         .filter_map(|listed| {
             let mut folder = build_folder(listed, provider)?;
-            folder.prefetched = statuses.remove(&listed.wire_name);
+            folder.prefetched = statuses.remove(&listed.wire_name).or_else(|| {
+                listed
+                    .wire_name
+                    .eq_ignore_ascii_case("INBOX")
+                    .then(|| {
+                        statuses
+                            .keys()
+                            .find(|k| k.eq_ignore_ascii_case("INBOX"))
+                            .cloned()
+                    })?
+                    .and_then(|key| statuses.remove(&key))
+            });
             Some(folder)
         })
         .collect();
@@ -366,16 +380,26 @@ fn build_folder(listed: &ListedName, provider: &ProviderKind) -> Option<ListedFo
     } else {
         mailbox_role_assignment(&mailbox_name, attributes)
     };
+    let is_all_mail = crate::models::is_all_mail_folder(&mailbox_name, attributes);
     let skip_prefetch =
-        matches!(role, MailboxRole::Junk | MailboxRole::Trash) || has("All") || bridge_all;
+        matches!(role, MailboxRole::Junk | MailboxRole::Trash) || is_all_mail || bridge_all;
     Some(ListedFolder {
         delimiter: listed.delimiter.clone(),
         name: mailbox_name,
         role,
         role_source,
+        is_all_mail,
         skip_prefetch,
         prefetched: None,
     })
+}
+
+fn effective_condstore_modseq(condstore: bool, modseq: Option<u64>) -> Option<u64> {
+    if condstore {
+        modseq.filter(|&value| value > 0)
+    } else {
+        None
+    }
 }
 
 /// STATUS items for a pass. HIGHESTMODSEQ only with CONDSTORE.
@@ -594,10 +618,12 @@ fn folders_in_scope(
 ) -> Result<Vec<ListedFolder>, String> {
     let inbox_name = inbox.then(|| effective_inbox_name(db, account_id));
     let cached = db.list_mailboxes(account_id)?;
-    let raw_roles: std::collections::HashMap<String, (MailboxRole, String)> = {
+    let raw_roles: std::collections::HashMap<String, (MailboxRole, String, bool)> = {
         let conn = db.read_conn()?;
         let mut statement = conn
-            .prepare("SELECT name, role, role_source FROM mailboxes WHERE account_id=?1")
+            .prepare(
+                "SELECT name, role, role_source, is_all_mail FROM mailboxes WHERE account_id=?1",
+            )
             .map_err(|_| "Mail folders could not be read.".to_string())?;
         let rows = statement
             .query_map([account_id], |row| {
@@ -605,13 +631,14 @@ fn folders_in_scope(
                     row.get::<_, String>(0)?,
                     parse_role(&row.get::<_, String>(1)?),
                     row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)? != 0,
                 ))
             })
             .map_err(|_| "Mail folders could not be read.".to_string())?
-            .collect::<Result<Vec<(String, MailboxRole, String)>, _>>()
+            .collect::<Result<Vec<(String, MailboxRole, String, bool)>, _>>()
             .map_err(|_| "Mail folders could not be read.".to_string())?;
         rows.into_iter()
-            .map(|(name, role, source)| (name, (role, source)))
+            .map(|(name, role, source, all_mail)| (name, (role, source, all_mail)))
             .collect()
     };
     Ok(cached
@@ -621,16 +648,19 @@ fn folders_in_scope(
         })
         .map(|folder| {
             let raw = raw_roles.get(&folder.name);
-            let role_source = match raw.map(|(_, source)| source.as_str()) {
+            let role_source = match raw.map(|(_, source, _)| source.as_str()) {
                 Some(ROLE_SOURCE_SPECIAL_USE) => ROLE_SOURCE_SPECIAL_USE,
                 _ => ROLE_SOURCE_NAME,
             };
+            let is_all_mail = raw.is_some_and(|(_, _, all_mail)| *all_mail);
             ListedFolder {
-                skip_prefetch: matches!(folder.role, MailboxRole::Junk | MailboxRole::Trash),
+                skip_prefetch: matches!(folder.role, MailboxRole::Junk | MailboxRole::Trash)
+                    || is_all_mail,
                 name: folder.name,
                 delimiter: folder.delimiter,
-                role: raw.map_or(folder.role, |(role, _)| role.clone()),
+                role: raw.map_or(folder.role, |(role, _, _)| role.clone()),
                 role_source,
+                is_all_mail,
                 prefetched: None,
             }
         })
@@ -693,6 +723,7 @@ async fn sync_folder<H: SyncHooks>(
         status.uid_validity,
     )?;
     db.set_mailbox_listing(mailbox_id, folder.delimiter.as_deref())?;
+    db.set_mailbox_all_mail(mailbox_id, folder.is_all_mail)?;
     let purged = previous.as_ref().is_some_and(|meta| {
         meta.uid_validity.is_some() && meta.uid_validity != status.uid_validity
     });
@@ -711,7 +742,10 @@ async fn sync_folder<H: SyncHooks>(
                 last.checked_to_offset(UtcOffset::UTC)
                     .is_none_or(|last| now_utc() - last > FLAG_SCAN_INTERVAL)
             });
-    let flag_scan = if condstore {
+    let modseq_before_fetch = effective_condstore_modseq(condstore, status.highest_modseq);
+    let folder_condstore = modseq_before_fetch.is_some();
+    let meta_modseq = effective_condstore_modseq(condstore, meta.highest_modseq);
+    let flag_scan = if folder_condstore {
         FlagScan::Skip
     } else {
         plan_flag_scan(
@@ -726,7 +760,9 @@ async fn sync_folder<H: SyncHooks>(
             meta.uid_next == status.uid_next
                 && meta.server_total == Some(status.exists)
                 && meta.server_unread == status.unseen
-                && (!condstore || meta.highest_modseq == status.highest_modseq)
+                && (!folder_condstore
+                    || effective_condstore_modseq(condstore, meta.highest_modseq)
+                        == modseq_before_fetch)
         });
     let wants_prefetch = !folder.skip_prefetch
         && budget.available() > 0
@@ -758,7 +794,7 @@ async fn sync_folder<H: SyncHooks>(
             status.unseen,
             0,
         )?;
-        db.set_highest_modseq(mailbox_id, status.highest_modseq)?;
+        db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
         return Ok((false, changed));
     }
     let selected = match selected_before_write {
@@ -777,7 +813,7 @@ async fn sync_folder<H: SyncHooks>(
     };
     let record_arrivals = db.mailbox_effective_role(account_id, &folder.name)? == "inbox";
 
-    let max_uid = db.max_uid(mailbox_id)?;
+    let max_uid = db.synced_max_uid(mailbox_id)?;
     let mut new_fetched = 0u32;
     let mut catch_up_incomplete = false;
     if max_uid == 0 {
@@ -795,6 +831,7 @@ async fn sync_folder<H: SyncHooks>(
             false,
         )
         .await?;
+        db.advance_synced_max_uid(mailbox_id, fetched.max_uid)?;
         new_fetched = fetched.count;
         let state = if start == 1 {
             "complete"
@@ -826,7 +863,7 @@ async fn sync_folder<H: SyncHooks>(
         );
         catch_up_incomplete = capped;
         for (index, chunk) in chunks.iter().enumerate() {
-            // Let user actions run; the next pass resumes from max_uid.
+            // Let user actions run; the next pass resumes from synced_max_uid.
             if index > 0 && hooks.contended() {
                 catch_up_incomplete = true;
                 break;
@@ -841,6 +878,13 @@ async fn sync_folder<H: SyncHooks>(
                 record_arrivals,
             )
             .await?;
+            let chunk_high = chunk
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .max(fetched.max_uid);
+            db.advance_synced_max_uid(mailbox_id, chunk_high)?;
             new_fetched = new_fetched.saturating_add(fetched.count);
         }
     }
@@ -856,9 +900,8 @@ async fn sync_folder<H: SyncHooks>(
             meta.server_total
                 .is_some_and(|total| status.exists < total.saturating_add(new_fetched))
         });
-    let modseq_before_fetch = status.highest_modseq;
-    if condstore && !purged && meta.highest_modseq.is_some() {
-        let known = meta.highest_modseq.unwrap_or_default();
+    if folder_condstore && !purged && meta_modseq.is_some() {
+        let known = meta_modseq.unwrap_or_default();
         let mut vanished = None;
         if modseq_before_fetch != Some(known) {
             if let Some(low) = db.min_uid(mailbox_id)? {
@@ -869,7 +912,7 @@ async fn sync_folder<H: SyncHooks>(
             reconcile_expunges(lease, db, mailbox_id).await?;
         }
         db.set_highest_modseq(mailbox_id, modseq_before_fetch)?;
-    } else if condstore {
+    } else if folder_condstore {
         full_flag_scan(
             lease,
             db,
@@ -888,6 +931,7 @@ async fn sync_folder<H: SyncHooks>(
             flag_scan
         };
         full_flag_scan(lease, db, account_id, &folder.name, mailbox_id, scope).await?;
+        db.set_highest_modseq(mailbox_id, None)?;
     }
     let committed_uid_next = if catch_up_incomplete {
         None
@@ -967,6 +1011,7 @@ pub(crate) fn plan_new_uid_chunks(
 
 struct EnvelopeBatch {
     count: u32,
+    max_uid: u32,
     older_than_cutoff: bool,
 }
 
@@ -974,7 +1019,7 @@ struct EnvelopeBatch {
 /// batch unparseable and stall the folder. The attachment hint comes from the
 /// top-level Content-Type instead.
 const ENVELOPE_QUERY_PREFIX: &str =
-    "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)]";
+    "(UID FLAGS RFC822.SIZE INTERNALDATE ENVELOPE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE IMPORTANCE X-PRIORITY X-MSMAIL-PRIORITY PRIORITY DISPOSITION-NOTIFICATION-TO)]";
 
 /// Fetch one chunk of envelopes and store it in a single transaction.
 async fn cache_envelopes(
@@ -1055,6 +1100,7 @@ async fn cache_envelopes(
         })
         .collect::<Vec<_>>();
     let count = parsed_rows.len() as u32;
+    let max_uid = parsed_rows.iter().map(|p| p.uid).max().unwrap_or(0);
     let writer = db.clone();
     let owner = account_id.to_string();
     tokio::task::spawn_blocking(move || {
@@ -1071,6 +1117,7 @@ async fn cache_envelopes(
     .map_err(|_| "Saving the message list stopped unexpectedly.".to_string())??;
     Ok(EnvelopeBatch {
         count,
+        max_uid,
         older_than_cutoff: crossed_cutoff(age_marks),
     })
 }
@@ -1248,9 +1295,7 @@ async fn sync_changed_flags(
     });
     let (changed, replies) = flag_rows(&rows);
     let colors = flag_colors(&rows);
-    db.reconcile_reply_flags(mailbox_id, &replies)?;
-    db.reconcile_flags(mailbox_id, &changed, &[])?;
-    db.reconcile_flag_colors(mailbox_id, &colors)?;
+    db.reconcile_flag_batch(mailbox_id, &changed, &replies, &colors, &[])?;
     if let Some(VanishedPlan::Apply(uids)) = &plan {
         db.apply_vanished(mailbox_id, uids)?;
     }
@@ -1273,12 +1318,12 @@ async fn full_flag_scan(
         _ => &cached[..],
     };
     for chunk in uids.chunks(250) {
-        let (Some(low), Some(high)) = (chunk.first(), chunk.last()) else {
+        let Ok(set) = crate::mail::folders::uid_set(chunk) else {
             continue;
         };
         let rows = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
             lease
-                .uid_fetch(format!("{low}:{high}"), "(UID FLAGS)")
+                .uid_fetch(set, "(UID FLAGS)")
                 .await?
                 .try_collect::<Vec<_>>()
                 .await
@@ -1288,9 +1333,7 @@ async fn full_flag_scan(
         .map_err(|error| redact_error(&error, "Flag sync"))?;
         let (seen, replies) = flag_rows(&rows);
         let colors = flag_colors(&rows);
-        db.reconcile_reply_flags(mailbox_id, &replies)?;
-        db.reconcile_flags(mailbox_id, &seen, chunk)?;
-        db.reconcile_flag_colors(mailbox_id, &colors)?;
+        db.reconcile_flag_batch(mailbox_id, &seen, &replies, &colors, chunk)?;
     }
     db.mark_flag_scan(mailbox_id)?;
     if scope == FlagScan::Full {
@@ -1910,7 +1953,7 @@ pub async fn idle_inbox(
     password: &str,
     wake: &Notify,
     limit: Duration,
-) -> Result<IdleOutcome, String> {
+) -> Result<IdleOutcome, MailError> {
     let target = effective_inbox_name(db, &account.summary.id);
     let mut lease = pool::checkout(account, password).await?;
     if !lease.capabilities.idle {
@@ -1923,20 +1966,22 @@ pub async fn idle_inbox(
     let wire_target = lease.mailbox_name(&target);
     if let Err(error) = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.examine(&wire_target))
         .await
-        .map_err(|_| "Inbox monitoring timed out.".to_string())
-        .and_then(|result| result.map_err(|error| redact_error(&error, "Inbox monitoring")))
+        .map_err(|_| MailError::connection("Inbox monitoring timed out."))
+        .and_then(|result| {
+            result.map_err(|error| MailError::connection(redact_error(&error, "Inbox monitoring")))
+        })
     {
         lease.discard();
         return Err(error);
     }
     let Some(session) = lease.take_session() else {
-        return Err("Inbox monitoring is unavailable.".into());
+        return Err(MailError::connection("Inbox monitoring is unavailable."));
     };
     let mut idle = session.idle();
     tokio::time::timeout(IMAP_COMMAND_TIMEOUT, idle.init())
         .await
-        .map_err(|_| "Inbox monitoring initialization timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Inbox monitoring"))?;
+        .map_err(|_| MailError::connection("Inbox monitoring initialization timed out."))?
+        .map_err(|error| MailError::connection(redact_error(&error, "Inbox monitoring")))?;
     if idle.take_mailbox_change() {
         match tokio::time::timeout(Duration::from_secs(5), idle.done()).await {
             Ok(Ok(session)) => {
@@ -1951,10 +1996,10 @@ pub async fn idle_inbox(
         let (wait, interrupt) = idle.wait_with_timeout(limit);
         tokio::pin!(wait);
         tokio::select! {
-            result = &mut wait => result.map_err(|error| redact_error(&error, "Inbox monitoring"))?,
+            result = &mut wait => result.map_err(|error| MailError::connection(redact_error(&error, "Inbox monitoring")))?,
             _ = wake.notified() => {
                 drop(interrupt);
-                wait.as_mut().await.map_err(|error| redact_error(&error, "Inbox monitoring"))?
+                wait.as_mut().await.map_err(|error| MailError::connection(redact_error(&error, "Inbox monitoring")))?
             },
         }
     };
@@ -2017,10 +2062,16 @@ pub async fn server_search<H: SyncHooks>(
     let mailboxes = folders_after_resume(&mailboxes, query.resume_after_mailbox_id)?.to_vec();
     let identities =
         crate::search_query::search_identities(&account.summary.email, &account.summary.aliases);
-    let Some(criteria) = parsed.imap_criteria_with(&identities) else {
+    if parsed.imap_criteria_with(&identities).is_none() {
+        return Ok(complete_search(Vec::new()));
+    }
+    let mut lease = pool::checkout(account, password).await?;
+    let Some(criteria) =
+        parsed.imap_criteria_with_options(&identities, lease.capabilities.literal_plus)
+    else {
+        lease.release();
         return Ok(complete_search(Vec::new()));
     };
-    let mut lease = pool::checkout(account, password).await?;
     let filter = ServerHitFilter {
         require_attachment: parsed.has_attachment,
         filenames: parsed.filenames,
@@ -2269,12 +2320,18 @@ async fn search_mailbox(
             Some(_) => {}
         }
     }
-    let mut uids = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria))
-        .await
-        .map_err(|_| "Server search timed out.".to_string())?
-        .map_err(|error| redact_error(&error, "Server search"))?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut uids =
+        match tokio::time::timeout(IMAP_COMMAND_TIMEOUT, lease.uid_search(criteria)).await {
+            Ok(Ok(uids)) => uids.into_iter().collect::<Vec<_>>(),
+            Ok(Err(async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_)))
+                if criteria.starts_with("CHARSET UTF-8 ") =>
+            {
+                // Server refused UTF-8 search; preserve local FTS hits instead of aborting.
+                return Ok(results);
+            }
+            Ok(Err(error)) => return Err(redact_error(&error, "Server search")),
+            Err(_) => return Err("Server search timed out.".to_string()),
+        };
     uids.sort_unstable_by(|left, right| right.cmp(left));
     if uids.is_empty() {
         return Ok(results);
@@ -2657,6 +2714,119 @@ mod tests {
         );
     }
 
+    // Failure modes:
+    // 1. Server search envelope inserts bump max_uid so subsequent sync skips intermediate mail.
+    // 2. HIGHESTMODSEQ 0 is persisted and skips future flag scans.
+    #[test]
+    fn search_watermark_pollution_does_not_skip_unsynced_uids() {
+        use crate::db::{CachedMessage, Database};
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, MailboxRole, ProviderKind, ServerConfig,
+            TlsMode,
+        };
+
+        let db = Database::memory();
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+                email: "wm@example.test".into(),
+                display_name: "WM".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: Vec::new(),
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Html,
+                notify_new_mail: true,
+            },
+            imap: ServerConfig {
+                host: "imap.example.test".into(),
+                port: 993,
+                tls_mode: TlsMode::Tls,
+                username: "wm@example.test".into(),
+                trusted_certificate: None,
+            },
+            smtp: ServerConfig {
+                host: "smtp.example.test".into(),
+                port: 465,
+                tls_mode: TlsMode::Tls,
+                username: "wm@example.test".into(),
+                trusted_certificate: None,
+            },
+        };
+        db.insert_account(&account).unwrap();
+        let mailbox_id = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(7),
+                Some(101),
+                Some(0),
+                100,
+            )
+            .unwrap();
+        db.advance_synced_max_uid(mailbox_id, 100).unwrap();
+        let hit = CachedMessage {
+            uid: 500,
+            internal_at: None,
+            message_id: Some("<hit500@example.test>".into()),
+            thread_parent: None,
+            subject: "Hit".into(),
+            sender_name: "S".into(),
+            sender_address: "s@example.test".into(),
+            recipients: "wm@example.test".into(),
+            to: vec!["wm@example.test".into()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            reply_to: None,
+            received_at: "2026-10-01T00:00:00+00:00".into(),
+            preview: String::new(),
+            is_read: false,
+            is_starred: false,
+            is_answered: false,
+            is_forwarded: false,
+            size: 100,
+            text_body: String::new(),
+            html_body: None,
+            attachments: Vec::new(),
+            raw_message: Vec::new(),
+            has_attachments: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        };
+        db.upsert_envelopes(&account.summary.id, mailbox_id, &[hit])
+            .unwrap();
+        assert_eq!(db.max_uid(mailbox_id).unwrap(), 500);
+        assert_eq!(
+            db.synced_max_uid(mailbox_id).unwrap(),
+            100,
+            "server search must not advance incremental sync watermark"
+        );
+        db.advance_synced_max_uid(mailbox_id, 500).unwrap();
+        assert_eq!(db.synced_max_uid(mailbox_id).unwrap(), 500);
+    }
+
+    #[test]
+    fn condstore_zero_modseq_is_treated_as_unavailable() {
+        assert_eq!(super::effective_condstore_modseq(true, None), None);
+        assert_eq!(super::effective_condstore_modseq(true, Some(0)), None);
+        assert_eq!(super::effective_condstore_modseq(false, Some(42)), None);
+        assert_eq!(super::effective_condstore_modseq(true, Some(42)), Some(42));
+    }
+
     // New-mail catch-up failure modes:
     // 1. A wide UID gap costs one round trip per empty range.
     // 2. `UID n:*` answers with the newest UID even when it is not above n,
@@ -2832,6 +3002,10 @@ mod scope_tests {
                 default_body_format: BodyFormat::Html,
                 id: "scope-account".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.test".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

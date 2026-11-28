@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { api } from "../../api";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
-import type { ComposeDraft, MessageSummary } from "../../types";
+import type { ComposeDraft, MessageDetail, MessageSummary } from "../../types";
 import { useScheduledOutbox } from "../../hooks/useScheduledOutbox";
 import { waitToMarkRead } from "../../markRead";
 import { beginMessageOpen, isCurrentMessageOpen } from "../../messageOpen";
@@ -291,6 +291,7 @@ export function useLocalListActions({
       if (!accountId) return;
       const request = beginMessageOpen();
       setLoadingMessageId(summary.id);
+      let openedDetail: MessageDetail | undefined;
       try {
         const detail = await api.getMessage(accountId, summary.id);
         const current = useAppStore.getState();
@@ -301,24 +302,7 @@ export function useLocalListActions({
         )
           return;
         selectMessage(detail);
-        const readyToMark = !summary.isRead
-          ? await waitToMarkRead(
-              useAppStore.getState().settings.markRead,
-              () => {
-                const latest = useAppStore.getState();
-                return (
-                  isCurrentMessageOpen(request) &&
-                  latest.activeAccountId === accountId &&
-                  latest.activeLocalView === "snoozed" &&
-                  latest.selectedMessage?.id === summary.id
-                );
-              },
-            )
-          : false;
-        if (readyToMark) {
-          await api.setMessageFlags(accountId, summary.id, true, undefined);
-          await loadAccountData();
-        }
+        openedDetail = detail;
       } catch (cause) {
         if (!isCurrentMessageOpen(request)) return;
         const detail = errorText(cause);
@@ -337,6 +321,36 @@ export function useLocalListActions({
         }
       } finally {
         if (isCurrentMessageOpen(request)) setLoadingMessageId(undefined);
+      }
+      if (openedDetail && !openedDetail.isRead) {
+        void (async () => {
+          const readyToMark = await waitToMarkRead(
+            useAppStore.getState().settings.markRead,
+            () => {
+              const latest = useAppStore.getState();
+              return (
+                isCurrentMessageOpen(request) &&
+                latest.activeAccountId === accountId &&
+                latest.activeLocalView === "snoozed" &&
+                latest.selectedMessage?.id === summary.id
+              );
+            },
+          );
+          if (!readyToMark) return;
+          try {
+            await api.setMessageFlags(accountId, summary.id, true, undefined);
+            const latest = useAppStore.getState();
+            if (
+              isCurrentMessageOpen(request) &&
+              latest.selectedMessage?.id === summary.id
+            ) {
+              selectMessage({ ...latest.selectedMessage, isRead: true });
+            }
+            await loadAccountData();
+          } catch (cause) {
+            setError(errorText(cause));
+          }
+        })();
       }
     },
     [

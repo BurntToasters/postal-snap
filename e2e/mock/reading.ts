@@ -195,7 +195,7 @@ export async function registerMockReading(page: Page): Promise<void> {
         size: 4096,
         threadRoot: null,
         to: ["sam@icloud.com"],
-        cc: [],
+        cc: params.has("emlCc") ? ["alex@example.test"] : [],
         textBody: "Here is the signed lease. Thanks, Riley.",
         // ?emlHtml adds a script and a remote image to the HTML body.
         htmlBody: params.has("emlHtml")

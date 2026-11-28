@@ -23,17 +23,24 @@ Postal Snap is a calm, accessible desktop email client. Mail stays on your compu
 ## Changes in `v0.5.4-beta.1:`
 
 - **NEW - Offline recovery:** Review failed local mail changes for each account in Settings > Accounts, then confirm which reviewed changes to dismiss.
+- **NEW - App-specific passwords & discovery:** Gmail now uses guided App Password setup alongside iCloud Mail, with provider presets, RFC 6186 SRV discovery, custom-domain iCloud+/Fastmail hints, Outlook OAuth-only rejection, normalized app passwords, and Settings > Accounts re-auth recovery.
+- **NEW - Editable rules & PDF zoom:** Edit existing Filter Rules in Settings, and inspect PDF attachment previews with zoom controls and total page counts.
 - **IMPROVED - Automatic rules:** Evaluate every rule against the same bounded page of arrivals so overlapping rules can act on the same message.
 - **IMPROVED - Large mailboxes:** Opening folder lists avoids counting every cached message when the server already provides mailbox totals.
 - **IMPROVED - Server search:** Continue an all-folder search with a keyboard-accessible action while keeping partial-result status and selection accurate; changing the query clears stale continuation.
 - **IMPROVED - Window glass:** Splitter gutters stay opaque and readable over native window materials, including reduced-transparency and high-contrast modes.
 - **IMPROVED - Inbox assignments:** The assigned Inbox now drives the read-only watcher and arrival sync, with a safe INBOX fallback before folder discovery.
+- **IMPROVED - Provider presets:** Setup includes presets for many more mail providers, each with its IMAP and SMTP settings filled in.
+- **IMPROVED - Keyboard, navigation & viewers:** Added `j`/`k` list navigation, `Mod+Alt+Arrow` pane switching from the message list, iframe `Shift+Arrow` text selection preservation, layered `Escape` handling for Find and Settings search, Command Palette jumps for Drafts/Outbox/Snoozed, Search clear on folder switch, and full-height `.eml` viewer layout with `Cc` headers.
+- **IMPROVED - Storage, query plans & diagnostics:** Database schema is now v47, after the v46 provider identity and watermark backfills. Replaced table-scanning mailbox queries, avoided `julianday()` blocking SQLite indexes, zeroized temporary credential wrappers, and tightened MIME/pixel-bomb image checks.
 - **FIX - Mailbox refresh:** A count-only refresh no longer cancels an in-flight full load or drops delayed draft data.
 - **FIX - Undo moves:** Expired held moves resume after reconnect or restart, and canceled Undo work stays out of the replay queue.
 - **FIX - Refused moves:** If a move fails, the message returns to the current list. Later read or flag changes, the current selection, and unfinished search edits are preserved.
 - **FIX - Inline images:** Removing an attachment from a draft also removes copies of that image from the editor. Separately pasted images can still be removed individually after reopening the draft.
 - **FIX - Open email files:** OS-opened `.eml` files reach the viewer across startup races, multiple opens stay ordered, and Flatpak advertises email-file support. Remote images remain blocked in the viewer.
 - **FIX - Links in opened email:** Clicking linked text or an image inside a link now reaches the viewer’s link confirmation or mail composer.
+- **FIX - Folder roles:** Personal subfolders such as `Work/Inbox` no longer claim system roles, and `\All` no longer beats `\Archive`. Servers without SPECIAL-USE that use a non-INBOX personal prefix may need folder assignments set manually.
+- **FIX - Sync, search, sending & UI polish:** Fixed CONDSTORE `HIGHESTMODSEQ 0` flag scans, search watermarks, non-ASCII IMAP literals, Rules v2 non-move ordering, Apple Mail multi-segment parsing, SMTP DATA timeouts, transient IMAP refusal classification, active account re-selection blanking, autosave Send button responsiveness, direct right-click triage under delayed mark-read, pagination preservation, and opaque narrow Mica drawers.
 
 ## Changes in `v0.5.3:`
 - **Filters:** Updated filers.

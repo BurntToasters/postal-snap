@@ -353,7 +353,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           accountIds.has(accountId),
         ),
       );
-      if (state.activeAccountId && state.activeMailboxId) {
+      if (
+        state.activeAccountId &&
+        state.activeMailboxId &&
+        accountIds.has(state.activeAccountId)
+      ) {
         lastMailboxByAccount[state.activeAccountId] = state.activeMailboxId;
       }
 
@@ -389,6 +393,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   selectAccount: (activeAccountId) =>
     set((state) => {
+      if (state.activeAccountId === activeAccountId) {
+        return {};
+      }
       keepOpenMessage(state);
       const lastMailboxByAccount = { ...state.lastMailboxByAccount };
       if (state.activeAccountId && state.activeMailboxId) {

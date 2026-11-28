@@ -1121,22 +1121,19 @@ pub(crate) async fn bulk_apply_flags(
         .await;
         match remote {
             Ok(()) => {
-                for (id, _) in &entries {
-                    if state
-                        .db
-                        .record_colored_flag_change(
-                            account_id, *id, is_read, is_starred, color, None,
-                        )
-                        .is_ok()
-                    {
-                        updated += 1;
-                    } else {
-                        failed += 1;
-                    }
-                }
+                let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                    entries.iter().map(|(id, _)| (*id, None)).collect();
+                let failed_ids = state
+                    .db
+                    .record_bulk_flag_changes(account_id, &batch, is_read, is_starred, color)
+                    .unwrap_or_else(|_| entries.iter().map(|(id, _)| *id).collect());
+                let bad = failed_ids.len();
+                failed += bad;
+                updated += entries.len().saturating_sub(bad);
             }
             Err(error) if error.terminal => failed += ids.len(),
             Err(_) => {
+                let mut payloads = Vec::with_capacity(entries.len());
                 for (id, uid) in &entries {
                     let operation = FlagOperation {
                         message_id: *id,
@@ -1152,23 +1149,17 @@ pub(crate) async fn bulk_apply_flags(
                     };
                     let payload = serde_json::to_value(&operation)
                         .map_err(|_| "Could not queue the flag change.".to_string())?;
-                    if state
-                        .db
-                        .record_colored_flag_change(
-                            account_id,
-                            *id,
-                            is_read,
-                            is_starred,
-                            color,
-                            Some(&payload),
-                        )
-                        .is_ok()
-                    {
-                        queued += 1;
-                    } else {
-                        failed += 1;
-                    }
+                    payloads.push((*id, payload));
                 }
+                let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                    payloads.iter().map(|(id, p)| (*id, Some(p))).collect();
+                let failed_ids = state
+                    .db
+                    .record_bulk_flag_changes(account_id, &batch, is_read, is_starred, color)
+                    .unwrap_or_else(|_| entries.iter().map(|(id, _)| *id).collect());
+                let bad = failed_ids.len();
+                failed += bad;
+                queued += entries.len().saturating_sub(bad);
             }
         }
     }
@@ -1552,35 +1543,46 @@ pub async fn mark_mailbox_read(
         queued: 0,
         failed: 0,
     };
-    for chunk in unread.chunks(200) {
-        let items: Vec<(i64, String, u32)> = chunk
-            .iter()
-            .map(|(id, uid)| (*id, name.clone(), *uid))
-            .collect();
-        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
-        outcome.updated += batch.updated;
-        outcome.queued += batch.queued;
-        outcome.failed += batch.failed;
-    }
-    // Only cached rows were flagged above; older unread mail exists only on
-    // the server. Mark everything up to the current UIDNEXT there too, so the
-    // authoritative STATUS count agrees on the next refresh.
+    let mut marked_remotely = false;
     if let Ok(account) = state.db.account(&account_id) {
-        let Ok(password) = crate::oauth::session_secret(&account).await else {
-            emit_message_change(&app, &account_id, None, "flags");
-            emit_folder_counts(&app, &account_id);
-            return Ok(outcome);
-        };
-        if let Some(validity) = state.db.mailbox_uid_validity(&account_id, &name)? {
+        if let (Ok(password), Some(validity)) = (
+            crate::oauth::session_secret(&account).await,
+            state.db.mailbox_uid_validity(&account_id, &name)?,
+        ) {
             if mail::mark_folder_read(&account, &password, &name, validity)
                 .await
                 .is_ok()
             {
+                marked_remotely = true;
+                for chunk in unread.chunks(500) {
+                    let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                        chunk.iter().map(|(id, _)| (*id, None)).collect();
+                    let failed_ids = state
+                        .db
+                        .record_bulk_flag_changes(&account_id, &batch, Some(true), None, None)
+                        .unwrap_or_else(|_| chunk.iter().map(|(id, _)| *id).collect());
+                    let bad = failed_ids.len();
+                    outcome.failed += bad;
+                    outcome.updated += chunk.len().saturating_sub(bad);
+                }
                 let policy = account_policy(&state, &account_id).unwrap_or_default();
                 let _ =
                     mail::refresh_mailbox_envelopes(&account, &password, &name, &state.db, &policy)
                         .await;
             }
+        }
+    }
+    if !marked_remotely {
+        for chunk in unread.chunks(200) {
+            let items: Vec<(i64, String, u32)> = chunk
+                .iter()
+                .map(|(id, uid)| (*id, name.clone(), *uid))
+                .collect();
+            let batch =
+                bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
+            outcome.updated += batch.updated;
+            outcome.queued += batch.queued;
+            outcome.failed += batch.failed;
         }
     }
     emit_message_change(&app, &account_id, None, "flags");
@@ -1705,6 +1707,7 @@ impl mail::SyncHooks for SearchHooks {
     async fn yield_account(&mut self) {
         self.guard.take();
         tokio::task::yield_now().await;
+        self.actor.request(super::wake::OPERATION);
         self.guard = Some(self.actor.acquire().await);
     }
 
@@ -1789,6 +1792,10 @@ mod download_parse_settle_tests {
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -1981,6 +1988,10 @@ mod undo_session_tls_tests {
                 notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: EMAIL.into(),
                 display_name: "Undo session integration fixture".into(),
                 sync_state: "idle".into(),
@@ -2408,6 +2419,10 @@ mod eml_save_tests {
                 notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::ProtonBridge,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "fixture@example.test".into(),
                 display_name: "Fixture".into(),
                 sync_state: "idle".into(),

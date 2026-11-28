@@ -42,8 +42,8 @@ use crate::{
     db::Database,
     mail,
     models::{
-        normalize_setup_password, validate_compose_draft, validate_compose_sender, AccountRecord,
-        CachePolicy, ComposeDraft, IpcError, SyncState,
+        validate_compose_draft, validate_compose_sender, AccountRecord, CachePolicy, ComposeDraft,
+        IpcError, SyncState,
     },
     oauth,
     settings::SettingsStore,
@@ -68,9 +68,14 @@ fn refresh_mail_menu(app: &AppHandle, state: &AppState) {
 
 fn take_normalized_account_password(
     provider: &crate::models::ProviderKind,
+    provider_id: Option<&str>,
     mut password: Zeroizing<String>,
 ) -> Result<Zeroizing<String>, IpcError> {
-    let normalized = Zeroizing::new(normalize_setup_password(provider, &password));
+    let normalized = Zeroizing::new(crate::models::normalize_setup_password_for(
+        provider,
+        provider_id,
+        &password,
+    ));
     password.zeroize();
     if normalized.is_empty() || normalized.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
@@ -687,6 +692,17 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             Ok(password) => password,
             Err(error) => {
                 drop(guard);
+                if account.summary.auth_method == "password" && error.contains("is missing") {
+                    let detail =
+                        "Sign-in failed. Update the account password in Settings > Accounts.";
+                    let _ = state
+                        .db
+                        .set_account_state(account_id, "authFailed", Some(detail));
+                    emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                    parked = true;
+                    more_work = false;
+                    continue;
+                }
                 let detail = if account.summary.auth_method == "oauth" {
                     error
                 } else {
@@ -715,6 +731,14 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             .flatten()
             .and_then(|value| parse_rfc3339(&value).ok())
             .map(|when| std::time::Duration::try_from(when - now_utc()).unwrap_or(Duration::ZERO));
+        let next_retry = state
+            .db
+            .next_retry_after(account_id)
+            .ok()
+            .flatten()
+            .and_then(|value| parse_rfc3339(&value).ok())
+            .map(|when| std::time::Duration::try_from(when - now_utc()).unwrap_or(Duration::ZERO));
+        let next_outbox = [next_send, next_retry].into_iter().flatten().min();
         // Autosave does not wake the worker; push pending drafts after a
         // short quiet period instead of on every keystroke-driven save.
         let drafts_pending = state
@@ -724,7 +748,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         let deferred_due = state.db.next_deferred_due(account_id).ok().flatten();
         let folder_due = state.visible_folder_due(account_id);
         let next_job = [
-            next_send,
+            next_outbox,
             drafts_pending.then_some(DRAFT_PUSH_DELAY),
             deferred_due,
             folder_due,
@@ -763,7 +787,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             Ok(mail::IdleOutcome::Changed) => pending_full = true,
             Ok(mail::IdleOutcome::Timeout) if job_due_first => {
                 let mut jobs = 0;
-                if next_send.is_some_and(|due| due <= limit) {
+                if next_outbox.is_some_and(|due| due <= limit) {
                     jobs |= wake::OUTBOX;
                 }
                 if drafts_pending {
@@ -779,8 +803,20 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             }
             Ok(mail::IdleOutcome::Timeout) => pending_full = true,
             Ok(mail::IdleOutcome::Interrupted) => {}
-            Err(_) => {
+            Err(error) => {
                 held.take();
+                if error.kind == mail::failure::FailureKind::SignInRejected {
+                    mail::pool::forget(account_id);
+                    let detail =
+                        "Sign-in failed. Update the account password in Settings > Accounts.";
+                    let _ = state
+                        .db
+                        .set_account_state(account_id, "authFailed", Some(detail));
+                    emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                    parked = true;
+                    more_work = false;
+                    continue;
+                }
                 let _ = state.db.set_account_state(
                     account_id,
                     "offline",
@@ -2300,6 +2336,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -2617,6 +2657,7 @@ mod tests {
     fn update_password_keeps_the_normalized_secret() {
         let secret = take_normalized_account_password(
             &ProviderKind::Icloud,
+            None,
             zeroize::Zeroizing::new("  family-secret  ".into()),
         )
         .expect("normalized password");

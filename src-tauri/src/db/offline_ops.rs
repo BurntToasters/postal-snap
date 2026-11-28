@@ -103,147 +103,41 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let tx = conn.transaction().map_err(db_error)?;
-        let (
-            source_mailbox_id,
-            pending_destination_id,
-            was_read,
-            source_overlay_active,
-            destination_overlay_active,
-            allows_keywords,
-        ): (i64, Option<i64>, bool, bool, bool, bool) = tx
-            .prepare_cached(
-                "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
-                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
-                         COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0),
-                         s.allows_keywords != 0
-                 FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
-                 LEFT JOIN mailboxes d ON d.id=m.pending_move_to
-                 WHERE m.id=?1 AND m.account_id=?2",
-            )
-            .map_err(db_error)?
-            .query_row(params![message_id, account_id], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })
-            .optional()
-            .map_err(db_error)?
-            .ok_or_else(|| "Message not found.".to_string())?;
-        let color_update: Option<i64> = match color {
-            Some(ColorChange::Set(value)) if allows_keywords => Some(i64::from(value)),
-            Some(ColorChange::Set(_)) | Some(ColorChange::Clear) => Some(0),
-            None if is_starred == Some(false) => Some(0),
-            None => None,
-        };
-        let operations: Vec<(i64, String)> = {
-            let mut statement = tx.prepare_cached(
-                "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='flags' AND json_valid(payload) AND json_extract(payload,'$.messageId')=?2 ORDER BY id"
-            ).map_err(db_error)?;
-            let rows = statement
-                .query_map(params![account_id, message_id], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-                .map_err(db_error)?
-                .collect::<Result<_, _>>()
-                .map_err(db_error)?;
-            rows
-        };
-        for (id, payload) in operations {
-            let mut operation: serde_json::Value = serde_json::from_str(&payload)
-                .map_err(|_| "Queued flag change could not be read.".to_string())?;
-            if is_read.is_some() {
-                operation["isRead"] = serde_json::Value::Null;
-            }
-            if is_starred.is_some() {
-                operation["isStarred"] = serde_json::Value::Null;
-                operation["flagColor"] = serde_json::Value::Null;
-            }
-            let has_read = !operation["isRead"].is_null();
-            let has_star = !operation["isStarred"].is_null();
-            if !has_read && !has_star {
-                tx.prepare_cached("DELETE FROM offline_ops WHERE id=?1")
-                    .map_err(db_error)?
-                    .execute([id])
-                    .map_err(db_error)?;
-                continue;
-            }
-            let dedupe = flag_dedupe_key(message_id, has_read, has_star, &operation);
-            let collision: Option<i64> = tx
-                .prepare_cached(
-                    "SELECT id FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
-                )
-                .map_err(db_error)?
-                .query_row(params![account_id, dedupe, id], |row| row.get(0))
-                .optional()
-                .map_err(db_error)?;
-            if let Some(other_id) = collision {
-                let older = id.min(other_id);
-                tx.prepare_cached("DELETE FROM offline_ops WHERE id=?1")
-                    .map_err(db_error)?
-                    .execute([older])
-                    .map_err(db_error)?;
-                if older == id {
-                    continue;
-                }
-            }
-            tx.prepare_cached("UPDATE offline_ops SET payload=?2,dedupe_key=?3,state='queued',attempts=0 WHERE id=?1")
-                .map_err(db_error)?
-                .execute(params![id, operation.to_string(), dedupe])
-                .map_err(db_error)?;
-        }
-        if let Some(operation) = queued {
-            for (read, star) in [(is_read, None), (None, is_starred)] {
-                if read.is_none() && star.is_none() {
-                    continue;
-                }
-                let mut field = operation.clone();
-                field["isRead"] = read
-                    .map(serde_json::Value::Bool)
-                    .unwrap_or(serde_json::Value::Null);
-                field["isStarred"] = star
-                    .map(serde_json::Value::Bool)
-                    .unwrap_or(serde_json::Value::Null);
-                if star.is_none() {
-                    field["flagColor"] = serde_json::Value::Null;
-                }
-                let dedupe = flag_dedupe_key(message_id, read.is_some(), star.is_some(), &field);
-                tx.prepare_cached(
-                    "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
-                     ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP,state='queued',attempts=0",
-                )
-                .map_err(db_error)?
-                .execute(params![account_id, field.to_string(), dedupe])
-                .map_err(db_error)?;
-            }
-        }
-        tx.prepare_cached(
-            "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred),flag_color=COALESCE(?4,flag_color) WHERE id=?1",
-        )
-        .map_err(db_error)?
-        .execute(params![
-            message_id,
-            is_read.map(i32::from),
-            is_starred.map(i32::from),
-            color_update,
-        ])
-        .map_err(db_error)?;
-        if let Some(is_read) = is_read.filter(|value| *value != was_read) {
-            let delta = if is_read { -1 } else { 1 };
-            if pending_destination_id.is_none() || !source_overlay_active {
-                adjust_mailbox_counts(&tx, source_mailbox_id, 0, Some(delta))?;
-            }
-            if let Some(destination_id) =
-                pending_destination_id.filter(|_| destination_overlay_active)
-            {
-                adjust_mailbox_counts(&tx, destination_id, 0, Some(delta))?;
-            }
-        }
+        record_colored_flag_change_tx(&tx, account_id, message_id, is_read, is_starred, color, queued)?;
         tx.commit().map_err(db_error)
+    }
+
+    pub fn record_bulk_flag_changes(
+        &self,
+        account_id: &str,
+        items: &[(i64, Option<&serde_json::Value>)],
+        is_read: Option<bool>,
+        is_starred: Option<bool>,
+        color: Option<ColorChange>,
+    ) -> Result<Vec<i64>, String> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn()?;
+        let tx = conn.transaction().map_err(db_error)?;
+        let mut failed = Vec::new();
+        for (message_id, queued) in items {
+            if record_colored_flag_change_tx(
+                &tx,
+                account_id,
+                *message_id,
+                is_read,
+                is_starred,
+                color,
+                *queued,
+            )
+            .is_err()
+            {
+                failed.push(*message_id);
+            }
+        }
+        tx.commit().map_err(db_error)?;
+        Ok(failed)
     }
 
     /// Local flag color after a replayed change. Mailboxes without keywords
@@ -744,6 +638,161 @@ impl Database {
 }
 }
 
+fn record_colored_flag_change_tx(
+    tx: &rusqlite::Transaction<'_>,
+    account_id: &str,
+    message_id: i64,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    color: Option<ColorChange>,
+    queued: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let (
+        source_mailbox_id,
+        pending_destination_id,
+        was_read,
+        source_overlay_active,
+        destination_overlay_active,
+        allows_keywords,
+    ): (i64, Option<i64>, bool, bool, bool, bool) = tx
+        .prepare_cached(
+            "SELECT m.mailbox_id,m.pending_move_to,m.is_read != 0,
+                     COALESCE(m.pending_move_to IS NOT NULL AND m.pending_source_generation=s.counts_generation,0),
+                     COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0),
+                     s.allows_keywords != 0
+             FROM messages m JOIN mailboxes s ON s.id=m.mailbox_id
+             LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+             WHERE m.id=?1 AND m.account_id=?2",
+        )
+        .map_err(db_error)?
+        .query_row(params![message_id, account_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| "Message not found.".to_string())?;
+    let color_update: Option<i64> = match color {
+        Some(ColorChange::Set(value)) if allows_keywords => Some(i64::from(value)),
+        Some(ColorChange::Set(_)) | Some(ColorChange::Clear) => Some(0),
+        None if is_starred == Some(false) => Some(0),
+        None => None,
+    };
+    let operations: Vec<(i64, String)> = {
+        let mut statement = tx
+            .prepare_cached(
+                "SELECT id,payload FROM offline_ops WHERE account_id=?1 AND kind='flags' AND json_valid(payload) AND json_extract(payload,'$.messageId')=?2 ORDER BY id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![account_id, message_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<_, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    for (id, payload) in operations {
+        let mut operation: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|_| "Queued flag change could not be read.".to_string())?;
+        if is_read.is_some() {
+            operation["isRead"] = serde_json::Value::Null;
+        }
+        if is_starred.is_some() {
+            operation["isStarred"] = serde_json::Value::Null;
+            operation["flagColor"] = serde_json::Value::Null;
+        }
+        let has_read = !operation["isRead"].is_null();
+        let has_star = !operation["isStarred"].is_null();
+        if !has_read && !has_star {
+            tx.prepare_cached("DELETE FROM offline_ops WHERE id=?1")
+                .map_err(db_error)?
+                .execute([id])
+                .map_err(db_error)?;
+            continue;
+        }
+        let dedupe = flag_dedupe_key(message_id, has_read, has_star, &operation);
+        let collision: Option<i64> = tx
+            .prepare_cached(
+                "SELECT id FROM offline_ops WHERE account_id=?1 AND dedupe_key=?2 AND id<>?3",
+            )
+            .map_err(db_error)?
+            .query_row(params![account_id, dedupe, id], |row| row.get(0))
+            .optional()
+            .map_err(db_error)?;
+        if let Some(other_id) = collision {
+            let older = id.min(other_id);
+            tx.prepare_cached("DELETE FROM offline_ops WHERE id=?1")
+                .map_err(db_error)?
+                .execute([older])
+                .map_err(db_error)?;
+            if older == id {
+                continue;
+            }
+        }
+        tx.prepare_cached(
+            "UPDATE offline_ops SET payload=?2,dedupe_key=?3,state='queued',attempts=0 WHERE id=?1",
+        )
+        .map_err(db_error)?
+        .execute(params![id, operation.to_string(), dedupe])
+        .map_err(db_error)?;
+    }
+    if let Some(operation) = queued {
+        for (read, star) in [(is_read, None), (None, is_starred)] {
+            if read.is_none() && star.is_none() {
+                continue;
+            }
+            let mut field = operation.clone();
+            field["isRead"] = read
+                .map(serde_json::Value::Bool)
+                .unwrap_or(serde_json::Value::Null);
+            field["isStarred"] = star
+                .map(serde_json::Value::Bool)
+                .unwrap_or(serde_json::Value::Null);
+            if star.is_none() {
+                field["flagColor"] = serde_json::Value::Null;
+            }
+            let dedupe = flag_dedupe_key(message_id, read.is_some(), star.is_some(), &field);
+            tx.prepare_cached(
+                "INSERT INTO offline_ops(account_id,kind,payload,dedupe_key) VALUES(?1,'flags',?2,?3)
+                 ON CONFLICT(account_id,dedupe_key) DO UPDATE SET payload=excluded.payload,created_at=CURRENT_TIMESTAMP,state='queued',attempts=0",
+            )
+            .map_err(db_error)?
+            .execute(params![account_id, field.to_string(), dedupe])
+            .map_err(db_error)?;
+        }
+    }
+    tx.prepare_cached(
+        "UPDATE messages SET is_read=COALESCE(?2,is_read),is_starred=COALESCE(?3,is_starred),flag_color=COALESCE(?4,flag_color) WHERE id=?1",
+    )
+    .map_err(db_error)?
+    .execute(params![
+        message_id,
+        is_read.map(i32::from),
+        is_starred.map(i32::from),
+        color_update,
+    ])
+    .map_err(db_error)?;
+    if let Some(is_read) = is_read.filter(|value| *value != was_read) {
+        let delta = if is_read { -1 } else { 1 };
+        if pending_destination_id.is_none() || !source_overlay_active {
+            adjust_mailbox_counts(tx, source_mailbox_id, 0, Some(delta))?;
+        }
+        if let Some(destination_id) = pending_destination_id.filter(|_| destination_overlay_active)
+        {
+            adjust_mailbox_counts(tx, destination_id, 0, Some(delta))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -766,6 +815,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: ACCOUNT.into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

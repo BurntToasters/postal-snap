@@ -408,7 +408,11 @@ export function useMessageSelection({
           strings.mail.bulkPartial(outcome.failed),
         );
       else if (outcome.queued > 0)
-        setScopedSelectionError(scope, strings.mail.copyQueued);
+        useAppStore.getState().pushNotice({
+          severity: "info",
+          message: strings.mail.copyQueued,
+          timeoutMs: 4_000,
+        });
       await loadAccountData();
     } catch (cause) {
       setScopedSelectionError(scope, errorText(cause));

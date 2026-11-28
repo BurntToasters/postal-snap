@@ -392,7 +392,11 @@ export function MessageBody({
             value={findQuery}
             onChange={(event) => onFindQueryChange(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && event.shiftKey) {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                onCloseFind();
+              } else if (event.key === "Enter" && event.shiftKey) {
                 event.preventDefault();
                 onFindPrevious();
               }

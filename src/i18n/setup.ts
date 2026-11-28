@@ -29,7 +29,7 @@ export const setup = {
   other: "Other email account",
   otherDetail: "Find secure settings or enter IMAP and SMTP yourself",
   supportedProviders:
-    "Built-in help for Fastmail, Yahoo, AOL, Zoho, mailbox.org, and GMX.",
+    "Built-in presets for Gmail, Fastmail, Yahoo, AOL, Zoho, mailbox.org, GMX, WEB.DE, Posteo, Purelymail, and custom-domain hosts.",
   privacy: "No tracking. No Postal Snap cloud.",
   displayTitle: "Display",
   displayHint: "Updates right away. Change it anytime in Settings.",
@@ -46,8 +46,26 @@ export const setup = {
   findingSettings: "Finding secure settings…",
   settingsFound: (name: string) =>
     `Secure settings found for ${name}. Review them below.`,
+  settingsFoundCompact: (name: string) => `Secure settings found for ${name}.`,
+  reviewServerSettings: "Review or edit server settings",
   settingsNotFound:
     "Postal Snap could not find secure settings. Enter the server settings manually.",
+  gmail2svHint:
+    "Turn on 2-Step Verification on your Google Account, then create a 16-character App Password. Google Workspace accounts may need an administrator to allow App Passwords.",
+  imapEnableHint:
+    "Make sure IMAP access is enabled in your webmail settings before connecting.",
+  icloudCustomDomainHint:
+    "This custom domain uses iCloud+. For server username, enter your primary @icloud.com address (or its local part) — not your custom-domain address.",
+  fastmailCustomDomainHint:
+    "This custom domain uses Fastmail. For server username, enter your primary Fastmail login address if different from your alias.",
+  gmailPlaceholder: "xxxx xxxx xxxx xxxx",
+  standardPasswordPlaceholder: "Enter your password",
+  serverCertificateHint:
+    "Check that the server hostname is correct and not intercepted on your network.",
+  authHintAppPassword: (name: string) =>
+    `Create an app-specific password in your ${name} account, then paste it here. Your normal account password will not work.`,
+  authHintAppPassword2fa: (name: string) =>
+    `Check the username, server settings, and password. If two-factor authentication is on in ${name}, create and use an app-specific password.`,
   normalPasswordWarning:
     "Do not use your normal Apple Account password. iCloud Mail needs an app-specific password.",
   providerPasswordWarning: (name: string) =>

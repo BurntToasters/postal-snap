@@ -57,6 +57,26 @@ function emailDomain(address: string) {
         .toLowerCase();
 }
 
+function emailLocalPart(address: string) {
+  const at = address.indexOf("@");
+  return at < 0 ? address.trim() : address.slice(0, at).trim();
+}
+
+function setupHintText(key: string | null | undefined): string | undefined {
+  switch (key) {
+    case "gmail2sv":
+      return strings.setup.gmail2svHint;
+    case "imapEnable":
+      return strings.setup.imapEnableHint;
+    case "icloudCustomDomain":
+      return strings.setup.icloudCustomDomainHint;
+    case "fastmailCustomDomain":
+      return strings.setup.fastmailCustomDomainHint;
+    default:
+      return undefined;
+  }
+}
+
 const iCloudImapSummary = {
   host: "imap.mail.me.com",
   port: 993,
@@ -88,7 +108,9 @@ export function SetupWizard({
   // never go to servers found for a different (for example mistyped) domain.
   const [discoveredDomain, setDiscoveredDomain] = useState<string>();
   const [discovering, setDiscovering] = useState(false);
+  const [serversExpanded, setServersExpanded] = useState(false);
   const emailRef = useRef(email);
+  const discoverySeqRef = useRef(0);
   const [cacheMode, setCacheMode] = useState<"recent" | "full">("recent");
   const [savedAccount, setSavedAccount] = useState<AccountSummary>();
   const [syncProgress, setSyncProgress] = useState<SyncProgress>();
@@ -101,6 +123,7 @@ export function SetupWizard({
     text: string;
     hint?: string;
     showAppPasswordLink?: boolean;
+    appPasswordUrl?: string;
   }>();
   const [helpLinkNotice, setHelpLinkNotice] = useState<string>();
 
@@ -113,17 +136,23 @@ export function SetupWizard({
   }, [email, provider]);
 
   const request = useMemo<AccountSetupRequest>(() => {
-    const accountProvider =
-      discovery?.status === "found"
-        ? discovery.accountProvider
-        : (provider ?? "icloud");
+    const foundProvider = discovery?.status === "found" ? discovery : undefined;
+    const accountProvider = foundProvider
+      ? foundProvider.accountProvider
+      : (provider ?? "icloud");
     return {
       provider: accountProvider,
+      ...(foundProvider?.providerId
+        ? { providerId: foundProvider.providerId }
+        : {}),
       certificateReference:
         accountProvider === "protonBridge" ? certificateReference : undefined,
       displayName: displayName.trim(),
       email: normalizedEmail,
-      password: preparePassword(provider ?? "icloud", password),
+      password: preparePassword(provider ?? "icloud", password, {
+        providerId: foundProvider?.providerId,
+        passwordFormat: foundProvider?.passwordFormat,
+      }),
       imap: accountProvider !== "icloud" ? trimServer(imap) : undefined,
       smtp: accountProvider !== "icloud" ? trimServer(smtp) : undefined,
       cachePolicy: {
@@ -188,6 +217,7 @@ export function SetupWizard({
 
   function forgetDiscoveredServers(username: string) {
     setDiscovery(undefined);
+    setServersExpanded(false);
     if (discoveredDomain === undefined) return;
     setDiscoveredDomain(undefined);
     setImap(emptyManualImap(username));
@@ -195,6 +225,8 @@ export function SetupWizard({
   }
 
   function chooseProvider(next: ProviderKind) {
+    discoverySeqRef.current++;
+    setDiscovering(false);
     const username = email.trim();
     setProvider(next);
     setCertificateReference(undefined);
@@ -202,25 +234,28 @@ export function SetupWizard({
     setShowPassword(false);
     setStatus(undefined);
     setHelpLinkNotice(undefined);
-    forgetDiscoveredServers(username);
+    setDiscovery(undefined);
+    setDiscoveredDomain(undefined);
+    setServersExpanded(false);
     if (next === "protonBridge") {
       setImap({ host: "127.0.0.1", port: 1143, tlsMode: "startTls", username });
       setSmtp({ host: "127.0.0.1", port: 1025, tlsMode: "startTls", username });
-    }
-    if (next === "manual" && discoveredDomain === undefined) {
-      setImap((current) =>
-        current.host ? current : emptyManualImap(username),
-      );
-      setSmtp((current) =>
-        current.host ? current : emptyManualSmtp(username),
-      );
+    } else {
+      setImap(emptyManualImap(username));
+      setSmtp(emptyManualSmtp(username));
     }
   }
 
   function returnToProviderPicker() {
+    discoverySeqRef.current++;
+    setDiscovering(false);
     setProvider(undefined);
     setCertificateReference(undefined);
-    forgetDiscoveredServers(email.trim());
+    setDiscovery(undefined);
+    setDiscoveredDomain(undefined);
+    setServersExpanded(false);
+    setImap(emptyManualImap(""));
+    setSmtp(emptyManualSmtp(""));
     setPassword("");
     setShowPassword(false);
     setStatus(undefined);
@@ -228,46 +263,59 @@ export function SetupWizard({
   }
 
   async function discoverSettings() {
-    if (discovering) return;
+    const query = email.trim();
+    if (!query || !query.includes("@")) return false;
+    const seq = ++discoverySeqRef.current;
     setDiscovering(true);
     setStatus(undefined);
     setDiscovery(undefined);
-    const query = email.trim();
     try {
       if (/@(proton\.me|protonmail\.com|protonmail\.ch|pm\.me)$/i.test(query)) {
         chooseProvider("protonBridge");
-        return;
+        return false;
       }
       const found = await api.discoverMailSettings(query);
-      if (emailRef.current.trim() !== query) return;
+      if (!found) return false;
+      if (seq !== discoverySeqRef.current || emailRef.current.trim() !== query)
+        return false;
       setDiscovery(found);
       if (found.status === "found") {
         setDiscoveredDomain(emailDomain(query));
         setImap(found.imap);
         setSmtp(found.smtp);
-      } else {
-        setDiscoveredDomain(undefined);
-        setImap(emptyManualImap(query));
-        setSmtp(emptyManualSmtp(query));
+        const expandForCustomDomain =
+          found.setupHintKey === "icloudCustomDomain" ||
+          found.setupHintKey === "fastmailCustomDomain";
+        setServersExpanded(expandForCustomDomain);
+        return true;
       }
+      setDiscoveredDomain(undefined);
+      setServersExpanded(false);
+      setImap(emptyManualImap(query));
+      setSmtp(emptyManualSmtp(query));
+      return false;
     } catch (cause) {
-      if (emailRef.current.trim() !== query) return;
+      if (seq !== discoverySeqRef.current || emailRef.current.trim() !== query)
+        return false;
       const described = describeSetupError(cause, "manual");
       setStatus({
         kind: "error",
         text: described.text,
         hint: described.hint,
       });
+      return false;
     } finally {
-      setDiscovering(false);
+      if (seq === discoverySeqRef.current) setDiscovering(false);
     }
   }
 
   function updateEmail(value: string) {
     const previous = email.trim();
+    const prevLocal = emailLocalPart(previous);
     setEmail(value);
     if (provider !== "manual" && provider !== "protonBridge") return;
     const next = value.trim();
+    const nextLocal = emailLocalPart(next);
     if (
       discoveredDomain !== undefined &&
       emailDomain(next) !== discoveredDomain
@@ -275,19 +323,18 @@ export function SetupWizard({
       forgetDiscoveredServers(next);
       return;
     }
+    const syncUsername = (username: string) => {
+      if (!username || username === previous) return next;
+      if (prevLocal && username === prevLocal) return nextLocal;
+      return username;
+    };
     setImap((server) => ({
       ...server,
-      username:
-        !server.username || server.username === previous
-          ? next
-          : server.username,
+      username: syncUsername(server.username),
     }));
     setSmtp((server) => ({
       ...server,
-      username:
-        !server.username || server.username === previous
-          ? next
-          : server.username,
+      username: syncUsername(server.username),
     }));
   }
 
@@ -312,6 +359,15 @@ export function SetupWizard({
     event.preventDefault();
     if (!provider || testing) return;
     if (
+      provider === "manual" &&
+      !imap.host.trim() &&
+      normalizedEmail.includes("@") &&
+      discovery?.status !== "notFound"
+    ) {
+      await discoverSettings();
+      return;
+    }
+    if (
       discovery?.status === "found" &&
       emailDomain(normalizedEmail) !== discoveredDomain
     ) {
@@ -323,6 +379,7 @@ export function SetupWizard({
       kind: "working",
       text: strings.setup.testing,
     });
+    const foundProvider = discovery?.status === "found" ? discovery : undefined;
     try {
       const account = await api.addAccount(request);
       setStatus({ kind: "success", text: strings.setup.connected });
@@ -330,12 +387,18 @@ export function SetupWizard({
       setSavedAccount(account);
       onAccountSaved?.();
     } catch (cause) {
-      const described = describeSetupError(cause, provider);
+      const described = describeSetupError(cause, provider, {
+        providerId: foundProvider?.providerId,
+        providerName: foundProvider?.providerName,
+        appPasswordPolicy: foundProvider?.appPasswordPolicy,
+        appPasswordUrl: foundProvider?.appPasswordUrl,
+      });
       setStatus({
         kind: "error",
         text: described.text,
         hint: described.hint,
         showAppPasswordLink: described.showAppPasswordLink,
+        appPasswordUrl: described.appPasswordUrl,
       });
     } finally {
       setTesting(false);
@@ -345,9 +408,10 @@ export function SetupWizard({
   async function openHelpLink() {
     setHelpLinkNotice(undefined);
     const url =
-      discovery?.status === "found" && discovery.appPasswordUrl
+      status?.appPasswordUrl ??
+      (discovery?.status === "found" && discovery.appPasswordUrl
         ? discovery.appPasswordUrl
-        : APPLE_APP_PASSWORD_GUIDE_URL;
+        : APPLE_APP_PASSWORD_GUIDE_URL);
     const outcome = await inspectAndOpenExternalLink(url);
     if (outcome === "failed")
       setHelpLinkNotice(
@@ -537,7 +601,18 @@ export function SetupWizard({
   const FormTitle = embedded ? "h2" : "h1";
   const foundProvider = discovery?.status === "found" ? discovery : undefined;
   const requiresAppPassword =
-    provider === "icloud" || Boolean(foundProvider?.appPasswordUrl);
+    provider === "icloud" ||
+    Boolean(
+      foundProvider?.appPasswordUrl &&
+      foundProvider.appPasswordPolicy !== "none",
+    );
+  const setupHint = setupHintText(foundProvider?.setupHintKey);
+  const passwordPlaceholder =
+    provider === "icloud" || foundProvider?.passwordFormat === "appleHyphenated"
+      ? strings.setup.appPasswordPlaceholder
+      : foundProvider?.passwordFormat === "groupedSpaces"
+        ? strings.setup.gmailPlaceholder
+        : undefined;
 
   if (provider === "manual" && discovery?.status === "unsupported") {
     return (
@@ -706,6 +781,11 @@ export function SetupWizard({
             </button>
           </div>
         ) : null}
+        {setupHint ? (
+          <p className="setup-field-hint" role="note">
+            {setupHint}
+          </p>
+        ) : null}
         <div className="form-grid two-columns">
           <label>
             {strings.setup.yourName}
@@ -736,6 +816,13 @@ export function SetupWizard({
                   !email.includes("@")
                 ) {
                   setEmail(`${email.trim()}@icloud.com`);
+                } else if (
+                  provider === "manual" &&
+                  email.trim().includes("@") &&
+                  discoveredDomain !== emailDomain(email.trim()) &&
+                  !discovering
+                ) {
+                  void discoverSettings();
                 }
               }}
               placeholder={
@@ -783,11 +870,7 @@ export function SetupWizard({
                 requiresAppPassword ? "setup-password-hint" : undefined
               }
               onChange={(event) => setPassword(event.target.value)}
-              placeholder={
-                requiresAppPassword
-                  ? strings.setup.appPasswordPlaceholder
-                  : undefined
-              }
+              placeholder={passwordPlaceholder}
             />
             <button
               type="button"
@@ -837,6 +920,30 @@ export function SetupWizard({
               </div>
             </dl>
           </div>
+        ) : foundProvider ? (
+          <details
+            className="server-settings-details"
+            open={serversExpanded}
+            onToggle={(event) =>
+              setServersExpanded(
+                (event.currentTarget as HTMLDetailsElement).open,
+              )
+            }
+          >
+            <summary>{strings.setup.reviewServerSettings}</summary>
+            <div className="server-settings">
+              <ServerFields
+                title={strings.setup.incoming}
+                value={imap}
+                onChange={(patch) => updateServer("imap", patch)}
+              />
+              <ServerFields
+                title={strings.setup.outgoing}
+                value={smtp}
+                onChange={(patch) => updateServer("smtp", patch)}
+              />
+            </div>
+          </details>
         ) : (
           <div className="server-settings">
             <ServerFields

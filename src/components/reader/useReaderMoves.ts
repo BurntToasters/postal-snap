@@ -95,9 +95,12 @@ export function useReaderMoves({
       return;
     }
     const after = useAppStore.getState();
+    const stillInList = after.messages.some(
+      (summary) => summary.id === message.id,
+    );
     if (
       after.activeAccountId !== message.accountId ||
-      after.activeMailboxId !== message.mailboxId ||
+      (after.activeMailboxId !== message.mailboxId && !stillInList) ||
       after.activeLocalView ||
       (after.selectedMessage && after.selectedMessage.id !== message.id)
     )
@@ -142,23 +145,27 @@ export function useReaderMoves({
       const detail = await api.getMessage(next.accountId, next.id);
       if (!isCurrentMessageOpen(request)) return;
       const current = useAppStore.getState();
+      const stillInList = current.messages.some((item) => item.id === next.id);
       if (
         current.activeAccountId !== next.accountId ||
-        current.activeMailboxId !== next.mailboxId ||
+        (current.activeMailboxId !== next.mailboxId && !stillInList) ||
         current.activeLocalView
       )
         return;
       selectMessage(detail);
-      if (next.isRead) return;
+      if (next.isRead && detail.isRead) return;
       const readyToMark = await waitToMarkRead(
         useAppStore.getState().settings.markRead,
         () => {
           const latest = useAppStore.getState();
+          const latestInList = latest.messages.some(
+            (item) => item.id === next.id,
+          );
           return (
             isCurrentMessageOpen(request) &&
             latest.selectedMessage?.id === next.id &&
             latest.activeAccountId === next.accountId &&
-            latest.activeMailboxId === next.mailboxId &&
+            (latest.activeMailboxId === next.mailboxId || latestInList) &&
             !latest.activeLocalView
           );
         },

@@ -251,10 +251,12 @@ pub async fn exchange_code(
     if !response.status().is_success() {
         return Err("Sign-in was not completed.".to_string());
     }
-    let body = response
-        .text()
-        .await
-        .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())?;
+    let body = Zeroizing::new(
+        response
+            .text()
+            .await
+            .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())?,
+    );
     serde_json::from_str::<TokenResponse>(&body)
         .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())
 }
@@ -283,10 +285,12 @@ pub async fn refresh_access_token(
     if !response.status().is_success() {
         return Err("The saved sign-in expired. Sign in again.".to_string());
     }
-    let body = response
-        .text()
-        .await
-        .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())?;
+    let body = Zeroizing::new(
+        response
+            .text()
+            .await
+            .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())?,
+    );
     serde_json::from_str::<TokenResponse>(&body)
         .map_err(|_| "The sign-in service returned an unreadable reply.".to_string())
 }
@@ -301,11 +305,22 @@ pub fn xoauth2_initial_response(username: &str, access_token: &str) -> String {
 fn oauth_entry(account_id: &str) -> Result<keyring::Entry, String> {
     let id = uuid::Uuid::parse_str(account_id)
         .map_err(|_| "The account sign-in store is invalid.".to_string())?;
-    keyring::Entry::new(
-        "Postal Snap OAuth",
-        &format!("oauth-refresh:{}", id.hyphenated()),
-    )
-    .map_err(|_| "The account sign-in store is unavailable.".to_string())
+    let user = format!("oauth-refresh:{}", id.hyphenated());
+    #[cfg(target_os = "windows")]
+    {
+        if keyring::Entry::store_status().is_err() {
+            return Err("The account sign-in store is unavailable.".into());
+        }
+        let modifiers = std::collections::HashMap::from([("persistence", "local")]);
+        let inner = keyring_core::Entry::new_with_modifiers("Postal Snap OAuth", &user, &modifiers)
+            .map_err(|_| "The account sign-in store is unavailable.".to_string())?;
+        Ok(keyring::Entry { inner })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        keyring::Entry::new("Postal Snap OAuth", &user)
+            .map_err(|_| "The account sign-in store is unavailable.".to_string())
+    }
 }
 
 /// Persist OAuth tokens in the native vault, separate from passwords.

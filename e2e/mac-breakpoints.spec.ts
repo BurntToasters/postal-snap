@@ -113,6 +113,7 @@ test("FM2 reader overlay switches after 760px and setup card after 560px", async
 test("FM3 no horizontal scroll at boundary widths", async ({
   page,
 }, testInfo) => {
+  test.slow();
   const results: Record<string, boolean> = {};
   for (const density of DENSITIES) {
     for (const scale of [1, 2]) {

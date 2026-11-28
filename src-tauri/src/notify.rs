@@ -383,6 +383,10 @@ mod tests {
             summary: AccountSummary {
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

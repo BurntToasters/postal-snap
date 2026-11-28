@@ -747,7 +747,7 @@ test("D13 SetupWizard progress list semantics and standalone unsupported discove
   expect(nonListItems).toBe(0);
 
   await page.getByRole("button", { name: /Other email account/i }).click();
-  await page.getByLabel("Email address").fill("user@gmail.com");
+  await page.getByLabel("Email address").fill("user@outlook.com");
   await page.getByRole("button", { name: /Find settings/i }).click();
   await expect(page.locator("h1#setup-form-title")).toBeVisible();
 });

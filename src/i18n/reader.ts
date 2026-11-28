@@ -173,8 +173,10 @@ export const reader = {
   nextFile: "Next file",
   zoomIn: "Zoom in",
   zoomOut: "Zoom out",
+  zoomReset: "Reset zoom",
   previewTitle: (filename: string) => `Preview of ${filename}`,
   pdfPageAlt: (page: number, total: number) => `Page ${page} of ${total}`,
+  pdfPages: (count: number) => (count === 1 ? "1 page" : `${count} pages`),
   pagesTruncated:
     "Only the first pages are shown. Save the file to see the rest.",
   openEmlFile: "Open email file…",

@@ -234,10 +234,18 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       update_account_connection(args: Record<string, unknown>) {
         const item = ownedAccount(args.accountId);
+        const saved = connection(args.accountId);
+        const nextImap = args.imap as Partial<Server> | undefined;
+        const identityChanged =
+          (nextImap?.host ?? saved.imap.host).trim().toLowerCase() !==
+            saved.imap.host.toLowerCase() ||
+          (nextImap?.username ?? saved.imap.username).trim() !==
+            saved.imap.username;
         if (
-          params.has("pendingConnectionWork") ||
-          blockers(item.id).queuedChanges > 0 ||
-          blockers(item.id).unsentMessages > 0
+          identityChanged &&
+          (params.has("pendingConnectionWork") ||
+            blockers(item.id).queuedChanges > 0 ||
+            blockers(item.id).unsentMessages > 0)
         )
           throw {
             code: "pendingOperations",
@@ -521,13 +529,42 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
       },
       discover_mail_settings(args: Record<string, unknown>) {
         const email = String(args.email ?? "").toLowerCase();
-        if (email.endsWith("@gmail.com")) {
+        if (
+          email.endsWith("@outlook.com") ||
+          email.endsWith("@hotmail.com") ||
+          email.endsWith("@live.com")
+        ) {
           return {
             status: "unsupported",
+            providerId: "outlook",
+            providerName: "Outlook",
+            message:
+              "Outlook requires OAuth for third-party mail connections. Postal Snap does not support Outlook sign-in yet.",
+          };
+        }
+        if (email.endsWith("@gmail.com")) {
+          return {
+            status: "found",
             providerId: "gmail",
             providerName: "Gmail",
-            message:
-              "Gmail requires OAuth for new third-party mail connections. Postal Snap does not support Gmail sign-in yet.",
+            accountProvider: "manual",
+            source: "preset",
+            imap: {
+              host: "imap.gmail.com",
+              port: 993,
+              tlsMode: "tls",
+              username: email,
+            },
+            smtp: {
+              host: "smtp.gmail.com",
+              port: 465,
+              tlsMode: "tls",
+              username: email,
+            },
+            appPasswordUrl: "https://support.google.com/accounts/answer/185833",
+            appPasswordPolicy: "required",
+            passwordFormat: "groupedSpaces",
+            setupHintKey: "gmail2sv",
           };
         }
         if (email.endsWith("@fastmail.com")) {
@@ -551,6 +588,60 @@ export async function registerMockAccountsSetup(page: Page): Promise<void> {
             },
             appPasswordUrl:
               "https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords",
+            appPasswordPolicy: "required",
+            passwordFormat: "groupedSpaces",
+            setupHintKey: null,
+          };
+        }
+        if (email.endsWith("@icloud-custom.example")) {
+          return {
+            status: "found",
+            providerId: "icloud",
+            providerName: "iCloud Mail",
+            accountProvider: "manual",
+            source: "mx",
+            imap: {
+              host: "imap.mail.me.com",
+              port: 993,
+              tlsMode: "tls",
+              username: "",
+            },
+            smtp: {
+              host: "smtp.mail.me.com",
+              port: 587,
+              tlsMode: "startTls",
+              username: "",
+            },
+            appPasswordUrl: "https://support.apple.com/102654",
+            appPasswordPolicy: "required",
+            passwordFormat: "appleHyphenated",
+            setupHintKey: "icloudCustomDomain",
+          };
+        }
+        if (email.endsWith("@fastmail-custom.example")) {
+          return {
+            status: "found",
+            providerId: "fastmail",
+            providerName: "Fastmail",
+            accountProvider: "manual",
+            source: "mx",
+            imap: {
+              host: "imap.fastmail.com",
+              port: 993,
+              tlsMode: "tls",
+              username: email,
+            },
+            smtp: {
+              host: "smtp.fastmail.com",
+              port: 465,
+              tlsMode: "tls",
+              username: email,
+            },
+            appPasswordUrl:
+              "https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords",
+            appPasswordPolicy: "required",
+            passwordFormat: "groupedSpaces",
+            setupHintKey: "fastmailCustomDomain",
           };
         }
         if (email.endsWith("@autodetect.example")) {

@@ -339,7 +339,14 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   });
 
   const composerSubModalOpen = Boolean(
-    audienceWarning || confirmPlain || linkDialogOpen,
+    audienceWarning ||
+    confirmPlain ||
+    linkDialogOpen ||
+    bodyWarning ||
+    subjectWarning ||
+    attachmentWarning ||
+    duplicateWarning ||
+    noreplyWarning,
   );
   useEffect(() => {
     const windowEl = dialogRef.current;
@@ -1007,7 +1014,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             (account?.signatureHtml || account?.signature)) ||
             (bodyFormat === "plain" && account?.signature)) &&
           includeSignature &&
-          !seed?.draft &&
           !redirecting ? (
             <aside className="composer-signature-preview">
               <strong>{strings.composer.signaturePreview}</strong>

@@ -49,7 +49,7 @@ use crate::models::{
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 46;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 47;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
@@ -421,15 +421,13 @@ pub(crate) fn db_error(error: rusqlite::Error) -> String {
 }
 
 pub(crate) fn references_from_raw(raw: &[u8]) -> Vec<String> {
-    let text = match std::str::from_utf8(raw) {
-        Ok(text) => text,
-        Err(_) => return Vec::new(),
-    };
-    let header_end = text
+    let head = &raw[..raw.len().min(16 * 1024)];
+    let lossy = String::from_utf8_lossy(head);
+    let header_end = lossy
         .find("\r\n\r\n")
-        .or_else(|| text.find("\n\n"))
-        .unwrap_or(text.len());
-    let headers = &text[..header_end];
+        .or_else(|| lossy.find("\n\n"))
+        .unwrap_or(lossy.len());
+    let headers = &lossy[..header_end];
     let mut unfolded = String::with_capacity(headers.len());
     for line in headers.lines() {
         if line.starts_with([' ', '\t']) {
@@ -662,7 +660,9 @@ fn rebuild_fts_index(connection: &Connection) -> Result<(), String> {
         .execute_batch(
             "DELETE FROM message_fts;
              INSERT INTO message_fts(rowid, subject, sender, recipients, body)
-               SELECT id, subject, sender_name || ' ' || sender_address, recipients, text_body
+               SELECT id, subject, sender_name || ' ' || sender_address,
+                  recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
+                  text_body
                FROM messages;",
         )
         .map_err(db_error)?;

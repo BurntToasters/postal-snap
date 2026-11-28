@@ -481,7 +481,7 @@ test("connection identity repair explains pending work", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("incoming port change requires identity approval and honors pending blockers", async ({
+test("incoming port change skips identity approval while host change requires it and honors pending blockers", async ({
   page,
 }, testInfo) => {
   await page.goto("/?multiAccount=1&pendingConnectionWork=1");
@@ -495,6 +495,15 @@ test("incoming port change requires identity approval and honors pending blocker
     prompts += 1;
     await dialog.accept();
   });
+  await page
+    .getByRole("button", { name: "Test and save", exact: true })
+    .click();
+  expect(prompts).toBe(0);
+
+  await page
+    .getByRole("group", { name: "Incoming IMAP" })
+    .getByLabel("Server")
+    .fill("imap.changed.example");
   await page
     .getByRole("button", { name: "Test and save", exact: true })
     .click();

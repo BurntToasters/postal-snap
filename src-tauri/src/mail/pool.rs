@@ -41,6 +41,8 @@ pub struct Capabilities {
     pub special_use: bool,
     /// RFC 2971 ID.
     pub id: bool,
+    /// RFC 7888 LITERAL+ (non-synchronizing literals).
+    pub literal_plus: bool,
 }
 
 /// Capability flags from a server's advertised names. Matching is exact:
@@ -55,6 +57,7 @@ pub(super) fn advertised_flags(advertises: impl Fn(&str) -> bool) -> Capabilitie
         list_status: advertises("LIST-STATUS"),
         special_use: advertises("SPECIAL-USE"),
         id: advertises("ID"),
+        literal_plus: advertises("LITERAL+"),
     }
 }
 
@@ -445,5 +448,15 @@ mod tests {
         forget(id);
         assert!(!super::can_repark(id, gen));
         assert!(super::can_repark(id, super::generation_of(id)));
+    }
+
+    // Failure modes:
+    // 1. LITERAL+ capability is not recorded from CAPABILITY tokens.
+    #[test]
+    fn advertised_flags_record_literal_plus() {
+        let with_lit = ["IMAP4rev1", "LITERAL+"];
+        assert!(super::advertised_flags(|n| with_lit.contains(&n)).literal_plus);
+        let without_lit = ["IMAP4rev1"];
+        assert!(!super::advertised_flags(|n| without_lit.contains(&n)).literal_plus);
     }
 }

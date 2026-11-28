@@ -242,6 +242,7 @@ export function SettingsDialog({
     passwordInputs,
     setPasswordInputs,
     passwordStatus,
+    passwordErrors,
     updatingPasswordId,
     handleUpdatePassword,
     nameInputs,
@@ -278,6 +279,9 @@ export function SettingsDialog({
     updateRuleDraft,
     ruleErrors,
     handleAddRule,
+    editingRuleIds,
+    handleEditRule,
+    handleCancelEditRule,
     handlePreviewRule,
     handleMoveRule,
     handleToggleRule,
@@ -621,6 +625,13 @@ export function SettingsDialog({
               placeholder={strings.settings.search}
               value={query}
               onChange={(event) => void updateSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && query) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setQuery("");
+                }
+              }}
             />
             {query ? (
               <button
@@ -785,6 +796,7 @@ export function SettingsDialog({
                     passwordInputs={passwordInputs}
                     setPasswordInputs={setPasswordInputs}
                     passwordStatus={passwordStatus}
+                    passwordErrors={passwordErrors}
                     updatingPasswordId={updatingPasswordId}
                     handleUpdatePassword={handleUpdatePassword}
                     nameInputs={nameInputs}
@@ -809,6 +821,9 @@ export function SettingsDialog({
                     updateRuleDraft={updateRuleDraft}
                     ruleErrors={ruleErrors}
                     handleAddRule={handleAddRule}
+                    editingRuleIds={editingRuleIds}
+                    handleEditRule={handleEditRule}
+                    handleCancelEditRule={handleCancelEditRule}
                     savingRuleAccounts={savingRuleAccounts}
                     handlePreviewRule={handlePreviewRule}
                     handleMoveRule={handleMoveRule}

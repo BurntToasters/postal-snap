@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +103,8 @@ pub struct ServerConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AccountSetupRequest {
     pub provider: ProviderKind,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub email: String,
     pub display_name: String,
     pub password: String,
@@ -114,10 +117,17 @@ pub struct AccountSetupRequest {
     pub certificate_reference: Option<String>,
 }
 
+impl Drop for AccountSetupRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
 impl std::fmt::Debug for AccountSetupRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AccountSetupRequest")
             .field("provider", &self.provider)
+            .field("provider_id", &self.provider_id)
             .field("email", &self.email)
             .field("display_name", &self.display_name)
             .field("password", &"[REDACTED]")
@@ -132,6 +142,14 @@ impl std::fmt::Debug for AccountSetupRequest {
 pub struct AccountSummary {
     pub id: String,
     pub provider: ProviderKind,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub app_password_policy: Option<String>,
+    #[serde(default)]
+    pub app_password_url: Option<String>,
+    #[serde(default)]
+    pub password_format: Option<String>,
     pub email: String,
     pub display_name: String,
     pub sync_state: String,
@@ -155,6 +173,21 @@ pub struct AccountSummary {
     /// Arrival notifications for this account. Off keeps its mail silent.
     #[serde(default = "default_true")]
     pub notify_new_mail: bool,
+}
+
+impl AccountSummary {
+    pub fn with_provider_meta(mut self, imap_host: &str) -> Self {
+        let meta = crate::providers::provider_account_meta(
+            &self.provider,
+            self.provider_id.as_deref(),
+            imap_host,
+        );
+        self.provider_id = meta.provider_id;
+        self.app_password_policy = Some(meta.app_password_policy.as_str().to_string());
+        self.app_password_url = meta.app_password_url;
+        self.password_format = Some(meta.password_format.as_str().to_string());
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

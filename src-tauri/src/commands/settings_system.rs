@@ -161,6 +161,17 @@ pub async fn retry_attachment_cleanup(state: State<'_, AppState>) -> CommandResu
 
 #[tauri::command]
 pub async fn clear_downloaded_mail(state: State<'_, AppState>) -> CommandResult<()> {
+    let mut account_ids: Vec<String> = state
+        .db
+        .list_accounts()?
+        .into_iter()
+        .map(|account| account.id)
+        .collect();
+    account_ids.sort();
+    let mut guards = Vec::with_capacity(account_ids.len());
+    for id in &account_ids {
+        guards.push(state.lock_account(id).await?);
+    }
     let db = state.db.clone();
     let marker = state.compact_marker();
     // VACUUM rewrites the whole file; keep it off the async runtime.
@@ -709,6 +720,10 @@ mod save_prune_tests {
                 default_body_format: BodyFormat::Html,
                 id: id.into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

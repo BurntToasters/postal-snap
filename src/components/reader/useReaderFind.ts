@@ -22,8 +22,12 @@ export function useReaderFind({
   setFindStatus,
 }: Options) {
   function scrollMessage(direction: 1 | -1) {
-    const amount = Math.round(window.innerHeight * 0.85) * direction;
     const frameWindow = frame.current?.contentWindow;
+    const viewportHeight =
+      frameWindow?.innerHeight ||
+      bodyRef.current?.clientHeight ||
+      window.innerHeight;
+    const amount = Math.round(viewportHeight * 0.85) * direction;
     const scrolling = frameWindow
       ? (frameWindow.document.scrollingElement ??
         frameWindow.document.documentElement)

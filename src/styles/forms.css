@@ -64,6 +64,28 @@ textarea:focus-visible {
   gap: var(--space-4);
 }
 
+.server-settings-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.server-settings-details > summary {
+  cursor: pointer;
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+  list-style-position: inside;
+  min-height: var(--target-size);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.server-settings-details[open] > summary {
+  margin-bottom: var(--space-3);
+  color: var(--text);
+}
+
 .password-field {
   display: grid;
   grid-template-columns: 1fr var(--bar-height-sm);

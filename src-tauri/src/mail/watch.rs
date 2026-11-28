@@ -81,11 +81,17 @@ pub(crate) enum Refusal {
 /// Classify a raw IMAP error. Only the bracketed code is read; the text is
 /// never logged or returned.
 pub(crate) fn classify_refusal(error: &async_imap::error::Error) -> Refusal {
-    // Connection-cap replies carry a response code such as `[LIMIT]`.
+    // Connection-cap and transient server-busy replies must not park as SignInRejected.
     let limited = match error {
         async_imap::error::Error::No(text) | async_imap::error::Error::Bad(text) => {
             let upper = text.to_ascii_uppercase();
-            upper.contains("[LIMIT]") || upper.contains("[UNAVAILABLE]")
+            upper.contains("[LIMIT]")
+                || upper.contains("[UNAVAILABLE]")
+                || upper.contains("[INUSE]")
+                || upper.contains("[SERVERBUG]")
+                || upper.contains("[OVERQUOTA]")
+                || upper.contains("TOO MANY CONNECTIONS")
+                || upper.contains("TOO MANY SIMULTANEOUS")
         }
         _ => false,
     };
@@ -497,6 +503,10 @@ mod tests {
                 notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "fixture@example.test".into(),
                 display_name: "No IDLE fixture".into(),
                 sync_state: "idle".into(),
@@ -905,6 +915,31 @@ mod tests {
         assert_eq!(
             db.mailbox(raw).unwrap(),
             (account_id.clone(), "INBOX".into())
+        );
+    }
+
+    // Failure modes:
+    // 1. Transient [INUSE]/[SERVERBUG]/[OVERQUOTA]/connection-cap replies park as SignInRejected.
+    #[test]
+    fn classify_refusal_treats_transient_caps_and_server_errors_as_connection_limit() {
+        use async_imap::error::Error;
+        for text in [
+            "[INUSE] Account temporarily busy",
+            "[SERVERBUG] Internal server error",
+            "[OVERQUOTA] Rate limit exceeded",
+            "[LIMIT] Too many simultaneous connections",
+            "[UNAVAILABLE] Service temporarily unavailable",
+            "Too many connections from this IP",
+        ] {
+            assert_eq!(
+                classify_refusal(&Error::No(text.into())),
+                Refusal::ConnectionLimit,
+                "expected ConnectionLimit for {text}"
+            );
+        }
+        assert_eq!(
+            classify_refusal(&Error::No("[AUTHENTICATIONFAILED] Invalid password".into())),
+            Refusal::SignInRejected
         );
     }
 }

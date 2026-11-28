@@ -79,7 +79,7 @@ function useOptionalStable<A extends unknown[], R>(
 // Whole-summary snapshot taken at render: the list can hand back the same
 // object after an in-place change, so identity alone would hide it.
 function rowStateKey(message: MessageSummary): string {
-  return JSON.stringify(message);
+  return `${message.id}:${message.mailboxId}:${message.isRead ? 1 : 0}:${message.isStarred ? 1 : 0}:${message.flagColor ?? ""}:${message.pinned ? 1 : 0}:${message.isAnswered ? 1 : 0}:${message.isForwarded ? 1 : 0}:${message.conversationMuted ? 1 : 0}:${message.hasAttachments ? 1 : 0}:${message.attachmentCount ?? ""}:${message.hasCalendar ? 1 : 0}:${message.importance ?? ""}:${message.subject}:${message.preview}:${message.senderName}:${message.senderAddress}:${message.recipients}:${message.receivedAt}:${message.arrivedAt ?? ""}:${message.size}`;
 }
 
 type VisibleOption = {
@@ -268,6 +268,10 @@ export function MessageList({
   const settingsDensity = useAppStore((state) => state.settings.density);
   const settingsTextScale = useAppStore((state) => state.settings.textScale);
   const mailboxes = useAppStore((state) => state.mailboxes);
+  const mailboxById = useMemo(
+    () => new Map(mailboxes.map((box) => [box.id, box])),
+    [mailboxes],
+  );
   const accounts = useAppStore((state) => state.accounts);
   function sentByYou(message: MessageSummary): boolean {
     const account = accounts.find((item) => item.id === message.accountId);
@@ -280,13 +284,13 @@ export function MessageList({
   }
   function folderName(message: MessageSummary): string | undefined {
     if (!showFolders) return undefined;
-    const mailbox = mailboxes.find((box) => box.id === message.mailboxId);
+    const mailbox = mailboxById.get(message.mailboxId);
     const label = mailbox ? folderPathLabel(mailbox).trim() : "";
     return label || undefined;
   }
 
   function correspondent(message: MessageSummary): string {
-    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
+    const role = mailboxById.get(message.mailboxId)?.role;
     if (role === "sent" || role === "drafts") {
       const people = message.recipients
         .split(",")
@@ -381,6 +385,60 @@ export function MessageList({
     setNewAtTop(true);
   }, [messages, searchQuery]);
 
+  // The open message's thread stays expanded without storing it:
+  // deriving keeps render pure and survives list reloads.
+  const groupedThreads = useMemo(
+    () => (groupConversations && !selecting ? groupThreads(messages) : []),
+    [groupConversations, messages, selecting],
+  );
+  const selectedThreadKey = useMemo(
+    () =>
+      selectedId
+        ? groupedThreads.find(
+            (group) =>
+              group.items.length > 1 &&
+              group.items.some((item) => item.id === selectedId),
+          )?.key
+        : undefined,
+    [groupedThreads, selectedId],
+  );
+  // The user may fold the open message's thread; reset when it changes.
+  const [collapsedSelectedThread, setCollapsedSelectedThread] = useState<{
+    key: string;
+  }>();
+  const [lastSelectedThreadKey, setLastSelectedThreadKey] =
+    useState(selectedThreadKey);
+  if (lastSelectedThreadKey !== selectedThreadKey) {
+    setLastSelectedThreadKey(selectedThreadKey);
+    setCollapsedSelectedThread(undefined);
+  }
+  const effectiveExpanded = useMemo(
+    () =>
+      selectedThreadKey &&
+      collapsedSelectedThread?.key !== selectedThreadKey &&
+      !expandedThreads.includes(selectedThreadKey)
+        ? [...expandedThreads, selectedThreadKey]
+        : expandedThreads,
+    [collapsedSelectedThread?.key, expandedThreads, selectedThreadKey],
+  );
+  // Conversation headers expand, which listbox options cannot express. Use a
+  // tree only when a real thread renders; flat lists keep listbox semantics.
+  const hasThreadedGroups = useMemo(
+    () => groupedThreads.some((group) => group.items.length > 1),
+    [groupedThreads],
+  );
+  const rowRole = hasThreadedGroups ? "treeitem" : "option";
+  const threadsById = useMemo(
+    () =>
+      new Map<string, ThreadGroup>(
+        groupedThreads.map((group): [string, ThreadGroup] => [
+          group.key,
+          group,
+        ]),
+      ),
+    [groupedThreads],
+  );
+
   function toggleThread(key: string) {
     const isOpen = effectiveExpanded.includes(key);
     if (key === selectedThreadKey) {
@@ -395,7 +453,7 @@ export function MessageList({
     const expand = () => {
       if (!groupConversations || selecting) return;
       updateExpanded(
-        groupThreads(messages)
+        groupedThreads
           .filter((group) => group.items.length > 1)
           .map((group) => group.key),
       );
@@ -410,116 +468,96 @@ export function MessageList({
       window.removeEventListener("postal:expand-conversations", expand);
       window.removeEventListener("postal:collapse-conversations", collapse);
     };
-  }, [groupConversations, messages, selecting, updateExpanded]);
+  }, [groupConversations, groupedThreads, selecting, updateExpanded]);
 
   // A row picked with the pointer is already in view; scrolling it would
   // close a context menu that the same click opened.
   const pointerPick = useRef(false);
 
-  // The open message's thread stays expanded without storing it:
-  // deriving keeps render pure and survives list reloads.
-  const groupedThreads =
-    groupConversations && !selecting ? groupThreads(messages) : [];
-  const selectedThreadKey = selectedId
-    ? groupedThreads.find(
-        (group) =>
-          group.items.length > 1 &&
-          group.items.some((item) => item.id === selectedId),
-      )?.key
-    : undefined;
-  // The user may fold the open message's thread; reset when it changes.
-  const [collapsedSelectedThread, setCollapsedSelectedThread] = useState<{
-    key: string;
-  }>();
-  const [lastSelectedThreadKey, setLastSelectedThreadKey] =
-    useState(selectedThreadKey);
-  if (lastSelectedThreadKey !== selectedThreadKey) {
-    setLastSelectedThreadKey(selectedThreadKey);
-    setCollapsedSelectedThread(undefined);
-  }
-  const effectiveExpanded =
-    selectedThreadKey &&
-    collapsedSelectedThread?.key !== selectedThreadKey &&
-    !expandedThreads.includes(selectedThreadKey)
-      ? [...expandedThreads, selectedThreadKey]
-      : expandedThreads;
-  // Conversation headers expand, which listbox options cannot express. Use a
-  // tree only when a real thread renders; flat lists keep listbox semantics.
-  const hasThreadedGroups = groupedThreads.some(
-    (group) => group.items.length > 1,
-  );
-  const rowRole = hasThreadedGroups ? "treeitem" : "option";
-  const threadsById = new Map<string, ThreadGroup>(
-    groupedThreads.map((group): [string, ThreadGroup] => [group.key, group]),
-  );
-
-  function threadOptions(group: ThreadGroup): VisibleOption[] {
-    if (group.items.length === 1) {
-      return [
+  const threadOptions = useCallback(
+    (group: ThreadGroup): VisibleOption[] => {
+      if (group.items.length === 1) {
+        return [
+          {
+            key: `message:${group.newest.id}`,
+            kind: "message",
+            message: group.newest,
+          },
+        ];
+      }
+      const options: VisibleOption[] = [
         {
-          key: `message:${group.newest.id}`,
-          kind: "message",
+          key: `thread:${group.key}`,
+          kind: "header",
           message: group.newest,
+          groupKey: group.key,
         },
       ];
-    }
-    const options: VisibleOption[] = [
-      {
-        key: `thread:${group.key}`,
-        kind: "header",
-        message: group.newest,
-        groupKey: group.key,
-      },
-    ];
-    if (effectiveExpanded.includes(group.key)) {
-      options.push(
-        ...group.items.map((message) => ({
-          key: `message:${message.id}`,
-          kind: "message" as const,
-          message,
-          groupKey: group.key,
-        })),
-      );
-    }
-    return options;
-  }
+      if (effectiveExpanded.includes(group.key)) {
+        options.push(
+          ...group.items.map((message) => ({
+            key: `message:${message.id}`,
+            kind: "message" as const,
+            message,
+            groupKey: group.key,
+          })),
+        );
+      }
+      return options;
+    },
+    [effectiveExpanded],
+  );
 
-  const orderedMessages = pinnedFirst(messages);
-  const listEntries: ListEntry[] =
-    groupedThreads.length > 0
-      ? groupedThreads.map((group) => ({
-          key: group.key,
-          day: searchQuery
-            ? ""
-            : group.items.some((item) => item.pinned)
-              ? strings.mail.pinned
-              : messageListDay(
-                  group.newest.receivedAt,
-                  listNow,
-                  dateFormatters,
-                ),
-          ids: group.items.map((item) => item.id),
-          options: threadOptions(group),
-        }))
-      : orderedMessages.map((message) => ({
-          key: `message:${message.id}`,
-          day: searchQuery
-            ? ""
-            : message.pinned
-              ? strings.mail.pinned
-              : chronological
-                ? messageListDay(message.receivedAt, listNow, dateFormatters)
-                : "",
-          ids: [message.id],
-          options: [
-            {
-              key: `message:${message.id}`,
-              kind: "message" as const,
-              message,
-            },
-          ],
-        }));
-  const visibleOptions = listEntries.flatMap((entry) => entry.options);
+  const orderedMessages = useMemo(() => pinnedFirst(messages), [messages]);
+  const listEntries: ListEntry[] = useMemo(
+    () =>
+      groupedThreads.length > 0
+        ? groupedThreads.map((group) => ({
+            key: group.key,
+            day: searchQuery
+              ? ""
+              : group.items.some((item) => item.pinned)
+                ? strings.mail.pinned
+                : messageListDay(
+                    group.newest.receivedAt,
+                    listNow,
+                    dateFormatters,
+                  ),
+            ids: group.items.map((item) => item.id),
+            options: threadOptions(group),
+          }))
+        : orderedMessages.map((message) => ({
+            key: `message:${message.id}`,
+            day: searchQuery
+              ? ""
+              : message.pinned
+                ? strings.mail.pinned
+                : chronological
+                  ? messageListDay(message.receivedAt, listNow, dateFormatters)
+                  : "",
+            ids: [message.id],
+            options: [
+              {
+                key: `message:${message.id}`,
+                kind: "message" as const,
+                message,
+              },
+            ],
+          })),
+    [
+      chronological,
+      dateFormatters,
+      groupedThreads,
+      listNow,
+      orderedMessages,
+      searchQuery,
+      threadOptions,
+    ],
+  );
+  const visibleOptions = useMemo(
+    () => listEntries.flatMap((entry) => entry.options),
+    [listEntries],
+  );
 
   const selectedOptionKey = selectedId
     ? (visibleOptions.find(
@@ -537,42 +575,52 @@ export function MessageList({
       : visibleOptions[0]?.key;
 
   // Flatten day headings and options into the list the virtualizer windows.
-  const daySections = groupByDayLabel(listEntries, (entry) =>
-    searchQuery || !chronological ? "" : entry.day,
-  );
-  const items: VirtualItem[] = [];
-  daySections.forEach((section, sectionIndex) => {
-    if (section.label) {
-      items.push({
-        kind: "day",
-        key: `day:${sectionIndex}`,
-        label: section.label,
-        count: section.items.reduce((sum, entry) => sum + entry.ids.length, 0),
-        ids: section.items.flatMap((entry) => entry.ids),
-        first: sectionIndex === 0,
-      });
-    }
-    for (const entry of section.items) {
-      entry.options.forEach((option, position) => {
-        items.push({
-          kind: "option",
-          key: option.key,
-          option,
-          groupEnd:
-            entry.options.length > 1 && position === entry.options.length - 1,
+  const { items, itemIndex } = useMemo(() => {
+    const daySections = groupByDayLabel(listEntries, (entry) =>
+      searchQuery || !chronological ? "" : entry.day,
+    );
+    const nextItems: VirtualItem[] = [];
+    daySections.forEach((section, sectionIndex) => {
+      if (section.label) {
+        nextItems.push({
+          kind: "day",
+          key: `day:${sectionIndex}`,
+          label: section.label,
+          count: section.items.reduce(
+            (sum, entry) => sum + entry.ids.length,
+            0,
+          ),
+          ids: section.items.flatMap((entry) => entry.ids),
+          first: sectionIndex === 0,
         });
-      });
-    }
-  });
-  const itemIndex = new Map<string, number>();
-  items.forEach((item, index) => {
-    if (item.kind === "option") itemIndex.set(item.key, index);
-  });
-  const optionPosition = new Map<string, number>(
-    visibleOptions.map((option, index): [string, number] => [
-      option.key,
-      index + 1,
-    ]),
+      }
+      for (const entry of section.items) {
+        entry.options.forEach((option, position) => {
+          nextItems.push({
+            kind: "option",
+            key: option.key,
+            option,
+            groupEnd:
+              entry.options.length > 1 && position === entry.options.length - 1,
+          });
+        });
+      }
+    });
+    const nextIndex = new Map<string, number>();
+    nextItems.forEach((item, index) => {
+      if (item.kind === "option") nextIndex.set(item.key, index);
+    });
+    return { items: nextItems, itemIndex: nextIndex };
+  }, [chronological, listEntries, searchQuery]);
+  const optionPosition = useMemo(
+    () =>
+      new Map<string, number>(
+        visibleOptions.map((option, index): [string, number] => [
+          option.key,
+          index + 1,
+        ]),
+      ),
+    [visibleOptions],
   );
   const anchorKey =
     anchorId === undefined
@@ -817,7 +865,7 @@ export function MessageList({
     unread: boolean,
   ) {
     if (selecting) return null;
-    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
+    const role = mailboxById.get(message.mailboxId)?.role;
     return (
       <RowActions
         message={message}
@@ -867,7 +915,8 @@ export function MessageList({
       onSelectionKey(event.key);
       return;
     }
-    if (hasThreadedGroups) {
+    const unmodifiedKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+    if (hasThreadedGroups && unmodifiedKey) {
       if (
         event.key === "ArrowRight" &&
         option?.kind === "header" &&
@@ -1056,25 +1105,26 @@ export function MessageList({
       toggleReadFor(option);
       return;
     }
-    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const isListNavKey =
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      (["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key) ||
+        (!event.shiftKey && (event.key === "j" || event.key === "k")));
+    if (!isListNavKey) return;
     event.preventDefault();
     event.stopPropagation();
     const index = visibleOptions.findIndex(
       (option) => option.key === optionKey,
     );
     if (index < 0) return;
+    const delta = event.key === "ArrowDown" || event.key === "j" ? 1 : -1;
     const nextIndex =
       event.key === "Home"
         ? 0
         : event.key === "End"
           ? visibleOptions.length - 1
-          : Math.max(
-              0,
-              Math.min(
-                visibleOptions.length - 1,
-                index + (event.key === "ArrowDown" ? 1 : -1),
-              ),
-            );
+          : Math.max(0, Math.min(visibleOptions.length - 1, index + delta));
     const next = visibleOptions[nextIndex];
     if (!next || next.key === optionKey) return;
     focusOption(next);
@@ -1169,7 +1219,7 @@ export function MessageList({
     precedesSelection = false,
   ) {
     const { checked, isSelected } = rowStates(message, groupKey);
-    const role = mailboxes.find((box) => box.id === message.mailboxId)?.role;
+    const role = mailboxById.get(message.mailboxId)?.role;
     return (
       <MessageRow
         message={message}
@@ -1243,6 +1293,12 @@ export function MessageList({
       : group.items.some((item) => item.importance === "low")
         ? "low"
         : "";
+    const threadLoading =
+      loadingMessageId !== undefined &&
+      group.items.some((item) => item.id === loadingMessageId);
+    const threadFlagColor = group.newest.isStarred
+      ? group.newest.flagColor
+      : group.items.find((item) => item.isStarred)?.flagColor;
     return (
       <div
         role="none"
@@ -1255,9 +1311,10 @@ export function MessageList({
           aria-level={1}
           aria-posinset={optionPosition.get(optionKey)}
           aria-setsize={visibleOptions.length}
+          aria-busy={threadLoading || undefined}
           data-option-key={optionKey}
           tabIndex={activeOptionKey === optionKey ? 0 : -1}
-          className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""} ${group.unread > 0 ? "unread" : "read"}`}
+          className={`message-row thread-header ${group.newest.id === selectedId ? "selected" : ""} ${group.unread > 0 ? "unread" : "read"}${threadLoading ? " loading" : ""}`}
           {...messageDragProps(group.newest, true, optionKey)}
           data-context="message"
           data-message-id={group.newest.id}
@@ -1402,11 +1459,21 @@ export function MessageList({
           </span>{" "}
           {showMessagePreviews ? (
             <span className="message-preview">
-              {group.newest.preview || strings.mail.openToDownload}
+              <HighlightedText
+                text={group.newest.preview || strings.mail.openToDownload}
+                terms={marks.preview}
+              />
             </span>
           ) : null}
         </button>
-        {rowActions(group.newest, true, conversationStarred, group.unread > 0)}
+        {rowActions(
+          threadFlagColor !== undefined
+            ? { ...group.newest, flagColor: threadFlagColor }
+            : group.newest,
+          true,
+          conversationStarred,
+          group.unread > 0,
+        )}
       </div>
     );
   }

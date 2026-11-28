@@ -25,7 +25,7 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Setup inputs during testing**: editable while the connection test runs; the backend tests a request snapshot, so edits cannot corrupt the in-flight check.
 - **IDLE**: watches INBOX only; other folders refresh on the 5-minute sync loop.
 - **Flag sync**: CONDSTORE `CHANGEDSINCE` when advertised; QRESYNC `VANISHED` replaces the expunge `UID SEARCH` when the server accepts `ENABLE QRESYNC`. Other servers scan every cached UID. GreenMail does not advertise QRESYNC, so it is covered by Rust tests and the iCloud smoke test only.
-- **Mail rules**: applied after successful syncs, including rows retained from a failed pass. Settings can reorder rules and preview unread Inbox matches. A message can start a sender rule in that form. Server-side filter upload is not implemented.
+- **Mail rules**: applied after successful syncs, including rows retained from a failed pass. Settings can edit, reorder rules, and preview unread Inbox matches. A message can start a sender rule in that form. Server-side filter upload is not implemented.
 - **Attachment IDs**: deterministic hash (name + CID + size + index) with legacy fallback. No per-message salt; distinct contents with identical metadata collide.
 - **Search ranking**: subject, then sender, then recipients, outweigh the body. Matches are still an AND of prefixes, CJK recall is limited, and server body matches append by date.
 - **Backfill cutoff**: INTERNALDATE-based, stops after 3 consecutive old messages.
@@ -43,7 +43,6 @@ Kept on purpose; each has a planned consumer. Remove if still unused after that 
 - **Junk training needs server keywords**: `$Junk` and `$NotJunk` are written only when PERMANENTFLAGS allows them. Otherwise moves into or out of Junk do not train the server filter.
 - **`.eml` viewer never loads remote images**: opened files have no consent path for remote content. This is intentional for 0.5.2.
 - **Attachment and message drag-out deferred to a later release**: `start_attachment_drag` and `start_message_drag` are registered stubs that return "Not available yet." Linux has no planned drag-out.
-- **Store manifests lack the `.eml` association**: the direct config declares it in `src-tauri/tauri.conf.json` (`fileAssociations`). The MSIX manifest from `scripts/msstore-pack.js` and the Flatpak desktop entry (`packaging/flatpak/run.rosie.snap.desktop`) do not yet declare `message/rfc822`.
 - **Traffic-light position is unverified visually**: `MAC_TRAFFIC_LIGHTS` (18, 22) in `src-tauri/src/main.rs` must be checked on macOS in all three densities.
 - **PDF preview is partial**: only the first 20 pages render, each at most 1600 px wide. Encrypted or malformed files show an unavailable state.
 - **`starred` i18n keys**: the copy in `src/i18n/mail.ts` already says "Flagged". The object keys `starred` and `noStarred` stay for compatibility; rename them only with their call sites.

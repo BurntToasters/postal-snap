@@ -182,10 +182,11 @@ pub async fn send_message(
         mail::prepare_message(&account, &resolved_draft).await?
     };
     let delay = settings.undo_send_seconds.min(30);
+    let _guard = state.lock_account(&draft.account_id).await?;
+    let account = state.db.account(&draft.account_id)?;
     let offline = account.summary.sync_state == "offline";
     let initial_detail = offline.then_some(OutboxReason::WaitingConnection);
     if let Some(send_at) = resolve_requested_send_at(draft.send_at.as_deref())? {
-        let _guard = state.lock_account(&draft.account_id).await?;
         let detail = if offline {
             OutboxReason::WaitingConnection
         } else {
@@ -234,7 +235,6 @@ pub async fn send_message(
         });
     }
     if offline {
-        let _guard = state.lock_account(&draft.account_id).await?;
         let outbox_id = state.db.queue_outbox_with_reason(
             &draft,
             "queued",
@@ -252,7 +252,6 @@ pub async fn send_message(
             detail: initial_detail.map(Into::into),
         });
     }
-    let _guard = state.lock_account(&draft.account_id).await?;
     let outbox_id = state.db.queue_outbox_with_reason(
         &draft,
         "queued",

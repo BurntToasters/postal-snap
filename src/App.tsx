@@ -22,7 +22,7 @@ import {
   subscribeOsOpenedMessages,
 } from "./openedMessage";
 import type { OpenedMessage } from "./types";
-import { reconcileAccountList } from "./accountMerge";
+import { mergeAccountFields, reconcileAccountList } from "./accountMerge";
 import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
 import { PostalError } from "./errors";
@@ -341,6 +341,12 @@ export default function App() {
     void api
       .onSyncState((syncState) => {
         setSync(syncState);
+        if (syncState.phase === "idle") {
+          mergeAccountFields(syncState.accountId, {
+            syncState: "idle",
+            error: null,
+          });
+        }
         if (syncState.phase === "authFailed" || syncState.phase === "offline") {
           void api
             .listAccounts()
@@ -431,6 +437,7 @@ export default function App() {
     void api.setComposerOpen(composerOpen).catch(() => undefined);
   }, [composerOpen]);
 
+  const lastGuardedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const syncGuard = () => {
       const target = document.activeElement as HTMLElement | null;
@@ -443,6 +450,8 @@ export default function App() {
         target?.closest("[contenteditable='true']") ||
         target?.matches(TEXT_ENTRY_SELECTOR),
       );
+      if (lastGuardedRef.current === guarded) return;
+      lastGuardedRef.current = guarded;
       void api.setMailShortcutGuard(guarded).catch(() => undefined);
     };
     document.addEventListener("focusin", syncGuard);
@@ -451,7 +460,10 @@ export default function App() {
     return () => {
       document.removeEventListener("focusin", syncGuard);
       document.removeEventListener("focusout", syncGuard);
-      void api.setMailShortcutGuard(false).catch(() => undefined);
+      if (lastGuardedRef.current !== false) {
+        lastGuardedRef.current = false;
+        void api.setMailShortcutGuard(false).catch(() => undefined);
+      }
     };
   }, [composerOpen, settingsOpen]);
 

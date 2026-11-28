@@ -64,14 +64,14 @@ export function useUnreadBadge() {
   useEffect(() => {
     if (scope !== "allInboxes") return;
     let disposed = false;
-    const snapshot = { scope, accountsKey, activeAccountId };
+    let timer: number | undefined;
+    const snapshot = { scope, accountsKey };
     const unlisten: Array<() => void> = [];
     const isCurrent = (version: number) => {
       if (disposed || version !== requestVersion.current) return false;
       const latest = useAppStore.getState();
       return (
         (latest.settings.badgeScope ?? "activeInbox") === snapshot.scope &&
-        latest.activeAccountId === snapshot.activeAccountId &&
         accountKey(latest.accounts) === snapshot.accountsKey
       );
     };
@@ -99,6 +99,13 @@ export function useUnreadBadge() {
         // The active account and its mail remain usable if counts are unavailable.
       }
     };
+    const scheduleRefresh = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void refresh();
+      }, 250);
+    };
     const keepOrRelease = (subscription: Promise<() => void>) => {
       void subscription.then(
         (release) => {
@@ -109,13 +116,14 @@ export function useUnreadBadge() {
       );
     };
 
-    keepOrRelease(api.onFolderCountsChanged(() => void refresh()));
-    keepOrRelease(api.onSyncState(() => void refresh()));
+    keepOrRelease(api.onFolderCountsChanged(scheduleRefresh));
+    keepOrRelease(api.onSyncState(scheduleRefresh));
     void refresh();
     return () => {
       disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
       requestVersion.current += 1;
       unlisten.forEach((release) => release());
     };
-  }, [accountsKey, activeAccountId, publishBadge, scope]);
+  }, [accountsKey, publishBadge, scope]);
 }

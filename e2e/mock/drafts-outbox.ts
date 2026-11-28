@@ -602,7 +602,10 @@ export async function registerMockDraftsOutbox(page: Page): Promise<void> {
           partial: false,
         };
       },
-      save_draft(args: Record<string, unknown>) {
+      async save_draft(args: Record<string, unknown>) {
+        if (params.has("slowSave")) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
         const draft = args.draft as
           (Record<string, unknown> & { id?: string | null }) | undefined;
         if (params.has("draftDuplicateInline") && draft)

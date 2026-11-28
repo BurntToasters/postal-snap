@@ -249,23 +249,25 @@ async function restoreFailedMove({
 }
 
 /**
- * Moves one listed message to Archive, Trash, Junk, or back to Inbox.
+ * Moves one listed message to Archive, Trash, Junk, Inbox, or a mailbox id.
  * The message stays closed unless it was the open message.
  */
 export async function moveListedMessage(
   summary: MessageSummary,
-  role: "archive" | "inbox" | "trash" | "junk",
+  target: ConversationMoveRole | number,
   onLeft?: (next: MessageSummary | undefined, openWasMoved: boolean) => void,
   reconcileMoveFailure?: MoveFailureReconciler,
 ): Promise<void> {
   const store = useAppStore.getState();
-  const destination = store.mailboxes.find(
-    (mailbox) =>
-      mailbox.accountId === summary.accountId && mailbox.role === role,
-  );
+  const destination = store.mailboxes.find((mailbox) => {
+    if (mailbox.accountId !== summary.accountId) return false;
+    return typeof target === "number"
+      ? mailbox.id === target
+      : mailbox.role === target;
+  });
   if (!destination) {
     store.setError(
-      role === "inbox" ? strings.mail.noInbox : strings.mail.noTargetFolder,
+      target === "inbox" ? strings.mail.noInbox : strings.mail.noTargetFolder,
     );
     return;
   }
@@ -328,7 +330,7 @@ export async function moveListedMessage(
       accountId: summary.accountId,
       target: undoTargetFor(destination),
       send: async (undoToken) => {
-        if (role === "inbox") {
+        if (typeof target === "number" || target === "inbox") {
           await api.moveMessageToMailbox(
             summary.accountId,
             summary.id,
@@ -336,7 +338,12 @@ export async function moveListedMessage(
             undoToken,
           );
         } else {
-          await api.moveMessage(summary.accountId, summary.id, role, undoToken);
+          await api.moveMessage(
+            summary.accountId,
+            summary.id,
+            target,
+            undoToken,
+          );
         }
       },
       deferred: () => 1,

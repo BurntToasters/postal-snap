@@ -24,6 +24,7 @@ test("discovers Fastmail, chooses Download all, and hands off first sync", async
   await expect(
     page.getByRole("heading", { name: "Connect Fastmail" }),
   ).toBeVisible();
+  await page.getByText("Review or edit server settings").click();
   await expect(
     page.getByRole("group", { name: "Incoming IMAP" }).getByLabel("Server"),
   ).toHaveValue("imap.fastmail.com");
@@ -52,7 +53,7 @@ test("discovers Fastmail, chooses Download all, and hands off first sync", async
   await expect(page.getByRole("button", { name: "Compose" })).toBeVisible();
 });
 
-test("explains unsupported Gmail without showing a dead-end password form", async ({
+test("discovers Gmail App Password guidance and explains unsupported Outlook", async ({
   page,
 }) => {
   await reachAccountSetup(page);
@@ -60,7 +61,16 @@ test("explains unsupported Gmail without showing a dead-end password form", asyn
   await page.getByLabel("Email address").fill("reader@gmail.com");
   await page.getByRole("button", { name: "Find settings" }).click();
 
-  await expect(page.getByText(/Gmail requires OAuth/)).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Connect Gmail" }),
+  ).toBeVisible();
+  await expect(page.getByText(/2-Step Verification/)).toBeVisible();
+  await expect(page.getByLabel("App-specific password")).toBeVisible();
+
+  await page.getByLabel("Email address").fill("reader@outlook.com");
+  await page.getByRole("button", { name: "Find settings" }).click();
+
+  await expect(page.getByText(/Outlook requires OAuth/)).toBeVisible();
   await expect(page.getByLabel(/password/i)).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Connect securely" }),
@@ -78,6 +88,7 @@ test("drops discovered servers when the address domain changes", async ({
     .getByLabel("Server");
   await emailField.fill("reader@autodetect.example");
   await page.getByRole("button", { name: "Find settings" }).click();
+  await page.getByText("Review or edit server settings").click();
   await expect(imapHost).toHaveValue("imap.autodetect.example");
 
   await emailField.fill("other@autodetect.example");
@@ -91,6 +102,7 @@ test("drops discovered servers when the address domain changes", async ({
 
   await emailField.fill("reader@autodetect.example");
   await page.getByRole("button", { name: "Find settings" }).click();
+  await page.getByText("Review or edit server settings").click();
   await expect(imapHost).toHaveValue("imap.autodetect.example");
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: /Other email/i }).click();
@@ -109,6 +121,7 @@ test("uses domain autoconfig and falls back to editable manual settings", async 
   await page.getByRole("button", { name: /Other email/i }).click();
   await page.getByLabel("Email address").fill("reader@autodetect.example");
   await page.getByRole("button", { name: "Find settings" }).click();
+  await page.getByText("Review or edit server settings").click();
   await expect(
     page.getByRole("group", { name: "Incoming IMAP" }).getByLabel("Server"),
   ).toHaveValue("imap.autodetect.example");

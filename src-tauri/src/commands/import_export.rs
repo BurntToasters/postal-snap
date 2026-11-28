@@ -408,7 +408,14 @@ fn send_batches(
             return Err("Import was cancelled.".into());
         }
         match record {
-            Record::Message(raw) if mail_parser::MessageParser::default().parse(&raw).is_some() => {
+            Record::Message(raw)
+                if matches!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        mail_parser::MessageParser::default().parse(&raw).is_some()
+                    })),
+                    Ok(true)
+                ) =>
+            {
                 batch.bytes += raw.len();
                 batch.messages.push(raw);
             }

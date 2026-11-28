@@ -49,6 +49,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (44, step_v44),
     (45, step_v45),
     (46, step_v46),
+    (47, step_v47),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -1129,6 +1130,82 @@ fn step_v46(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v47(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "accounts",
+        "provider_id",
+        "ALTER TABLE accounts ADD COLUMN provider_id TEXT",
+    )?;
+    ensure_column(
+        transaction,
+        "mailboxes",
+        "synced_max_uid",
+        "ALTER TABLE mailboxes ADD COLUMN synced_max_uid INTEGER",
+    )?;
+    ensure_column(
+        transaction,
+        "mailboxes",
+        "is_all_mail",
+        "ALTER TABLE mailboxes ADD COLUMN is_all_mail INTEGER NOT NULL DEFAULT 0",
+    )?;
+    let accounts = {
+        let mut statement = transaction
+            .prepare("SELECT id, provider, imap_host FROM accounts WHERE provider_id IS NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?
+    };
+    for (id, provider_raw, imap_host) in accounts {
+        let provider = parse_provider(&provider_raw);
+        let provider_id = crate::providers::infer_provider_id(&provider, &imap_host);
+        transaction
+            .execute(
+                "UPDATE accounts SET provider_id=?2 WHERE id=?1",
+                params![id, provider_id],
+            )
+            .map_err(db_error)?;
+    }
+    transaction
+        .execute(
+            "UPDATE mailboxes
+             SET synced_max_uid = (
+                 SELECT MAX(uid) FROM messages
+                 WHERE messages.mailbox_id = mailboxes.id AND messages.uid > 0
+             )
+             WHERE synced_max_uid IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM messages
+                   WHERE messages.mailbox_id = mailboxes.id AND messages.uid > 0
+               )",
+            [],
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute(
+            "UPDATE mailboxes
+             SET is_all_mail = 1
+             WHERE role = 'archive'
+               AND (
+                   lower(name) LIKE '%all mail%'
+                   OR lower(name) LIKE '%alle nachrichten%'
+                   OR lower(name) LIKE '%tous les messages%'
+                   OR lower(name) LIKE '%todos%'
+               )",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
 fn step_v44(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     ensure_column(
         transaction,
@@ -1670,8 +1747,8 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 46);
-        assert_eq!(CURRENT_SCHEMA_VERSION, 46);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 47);
 
         let rows: Vec<(String, String, String, String)> = conn
             .prepare("SELECT id,match_mode,conditions_json,actions_json FROM filter_rules ORDER BY position")
@@ -1712,12 +1789,14 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE accounts(id TEXT PRIMARY KEY);
-                 CREATE TABLE mailboxes(id INTEGER PRIMARY KEY);
+                "CREATE TABLE accounts(id TEXT PRIMARY KEY, provider TEXT, imap_host TEXT);
+                 CREATE TABLE mailboxes(id INTEGER PRIMARY KEY, name TEXT, role TEXT);
                  CREATE TABLE folder_assignments(mailbox_id INTEGER);
                  CREATE TABLE messages(
                    id INTEGER PRIMARY KEY,
                    account_id TEXT NOT NULL,
+                   mailbox_id INTEGER,
+                   uid INTEGER,
                    notification_state INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE TABLE offline_ops(
@@ -1734,7 +1813,8 @@ mod tests {
                  SELECT 1 + a.x*10000 + b.x*1000 + c.x*100 + d.x*10 + e.x,
                         'legacy-account', 0
                  FROM digits a, digits b, digits c, digits d, digits e;
-                 INSERT INTO accounts(id) VALUES('legacy-account');
+                 INSERT INTO accounts(id,provider,imap_host)
+                   VALUES('legacy-account','manual','imap.example.test');
                  INSERT INTO offline_ops(id,account_id,kind,payload,state)
                    VALUES(7,'legacy-account','move','{}','needs_attention');
                  PRAGMA user_version=45;",
@@ -1841,5 +1921,88 @@ mod tests {
             )
             .unwrap();
         assert_ne!(replaced_token, new_token);
+    }
+
+    // Failure modes for v46 -> v47:
+    // 1. Legacy accounts lose provider_id or misclassify Fastmail/iCloud/Bridge.
+    // 2. mailboxes.synced_max_uid starts NULL on populated folders, forcing a full re-sync.
+    // 3. mailboxes.is_all_mail misses [Gmail]/All Mail or marks Archive as All Mail.
+    #[test]
+    fn v47_backfills_provider_id_synced_max_uid_and_is_all_mail() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     ALTER TABLE accounts DROP COLUMN provider_id;
+                     ALTER TABLE mailboxes DROP COLUMN synced_max_uid;
+                     ALTER TABLE mailboxes DROP COLUMN is_all_mail;
+                     INSERT INTO accounts(id,provider,email,display_name,imap_host,imap_port,imap_tls,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username)
+                       VALUES
+                       ('a-fm','manual','u@example.test','FM','imap.fastmail.com',993,'tls','u@example.test','smtp.fastmail.com',465,'tls','u@example.test'),
+                       ('a-ic','icloud','u@icloud.com','IC','imap.mail.me.com',993,'tls','u','smtp.mail.me.com',587,'startTls','u@icloud.com');
+                     INSERT INTO mailboxes(id,account_id,name,display_name,role)
+                       VALUES
+                       (1,'a-fm','INBOX','INBOX','inbox'),
+                       (2,'a-fm','Archive','Archive','archive'),
+                       (3,'a-fm','[Gmail]/All Mail','[Gmail]/All Mail','archive');
+                     INSERT INTO messages(id,account_id,mailbox_id,uid,received_at)
+                       VALUES
+                       (10,'a-fm',1,42,'2026-10-01T00:00:00Z'),
+                       (11,'a-fm',1,99,'2026-10-02T00:00:00Z');
+                     PRAGMA user_version=46;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+
+        let fm_provider: Option<String> = conn
+            .query_row(
+                "SELECT provider_id FROM accounts WHERE id='a-fm'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ic_provider: Option<String> = conn
+            .query_row(
+                "SELECT provider_id FROM accounts WHERE id='a-ic'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fm_provider.as_deref(), Some("fastmail"));
+        assert_eq!(ic_provider.as_deref(), Some("icloud"));
+
+        let (inbox_max, inbox_all): (Option<u32>, i64) = conn
+            .query_row(
+                "SELECT synced_max_uid, is_all_mail FROM mailboxes WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let archive_all: i64 = conn
+            .query_row("SELECT is_all_mail FROM mailboxes WHERE id=2", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let gmail_all: i64 = conn
+            .query_row("SELECT is_all_mail FROM mailboxes WHERE id=3", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!((inbox_max, inbox_all), (Some(99), 0));
+        assert_eq!(archive_all, 0);
+        assert_eq!(gmail_all, 1);
     }
 }

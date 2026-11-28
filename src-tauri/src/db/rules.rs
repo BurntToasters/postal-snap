@@ -9,6 +9,7 @@ use crate::models::{rule_lists, FilterMatchPreview, FilterRule, MessageSummary};
 const MAX_FILTER_RULES: usize = 200;
 const FILTER_RULE_LIMIT_MESSAGE: &str = "Too many rules. You can have up to 200.";
 
+database_operations! {
 impl Database {
     pub fn list_filter_rules(&self, account_id: &str) -> Result<Vec<FilterRule>, String> {
         let conn = self.read_conn()?;
@@ -303,6 +304,7 @@ impl Database {
         })
     }
 }
+}
 
 /// Keeps the legacy single-condition columns and the list fields in step.
 /// Rules with no lists derive one condition and one action from the legacy
@@ -517,6 +519,10 @@ mod tests {
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

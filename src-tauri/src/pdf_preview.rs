@@ -39,7 +39,11 @@ pub(crate) async fn render_pdf_pages(
     bytes: Vec<u8>,
 ) -> Result<AttachmentPreview, String> {
     let size = bytes.len() as u64;
-    let rendered = bounded(PREVIEW_TIMEOUT, move || render_document(&bytes)).await?;
+    let deadline = std::time::Instant::now() + PREVIEW_TIMEOUT;
+    let rendered = bounded(PREVIEW_TIMEOUT, move || {
+        render_document_with_deadline(&bytes, MAX_OUTPUT_BYTES, Some(deadline))
+    })
+    .await?;
     Ok(AttachmentPreview {
         filename,
         content_type: "application/pdf".into(),
@@ -126,12 +130,22 @@ pub(crate) fn fit_scale(width: f32, height: f32) -> Option<f32> {
 }
 
 /// Render the first pages of a PDF. Encrypted, malformed or empty files error.
+#[cfg(test)]
 pub(crate) fn render_document(bytes: &[u8]) -> Result<RenderedPdf, String> {
-    render_document_within(bytes, MAX_OUTPUT_BYTES)
+    render_document_with_deadline(bytes, MAX_OUTPUT_BYTES, None)
 }
 
-/// Like `render_document`, stopping once the PNG bytes would exceed `budget`.
+#[cfg(test)]
 fn render_document_within(bytes: &[u8], budget: usize) -> Result<RenderedPdf, String> {
+    render_document_with_deadline(bytes, budget, None)
+}
+
+/// Like `render_document`, stopping once PNG bytes hit `budget` or the wall deadline expires.
+fn render_document_with_deadline(
+    bytes: &[u8],
+    budget: usize,
+    deadline: Option<std::time::Instant>,
+) -> Result<RenderedPdf, String> {
     let unavailable = || PDF_UNAVAILABLE.to_string();
     let pdf = Pdf::new(bytes.to_vec()).map_err(|_| unavailable())?;
     let pages = pdf.pages();
@@ -145,6 +159,9 @@ fn render_document_within(bytes: &[u8], budget: usize) -> Result<RenderedPdf, St
     let mut rendered = Vec::with_capacity(page_count.min(MAX_RENDERED_PAGES));
     let mut spent = 0usize;
     for page in pages.iter().take(MAX_RENDERED_PAGES) {
+        if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+            return Err(unavailable());
+        }
         let (width, height) = page.render_dimensions();
         let scale = fit_scale(width, height).ok_or_else(unavailable)?;
         let pixmap = hayro::render(
@@ -482,5 +499,12 @@ mod tests {
                 "{w}x{h} rendered {pw}x{ph}"
             );
         }
+    }
+
+    #[test]
+    fn expired_deadline_aborts_pdf_page_loop() {
+        let pdf = build_pdf(&[(200, 200), (200, 200)]);
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        assert!(render_document_with_deadline(&pdf, MAX_OUTPUT_BYTES, Some(past)).is_err());
     }
 }

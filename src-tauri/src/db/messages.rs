@@ -189,14 +189,7 @@ impl Database {
         }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, color) in colors {
-            transaction
-                .execute(
-                    "UPDATE messages SET flag_color=?3 WHERE mailbox_id=?1 AND uid=?2 AND flag_color<>?3",
-                    params![mailbox_id, uid, i64::from(*color)],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_flag_colors_tx(&transaction, mailbox_id, colors)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -211,6 +204,7 @@ impl Database {
             .map_err(db_error)
     }
 
+    #[cfg(test)]
     pub fn reconcile_flags(
         &self,
         mailbox_id: i64,
@@ -219,62 +213,27 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, is_read, is_starred) in seen {
-            let overlay: Option<(bool, Option<i64>, bool)> = transaction
-                .query_row(
-                    "SELECT m.is_read != 0,m.pending_move_to,
-                            COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
-                     FROM messages m LEFT JOIN mailboxes d ON d.id=m.pending_move_to
-                     WHERE m.mailbox_id=?1 AND m.uid=?2",
-                    params![mailbox_id, uid],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()
-                .map_err(db_error)?;
-            if let Some((was_read, Some(destination_id), true)) = overlay {
-                if was_read != *is_read {
-                    let delta = if *is_read { -1 } else { 1 };
-                    adjust_mailbox_counts(&transaction, destination_id, 0, Some(delta))?;
-                }
-            }
-            transaction
-                .execute(
-                    "UPDATE messages SET is_read=?3,is_starred=?4 WHERE mailbox_id=?1 AND uid=?2",
-                    params![mailbox_id, uid, *is_read as i32, *is_starred as i32],
-                )
-                .map_err(db_error)?;
-        }
-        let returned = seen
-            .iter()
-            .map(|item| item.0)
-            .collect::<std::collections::HashSet<_>>();
-        for uid in requested.iter().filter(|uid| !returned.contains(uid)) {
-            transaction
-                .execute(
-                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
-                    params![mailbox_id, uid],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_flags_tx(&transaction, mailbox_id, seen, requested)?;
         transaction.commit().map_err(db_error)
     }
 
-    /// Server truth for `\\Answered` / `$Forwarded`, keyed by UID.
-    pub fn reconcile_reply_flags(
+    /// Reconcile seen/starred, reply/forward, and flag colors in one transaction.
+    pub fn reconcile_flag_batch(
         &self,
         mailbox_id: i64,
-        seen: &[(u32, bool, bool)],
+        flags: &[(u32, bool, bool)],
+        replies: &[(u32, bool, bool)],
+        colors: &[(u32, u8)],
+        requested: &[u32],
     ) -> Result<(), String> {
+        if flags.is_empty() && replies.is_empty() && colors.is_empty() && requested.is_empty() {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, answered, forwarded) in seen {
-            transaction
-                .execute(
-                    "UPDATE messages SET is_answered=?3,is_forwarded=?4 WHERE mailbox_id=?1 AND uid=?2",
-                    params![mailbox_id, uid, *answered as i32, *forwarded as i32],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_reply_flags_tx(&transaction, mailbox_id, replies)?;
+        reconcile_flags_tx(&transaction, mailbox_id, flags, requested)?;
+        reconcile_flag_colors_tx(&transaction, mailbox_id, colors)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -1116,7 +1075,7 @@ impl Database {
         let (thread_parent, raw): (Option<String>, Vec<u8>) = self
             .read_conn()?
             .query_row(
-                "SELECT thread_parent, raw_message FROM messages WHERE id=?1 AND account_id=?2",
+                "SELECT thread_parent, substr(raw_message, 1, 16384) FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -1141,12 +1100,13 @@ impl Database {
         if header_id.is_empty() {
             return Ok(None);
         }
+        let effective_role = crate::db::mailboxes::effective_role_sql("box");
         self.read_conn()?
             .query_row(
                 &format!(
                     "{MESSAGE_SUMMARY_SELECT} JOIN mailboxes box ON box.id=m.mailbox_id \
                      WHERE m.account_id=?1 AND m.message_id=?2 AND m.pending_move_to IS NULL \
-                     ORDER BY CASE WHEN box.role IN ('trash','junk') THEN 1 ELSE 0 END, \
+                     ORDER BY CASE WHEN {effective_role} IN ('trash','junk') THEN 1 ELSE 0 END, \
                      m.received_at DESC, m.uid DESC LIMIT 1"
                 ),
                 params![account_id, header_id],
@@ -2280,9 +2240,12 @@ pub(crate) fn mark_pending_move_in_transaction(
 }
 
 fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, String> {
+    let effective_role = crate::db::mailboxes::effective_role_sql("f");
     conn.query_row(
-        "SELECT m.account_id, m.mailbox_id, f.name, f.role, m.uid, m.pending_move_to, f.uid_validity
-         FROM messages m JOIN mailboxes f ON f.id = m.mailbox_id WHERE m.id=?1",
+        &format!(
+            "SELECT m.account_id, m.mailbox_id, f.name, {effective_role}, m.uid, m.pending_move_to, f.uid_validity
+             FROM messages m JOIN mailboxes f ON f.id = m.mailbox_id WHERE m.id=?1"
+        ),
         [id],
         |row| {
             Ok(TrashRow {
@@ -2298,6 +2261,109 @@ fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, S
     )
     .optional()
     .map_err(db_error)
+}
+
+fn reconcile_flag_colors_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    colors: &[(u32, u8)],
+) -> Result<(), String> {
+    if colors.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = transaction
+        .prepare_cached(
+            "UPDATE messages SET flag_color=?3 WHERE mailbox_id=?1 AND uid=?2 AND flag_color<>?3",
+        )
+        .map_err(db_error)?;
+    for (uid, color) in colors {
+        stmt.execute(params![mailbox_id, uid, i64::from(*color)])
+            .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn reconcile_flags_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    seen: &[(u32, bool, bool)],
+    requested: &[u32],
+) -> Result<(), String> {
+    let mut select_overlay = transaction
+        .prepare_cached(
+            "SELECT m.is_read != 0,m.pending_move_to,
+                    COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+             FROM messages m LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+             WHERE m.mailbox_id=?1 AND m.uid=?2",
+        )
+        .map_err(db_error)?;
+    let mut update_flags = transaction
+        .prepare_cached(
+            "UPDATE messages SET is_read=?3,is_starred=?4 WHERE mailbox_id=?1 AND uid=?2 AND (is_read<>?3 OR is_starred<>?4)",
+        )
+        .map_err(db_error)?;
+    for (uid, is_read, is_starred) in seen {
+        let overlay: Option<(bool, Option<i64>, bool)> = select_overlay
+            .query_row(params![mailbox_id, uid], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .optional()
+            .map_err(db_error)?;
+        if let Some((was_read, Some(destination_id), true)) = overlay {
+            if was_read != *is_read {
+                let delta = if *is_read { -1 } else { 1 };
+                adjust_mailbox_counts(transaction, destination_id, 0, Some(delta))?;
+            }
+        }
+        update_flags
+            .execute(params![
+                mailbox_id,
+                uid,
+                *is_read as i32,
+                *is_starred as i32
+            ])
+            .map_err(db_error)?;
+    }
+    let returned = seen
+        .iter()
+        .map(|item| item.0)
+        .collect::<std::collections::HashSet<_>>();
+    let mut delete_missing = transaction
+        .prepare_cached(
+            "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+        )
+        .map_err(db_error)?;
+    for uid in requested.iter().filter(|uid| !returned.contains(uid)) {
+        delete_missing
+            .execute(params![mailbox_id, uid])
+            .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn reconcile_reply_flags_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    seen: &[(u32, bool, bool)],
+) -> Result<(), String> {
+    if seen.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = transaction
+        .prepare_cached(
+            "UPDATE messages SET is_answered=?3,is_forwarded=?4 WHERE mailbox_id=?1 AND uid=?2 AND (is_answered<>?3 OR is_forwarded<>?4)",
+        )
+        .map_err(db_error)?;
+    for (uid, answered, forwarded) in seen {
+        stmt.execute(params![
+            mailbox_id,
+            uid,
+            *answered as i32,
+            *forwarded as i32
+        ])
+        .map_err(db_error)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2424,7 +2490,8 @@ fn write_full_message(
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
             preview=excluded.preview, is_read=excluded.is_read, is_starred=excluded.is_starred,
-            has_attachments=excluded.has_attachments, size=excluded.size, to_json=excluded.to_json,
+            has_attachments=CASE WHEN excluded.body_partial<>0 THEN MAX(messages.has_attachments, excluded.has_attachments) ELSE excluded.has_attachments END,
+            size=excluded.size, to_json=excluded.to_json,
             cc_json=excluded.cc_json,
             bcc_json=CASE WHEN excluded.bcc_json != '[]' THEN excluded.bcc_json ELSE messages.bcc_json END,
             reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
@@ -2797,6 +2864,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

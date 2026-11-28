@@ -127,6 +127,9 @@ export function RulesEditor({
   ruleInput,
   updateRuleDraft,
   handleAddRule,
+  editingRuleIds,
+  handleEditRule,
+  handleCancelEditRule,
   savingRuleAccounts,
   handlePreviewRule,
   handleMoveRule,
@@ -144,6 +147,9 @@ export function RulesEditor({
     change: (draft: AccountRuleDraft) => AccountRuleDraft,
   ) => void;
   handleAddRule: (accountId: string) => Promise<void>;
+  editingRuleIds?: Record<string, string>;
+  handleEditRule?: (accountId: string, rule: FilterRule) => void;
+  handleCancelEditRule?: (accountId: string) => void;
   savingRuleAccounts: Record<string, boolean>;
   handlePreviewRule: (accountId: string) => Promise<void>;
   handleMoveRule: (
@@ -217,6 +223,15 @@ export function RulesEditor({
               >
                 {rule.enabled ? strings.common.on : strings.common.off}
               </button>
+              {handleEditRule ? (
+                <button
+                  type="button"
+                  className="secondary-button rule-edit"
+                  onClick={() => handleEditRule(account.id, rule)}
+                >
+                  {strings.settings.editRule}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="secondary-button rule-delete"
@@ -505,8 +520,19 @@ export function RulesEditor({
             disabled={savingRuleAccounts[account.id]}
             onClick={() => void handleAddRule(account.id)}
           >
-            {strings.settings.addRule}
+            {editingRuleIds?.[account.id]
+              ? strings.settings.saveRule
+              : strings.settings.addRule}
           </button>
+          {editingRuleIds?.[account.id] && handleCancelEditRule ? (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => handleCancelEditRule(account.id)}
+            >
+              {strings.common.cancel}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

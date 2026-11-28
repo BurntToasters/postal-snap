@@ -6716,7 +6716,7 @@ describe("mail shell", () => {
     );
   });
 
-  it("marks unread mail read from the context menu without flipping it back", async () => {
+  it("marks unread mail read from the context menu without opening or flipping it back", async () => {
     renderShell();
     const row = await screen.findByRole("option", { name: /First message/i });
     fireEvent.contextMenu(row);
@@ -6732,18 +6732,24 @@ describe("mail shell", () => {
       ),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().selectedMessage?.isRead).toBe(true),
+      expect(
+        useAppStore
+          .getState()
+          .messages.find((item) => item.id === firstMessage.id)?.isRead,
+      ).toBe(true),
     );
     await act(async () => {
       await Promise.resolve();
     });
+    expect(useAppStore.getState().selectedMessage).toBeUndefined();
     expect(
       mockedSetMessageFlags.mock.calls.some((call) => call[2] === false),
     ).toBe(false);
   });
 
-  it("does not run a message action when opening the clicked row fails", async () => {
+  it("moves an unopened message from the context menu even when opening its body fails", async () => {
     mockedGetMessage.mockRejectedValue(new Error("offline"));
+    vi.mocked(api.moveMessage).mockResolvedValue(undefined);
     renderShell();
     const row = await screen.findByRole("option", { name: /First message/i });
     fireEvent.contextMenu(row);
@@ -6751,9 +6757,14 @@ describe("mail shell", () => {
       screen.getByRole("menuitem", { name: strings.reader.trash }),
     );
     await waitFor(() =>
-      expect(useAppStore.getState().error).toBe(strings.errors.operationFailed),
+      expect(api.moveMessage).toHaveBeenCalledWith(
+        "account-1",
+        firstMessage.id,
+        "trash",
+        expect.any(String),
+      ),
     );
-    expect(api.moveMessage).not.toHaveBeenCalled();
+    expect(mockedGetMessage).not.toHaveBeenCalled();
   });
 
   it("empties trash and still confirms folder delete from the context menu", async () => {

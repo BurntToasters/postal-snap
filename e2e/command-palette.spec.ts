@@ -101,7 +101,8 @@ test("folders listed are only the active account's", async ({
   await page.goto("/?multiAccount=1");
   await openPalette(page);
   const folders = group(page, "Folders").getByRole("option");
-  await expect(folders).toHaveCount(await mockMailboxCount(page));
+  // Includes Drafts, Outbox, and Snoozed local views.
+  await expect(folders).toHaveCount((await mockMailboxCount(page)) + 3);
   await attachArtifacts(page, testInfo, "command-palette-active-folders");
 });
 
@@ -126,8 +127,9 @@ test("switching account refreshes the folder list to that account", async ({
     )
     .toBe(true);
   await openPalette(page);
+  // Includes Drafts, Outbox, and Snoozed local views.
   await expect(group(page, "Folders").getByRole("option")).toHaveCount(
-    await mockMailboxCount(page, "account-2"),
+    (await mockMailboxCount(page, "account-2")) + 3,
   );
   await attachArtifacts(page, testInfo, "command-palette-switch-account");
 });

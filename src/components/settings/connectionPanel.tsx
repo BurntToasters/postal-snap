@@ -11,6 +11,7 @@ import type {
   FolderAssignment,
   MailboxSummary,
 } from "../../types";
+import { defaultPort, isStandardPort, trimServer } from "../setup/request";
 import { ServerFields } from "../setup/serverFields";
 import { BridgeCertificateControl } from "./bridgeCertificate";
 import { SettingsGroup } from "./primitives";
@@ -70,11 +71,11 @@ export function ConnectionPanel({
     setBusy(true);
     setStatus("");
     try {
+      const nextImap = trimServer(draft.imap);
+      const nextSmtp = trimServer(draft.smtp);
       const changed =
-        draft.imap.host !== saved.imap.host ||
-        draft.imap.port !== saved.imap.port ||
-        draft.imap.tlsMode !== saved.imap.tlsMode ||
-        draft.imap.username !== saved.imap.username;
+        nextImap.host.toLowerCase() !== saved.imap.host.trim().toLowerCase() ||
+        nextImap.username !== saved.imap.username.trim();
       if (
         changed &&
         !(await api.showNativeConfirm(
@@ -85,9 +86,8 @@ export function ConnectionPanel({
         return;
       // The saved password is sent to the new outgoing server too.
       const outgoingChanged =
-        draft.smtp.host.trim().toLowerCase() !==
-          saved.smtp.host.trim().toLowerCase() ||
-        draft.smtp.username.trim() !== saved.smtp.username.trim();
+        nextSmtp.host.toLowerCase() !== saved.smtp.host.trim().toLowerCase() ||
+        nextSmtp.username !== saved.smtp.username.trim();
       if (
         outgoingChanged &&
         !(await api.showNativeConfirm(
@@ -98,8 +98,8 @@ export function ConnectionPanel({
         return;
       const value = await api.updateAccountConnection(
         account.id,
-        draft.imap,
-        draft.smtp,
+        nextImap,
+        nextSmtp,
         changed || outgoingChanged,
       );
       setSaved(value);
@@ -107,7 +107,11 @@ export function ConnectionPanel({
       setStatus(strings.settings.connectionSaved);
     } catch (cause) {
       const error = normalizeIpcError(cause);
-      const detail = describeSetupError(cause, account.provider);
+      const detail = describeSetupError(cause, account.provider, {
+        providerId: account.providerId,
+        appPasswordPolicy: account.appPasswordPolicy,
+        appPasswordUrl: account.appPasswordUrl,
+      });
       setBlockerError(error.code === "pendingOperations");
       setStatus(
         `${strings.settings.connectionFailed} ${detail.text} ${detail.hint ?? ""}`,
@@ -185,16 +189,36 @@ export function ConnectionPanel({
             <ServerFields
               title={strings.setup.incoming}
               value={draft.imap}
-              onChange={(patch) =>
-                setDraft({ ...draft, imap: { ...draft.imap, ...patch } })
-              }
+              onChange={(patch) => {
+                const nextTls = patch.tlsMode;
+                const nextPort =
+                  nextTls &&
+                  patch.port === undefined &&
+                  isStandardPort("imap", draft.imap.port)
+                    ? defaultPort("imap", nextTls)
+                    : (patch.port ?? draft.imap.port);
+                setDraft({
+                  ...draft,
+                  imap: { ...draft.imap, ...patch, port: nextPort },
+                });
+              }}
             />
             <ServerFields
               title={strings.setup.outgoing}
               value={draft.smtp}
-              onChange={(patch) =>
-                setDraft({ ...draft, smtp: { ...draft.smtp, ...patch } })
-              }
+              onChange={(patch) => {
+                const nextTls = patch.tlsMode;
+                const nextPort =
+                  nextTls &&
+                  patch.port === undefined &&
+                  isStandardPort("smtp", draft.smtp.port)
+                    ? defaultPort("smtp", nextTls)
+                    : (patch.port ?? draft.smtp.port);
+                setDraft({
+                  ...draft,
+                  smtp: { ...draft.smtp, ...patch, port: nextPort },
+                });
+              }}
             />
           </fieldset>
           <button className="primary-button" disabled={busy} type="submit">

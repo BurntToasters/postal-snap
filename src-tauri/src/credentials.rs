@@ -9,14 +9,34 @@ pub fn store(account_id: &str, password: &str) -> Result<(), String> {
         .map_err(|_| "The system password vault could not save this account.".into())
 }
 
-pub fn load(account_id: &str) -> Result<Zeroizing<String>, String> {
-    let entry = entry(account_id)?;
-    let password = entry.get_password().map_err(|_| {
-        "The saved password is unavailable. Update the password in Settings > Accounts.".to_string()
-    })?;
+pub enum CredentialLoadError {
+    Missing,
+    Unavailable(String),
+}
+
+pub fn load_with_status(account_id: &str) -> Result<Zeroizing<String>, CredentialLoadError> {
+    let entry = entry(account_id).map_err(CredentialLoadError::Unavailable)?;
+    let password =
+        match entry.get_password() {
+            Ok(password) => password,
+            Err(keyring::Error::NoEntry) => return Err(CredentialLoadError::Missing),
+            Err(_) => return Err(CredentialLoadError::Unavailable(
+                "The saved password is unavailable. Update the password in Settings > Accounts."
+                    .into(),
+            )),
+        };
     #[cfg(target_os = "windows")]
     ensure_windows_local_persistence(account_id, &password);
     Ok(Zeroizing::new(password))
+}
+
+pub fn load(account_id: &str) -> Result<Zeroizing<String>, String> {
+    load_with_status(account_id).map_err(|error| match error {
+        CredentialLoadError::Missing => {
+            "The saved password is missing. Update the password in Settings > Accounts.".into()
+        }
+        CredentialLoadError::Unavailable(message) => message,
+    })
 }
 
 pub fn load_for_removal(account_id: &str) -> Result<Option<Zeroizing<String>>, String> {

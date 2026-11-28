@@ -82,6 +82,9 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
   const [savingRuleAccounts, setSavingRuleAccounts] = useState<
     Record<string, boolean>
   >({});
+  const [editingRuleIds, setEditingRuleIds] = useState<Record<string, string>>(
+    {},
+  );
   const pendingRuleAccounts = useRef(new Set<string>());
   // Bumped by every mutation so an older list response cannot overwrite it.
   const ruleGenerations = useRef(new Map<string, number>());
@@ -191,17 +194,39 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       setRuleError(accountId, built.error);
       return;
     }
+    const editingId = editingRuleIds[accountId];
     const submitted = input;
     pendingRuleAccounts.current.add(accountId);
     setSavingRuleAccounts((prev) => ({ ...prev, [accountId]: true }));
     try {
-      const created = await api.createFilterRule(built.rule);
-      bumpRuleGeneration(accountId);
-      setFilterRules((prev) => {
-        const existing = prev[accountId] ?? [];
-        if (existing.some((item) => item.id === created.id)) return prev;
-        return { ...prev, [accountId]: [...existing, created] };
-      });
+      if (editingId) {
+        const existing = (filterRulesRef.current[accountId] ?? []).find(
+          (item) => item.id === editingId,
+        );
+        const updated = await api.updateFilterRule({
+          ...built.rule,
+          id: editingId,
+          enabled: existing?.enabled ?? true,
+        });
+        bumpRuleGeneration(accountId);
+        const apply = (prev: Record<string, FilterRule[]>) => ({
+          ...prev,
+          [accountId]: (prev[accountId] ?? []).map((item) =>
+            item.id === editingId ? updated : item,
+          ),
+        });
+        filterRulesRef.current = apply(filterRulesRef.current);
+        setFilterRules(apply);
+        setEditingRuleIds((prev) => withoutKey(prev, accountId));
+      } else {
+        const created = await api.createFilterRule(built.rule);
+        bumpRuleGeneration(accountId);
+        setFilterRules((prev) => {
+          const existing = prev[accountId] ?? [];
+          if (existing.some((item) => item.id === created.id)) return prev;
+          return { ...prev, [accountId]: [...existing, created] };
+        });
+      }
       setNewRuleInputs((prev) => {
         const current = prev[accountId];
         return current && sameDraft(current, submitted)
@@ -218,6 +243,58 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
       pendingRuleAccounts.current.delete(accountId);
       setSavingRuleAccounts((prev) => withoutKey(prev, accountId));
     }
+  }
+
+  function handleEditRule(accountId: string, rule: FilterRule) {
+    const conditions = rule.conditions ?? [];
+    const actions = rule.actions ?? [];
+    // Mint row ids here, not inside the state updater, so a re-run updater cannot change focused row keys.
+    const draft: RuleDraft = {
+      name: rule.name,
+      matchMode: rule.matchMode === "any" ? "any" : "all",
+      conditions:
+        conditions.length > 0
+          ? conditions.map((c) => ({
+              id: nextRuleRowId(),
+              field: c.field,
+              value: c.value,
+            }))
+          : [
+              {
+                id: nextRuleRowId(),
+                field: rule.field,
+                value: rule.contains,
+              },
+            ],
+      actions:
+        actions.length > 0
+          ? actions.map((a) => ({
+              id: nextRuleRowId(),
+              kind: a.kind,
+              target: a.targetMailbox ?? "",
+              flagColor:
+                a.flagColor !== null && a.flagColor !== undefined
+                  ? String(a.flagColor)
+                  : "0",
+            }))
+          : [
+              {
+                id: nextRuleRowId(),
+                kind: rule.action,
+                target: rule.targetMailbox ?? "",
+                flagColor: "0",
+              },
+            ],
+    };
+    setEditingRuleIds((prev) => ({ ...prev, [accountId]: rule.id }));
+    setNewRuleInputs((prev) => ({ ...prev, [accountId]: draft }));
+    setRuleErrors((prev) => withoutKey(prev, accountId));
+  }
+
+  function handleCancelEditRule(accountId: string) {
+    setEditingRuleIds((prev) => withoutKey(prev, accountId));
+    setNewRuleInputs((prev) => ({ ...prev, [accountId]: emptyRuleDraft() }));
+    setRuleErrors((prev) => withoutKey(prev, accountId));
   }
 
   async function handlePreviewRule(accountId: string) {
@@ -342,6 +419,9 @@ export function useSettingsFilterRules({ enabled, initialRuleSeed }: Options) {
     setNewRuleInputs,
     updateRuleDraft,
     handleAddRule,
+    editingRuleIds,
+    handleEditRule,
+    handleCancelEditRule,
     handlePreviewRule,
     handleMoveRule,
     handleToggleRule,

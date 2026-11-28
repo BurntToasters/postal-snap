@@ -98,21 +98,38 @@ export function useMailboxMessages({
       .catch(() => undefined);
   }, [activeAccountId, activeLocalView, activeMailboxId]);
 
+  useEffect(() => {
+    if (activeLocalView) {
+      pagingRequestRef.current += 1;
+    }
+  }, [activeLocalView, pagingRequestRef]);
+
   const listMailboxPage = useCallback(
-    (accountId: string, mailboxId: number, cursor?: MessageCursor) => {
-      if (listFilter === "all" && listSort === "date") {
+    (
+      accountId: string,
+      mailboxId: number,
+      cursor?: MessageCursor,
+      limit = 100,
+    ) => {
+      if (listFilter === "all" && listSort === "date" && limit === 100) {
         return cursor
           ? api.listMessages(accountId, mailboxId, cursor)
           : api.listMessages(accountId, mailboxId);
       }
       if (listSort === "date") {
-        return api.listMessages(accountId, mailboxId, cursor, 100, listFilter);
+        return api.listMessages(
+          accountId,
+          mailboxId,
+          cursor,
+          limit,
+          listFilter === "all" ? undefined : listFilter,
+        );
       }
       return api.listMessages(
         accountId,
         mailboxId,
         cursor,
-        100,
+        limit,
         listFilter === "all" ? undefined : listFilter,
         listSort,
       );
@@ -120,53 +137,69 @@ export function useMailboxMessages({
     [listFilter, listSort],
   );
 
-  const loadMessages = useCallback(async (): Promise<boolean> => {
-    if (
-      !activeAccountId ||
-      !activeMailboxId ||
-      activeLocalView ||
-      submittedQueryRef.current
-    ) {
-      messageRequestRef.current += 1;
-      if (!submittedQueryRef.current) setLoadingMessages(false);
-      return false;
-    }
-    const accountId = activeAccountId;
-    const mailboxId = activeMailboxId;
-    const request = ++messageRequestRef.current;
-    pagingRequestRef.current += 1;
-    searchRequestRef.current += 1;
-    setLoadingMessages(true);
-    try {
-      const loaded = await listMailboxPage(accountId, mailboxId);
-      const current = useAppStore.getState();
+  const loadMessages = useCallback(
+    async (preserveCount = false): Promise<boolean> => {
       if (
-        request !== messageRequestRef.current ||
-        current.activeAccountId !== accountId ||
-        current.activeMailboxId !== mailboxId ||
-        current.activeLocalView
-      )
+        !activeAccountId ||
+        !activeMailboxId ||
+        activeLocalView ||
+        submittedQueryRef.current
+      ) {
+        messageRequestRef.current += 1;
+        if (!submittedQueryRef.current) setLoadingMessages(false);
         return false;
-      setMessages(loaded.items, loaded.nextCursor ?? undefined, loaded.hasMore);
-      return true;
-    } catch (cause) {
-      if (request === messageRequestRef.current) setError(errorText(cause));
-      return false;
-    } finally {
-      if (request === messageRequestRef.current) setLoadingMessages(false);
-    }
-  }, [
-    activeAccountId,
-    activeLocalView,
-    activeMailboxId,
-    listMailboxPage,
-    messageRequestRef,
-    pagingRequestRef,
-    searchRequestRef,
-    submittedQueryRef,
-    setError,
-    setMessages,
-  ]);
+      }
+      const accountId = activeAccountId;
+      const mailboxId = activeMailboxId;
+      // Keep the rows already on screen when a background refresh runs.
+      const targetLimit = preserveCount
+        ? Math.min(2000, Math.max(100, useAppStore.getState().messages.length))
+        : 100;
+      const request = ++messageRequestRef.current;
+      pagingRequestRef.current += 1;
+      searchRequestRef.current += 1;
+      setLoadingMessages(true);
+      try {
+        const loaded = await listMailboxPage(
+          accountId,
+          mailboxId,
+          undefined,
+          targetLimit,
+        );
+        const current = useAppStore.getState();
+        if (
+          request !== messageRequestRef.current ||
+          current.activeAccountId !== accountId ||
+          current.activeMailboxId !== mailboxId ||
+          current.activeLocalView
+        )
+          return false;
+        setMessages(
+          loaded.items,
+          loaded.nextCursor ?? undefined,
+          loaded.hasMore,
+        );
+        return true;
+      } catch (cause) {
+        if (request === messageRequestRef.current) setError(errorText(cause));
+        return false;
+      } finally {
+        if (request === messageRequestRef.current) setLoadingMessages(false);
+      }
+    },
+    [
+      activeAccountId,
+      activeLocalView,
+      activeMailboxId,
+      listMailboxPage,
+      messageRequestRef,
+      pagingRequestRef,
+      searchRequestRef,
+      submittedQueryRef,
+      setError,
+      setMessages,
+    ],
+  );
 
   // Mailboxes whose server history is fully downloaded this session.
   const [serverHistoryDone, setServerHistoryDone] = useState<number[]>([]);
@@ -212,8 +245,16 @@ export function useMailboxMessages({
         key: "",
         pinned: last.pinned,
       });
-      if (request === pagingRequestRef.current)
+      const latest = useAppStore.getState();
+      if (
+        request === pagingRequestRef.current &&
+        latest.activeAccountId === accountId &&
+        latest.activeMailboxId === mailboxId &&
+        !latest.activeLocalView &&
+        !submittedQueryRef.current
+      ) {
         appendMessages(page.items, page.nextCursor ?? undefined, page.hasMore);
+      }
     } catch (cause) {
       if (request === pagingRequestRef.current) setError(errorText(cause));
     } finally {
@@ -315,6 +356,17 @@ export function useMailboxMessages({
           )
         )
           setMessages(cached, undefined, false);
+        if (
+          !searchStillCurrent(
+            request,
+            accountId,
+            mailboxId,
+            text,
+            searchAllFolders,
+            requireLiveQuery,
+          )
+        )
+          return false;
         const server = await api.searchServer(search);
         if (
           searchStillCurrent(

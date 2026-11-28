@@ -43,6 +43,7 @@ const READING_KEYS = new Set([
   "p",
   "r",
   "a",
+  "f",
   "i",
   "]",
   "[",
@@ -55,7 +56,7 @@ const READING_KEYS = new Set([
 ]);
 
 // List and dialog keys; forwarded only when the app takes them.
-const PARENT_KEYS = new Set(["Escape", "s", "u", "x", "e", "#", "!", "?"]);
+const PARENT_KEYS = new Set(["Escape", "s", "u", "x", "e", "#", "!", "?", "/"]);
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
@@ -279,6 +280,15 @@ export function useMessageFrame({
     const forwardKey = (event: KeyboardEvent) => {
       if (event.isComposing || isEditableTarget(event.target)) return;
       const key = event.key;
+      if (
+        event.shiftKey &&
+        (key === "ArrowUp" ||
+          key === "ArrowDown" ||
+          key === "Home" ||
+          key === "End")
+      ) {
+        return;
+      }
       const chord = event.metaKey || event.ctrlKey || event.altKey;
       const readingKey = !chord && READING_KEYS.has(key);
       if (!readingKey && !chord && !PARENT_KEYS.has(key)) return;

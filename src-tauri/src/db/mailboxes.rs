@@ -82,7 +82,7 @@ fn lookup_role_mailbox(
             &format!(
                 "SELECT f.id,f.name FROM mailboxes f
                  WHERE f.account_id=?1 AND {effective_role}=?2 AND f.server_available=1
-                 ORDER BY CASE COALESCE(f.role_source,'name') WHEN 'specialUse' THEN 0 ELSE 1 END, f.id LIMIT 1"
+                 ORDER BY CASE COALESCE(f.role_source,'name') WHEN 'specialUse' THEN 0 ELSE 1 END, f.is_all_mail ASC, f.id LIMIT 1"
             ),
             params![account_id, role],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -181,7 +181,7 @@ impl Database {
                     "UPDATE mailboxes SET role=?1, role_source=?2, uid_validity=?3, uid_next=NULL,
                      server_unread=NULL, server_total=0, local_total_delta=0, local_unread_delta=0,
                      counts_generation=counts_generation+1, server_available=1,
-                     backfill_uid=NULL, backfill_state='active', highest_modseq=NULL, last_flag_scan_at=NULL
+                     synced_max_uid=NULL, backfill_uid=NULL, backfill_state='active', highest_modseq=NULL, last_flag_scan_at=NULL
                      WHERE id=?4",
                     params![role.as_str(), role_source, uid_validity, stable_id],
                 )
@@ -244,6 +244,33 @@ impl Database {
         server_unread: Option<u32>,
         server_total: u32,
     ) -> Result<i64, String> {
+        let is_all_mail = crate::models::is_all_mail_folder(name, &[]);
+        self.upsert_mailbox_full(
+            account_id,
+            name,
+            role,
+            role_source,
+            is_all_mail,
+            uid_validity,
+            uid_next,
+            server_unread,
+            server_total,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_mailbox_full(
+        &self,
+        account_id: &str,
+        name: &str,
+        role: &MailboxRole,
+        role_source: &str,
+        is_all_mail: bool,
+        uid_validity: Option<u32>,
+        uid_next: Option<u32>,
+        server_unread: Option<u32>,
+        server_total: u32,
+    ) -> Result<i64, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
         let previous_validity: Option<Option<u32>> = transaction
@@ -268,13 +295,13 @@ impl Database {
             None => transaction.query_row("UPDATE mailbox_id_sequence SET last_id=MAX(last_id,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)))+1 WHERE singleton=1 RETURNING last_id", [], |row| row.get::<_, i64>(0)).map_err(db_error)?,
         };
         transaction.execute(
-            "INSERT INTO mailboxes (id, account_id, name, display_name, role, role_source, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
-             VALUES (?9, ?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
-             ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, role_source=excluded.role_source, uid_validity=excluded.uid_validity,
+            "INSERT INTO mailboxes (id, account_id, name, display_name, role, role_source, is_all_mail, uid_validity, uid_next, server_unread, server_total, counts_updated_at)
+             VALUES (?9, ?1, ?2, ?2, ?3, ?4, ?10, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+             ON CONFLICT(account_id, name) DO UPDATE SET role=excluded.role, role_source=excluded.role_source, is_all_mail=excluded.is_all_mail, uid_validity=excluded.uid_validity,
              uid_next=excluded.uid_next, server_unread=excluded.server_unread, server_total=excluded.server_total,
              counts_updated_at=CURRENT_TIMESTAMP, local_total_delta=0, local_unread_delta=0,
              counts_generation=mailboxes.counts_generation+1, server_available=1",
-            params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total, stable_id],
+            params![account_id, name, role.as_str(), role_source, uid_validity, uid_next, server_unread, server_total, stable_id, i64::from(is_all_mail)],
         ).map_err(db_error)?;
         let id: i64 = transaction
             .query_row(
@@ -384,9 +411,7 @@ impl Database {
     pub fn list_account_inbox_counts(&self) -> Result<Vec<AccountInboxCount>, String> {
         let conn = self.read_conn()?;
         // One row per account: recompute each effective inbox-role folder from
-        // cached rows, then sum across folders. The badge layer keeps only the
-        // first row per account, so multiple inbox-role folders must not
-        // surface separately here.
+        // cached rows, then sum across folders.
         let effective_role = effective_role_sql("f");
         let (unread_count, total_count) = count_fallbacks_sql("f");
         let mut statement = conn
@@ -776,6 +801,29 @@ impl Database {
             .map_err(db_error)
     }
 
+    pub fn synced_max_uid(&self, mailbox_id: i64) -> Result<u32, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT COALESCE(synced_max_uid, 0) FROM mailboxes WHERE id = ?1",
+                [mailbox_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
+    pub fn advance_synced_max_uid(&self, mailbox_id: i64, max_uid: u32) -> Result<(), String> {
+        if max_uid == 0 {
+            return Ok(());
+        }
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET synced_max_uid = MAX(COALESCE(synced_max_uid, 0), ?2) WHERE id = ?1",
+                params![mailbox_id, max_uid],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     pub fn min_uid(&self, mailbox_id: i64) -> Result<Option<u32>, String> {
         self.read_conn()?
             .query_row(
@@ -856,6 +904,20 @@ impl Database {
             .execute(
                 "UPDATE mailboxes SET delimiter=?2 WHERE id=?1",
                 params![mailbox_id, delimiter],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn set_mailbox_all_mail(
+        &self,
+        mailbox_id: i64,
+        is_all_mail: bool,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE mailboxes SET is_all_mail=?2 WHERE id=?1 AND is_all_mail<>?2",
+                params![mailbox_id, i64::from(is_all_mail)],
             )
             .map_err(db_error)?;
         Ok(())
@@ -979,22 +1041,27 @@ impl Database {
     ) -> Result<crate::models::SyncProgress, String> {
         let cutoff = policy.cutoff().map(crate::mail::parse::canonical_time);
         let conn = self.read_conn()?;
+        let effective_box = effective_role_sql("box");
         let (server_total, backfilling): (i64, i64) = conn
             .query_row(
-                "SELECT COALESCE(SUM(server_total),0),
-                        COALESCE(SUM(CASE WHEN backfill_state='active' THEN 1 ELSE 0 END),0)
-                 FROM mailboxes WHERE account_id=?1 AND role NOT IN ('junk','trash')",
+                &format!(
+                    "SELECT COALESCE(SUM(box.server_total),0),
+                            COALESCE(SUM(CASE WHEN box.backfill_state='active' THEN 1 ELSE 0 END),0)
+                     FROM mailboxes box WHERE box.account_id=?1 AND {effective_box} NOT IN ('junk','trash')"
+                ),
                 [account_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(db_error)?;
         let (cached, bodies_wanted, bodies_done): (i64, i64, i64) = conn
             .query_row(
-                "SELECT COUNT(*),
-                        COALESCE(SUM(CASE WHEN m.prefetch_failures<5 AND (?2 IS NULL OR julianday(COALESCE(m.internal_at,m.received_at)) >= julianday(?2)) THEN 1 ELSE 0 END),0),
-                        COALESCE(SUM(CASE WHEN m.body_bytes>0 AND (?2 IS NULL OR julianday(COALESCE(m.internal_at,m.received_at)) >= julianday(?2)) THEN 1 ELSE 0 END),0)
-                 FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
-                 WHERE m.account_id=?1 AND box.role NOT IN ('junk','trash')",
+                &format!(
+                    "SELECT COUNT(*),
+                            COALESCE(SUM(CASE WHEN m.prefetch_failures<5 AND (?2 IS NULL OR COALESCE(m.internal_at,m.received_at) >= ?2) THEN 1 ELSE 0 END),0),
+                            COALESCE(SUM(CASE WHEN m.body_bytes>0 AND (?2 IS NULL OR COALESCE(m.internal_at,m.received_at) >= ?2) THEN 1 ELSE 0 END),0)
+                     FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                     WHERE m.account_id=?1 AND {effective_box} NOT IN ('junk','trash')"
+                ),
                 params![account_id, cutoff],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -1032,6 +1099,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: id.into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: email.into(),
                 display_name: email.into(),
                 sync_state: "idle".into(),
@@ -1473,6 +1544,47 @@ mod tests {
         assert!(
             badge_steps < 1_000,
             "account badges used {badge_steps} VM steps"
+        );
+    }
+
+    // Failure modes for All Mail vs Archive:
+    // 1. \All beats \Archive when choosing the destination for archive moves.
+    // 2. Scoped sync loses skip_prefetch for persisted All Mail folders.
+    #[test]
+    fn archive_mailbox_prefers_non_all_mail_folder() {
+        let db = Database::memory();
+        db.insert_account(&account_with("account-1", "sam@example.com"))
+            .unwrap();
+        let all_mail = db
+            .upsert_mailbox_full(
+                "account-1",
+                "[Gmail]/All Mail",
+                &MailboxRole::Archive,
+                "specialUse",
+                true,
+                Some(1),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox_full(
+                "account-1",
+                "Archive",
+                &MailboxRole::Archive,
+                "specialUse",
+                false,
+                Some(2),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        assert_ne!(all_mail, archive);
+        assert_eq!(
+            db.mailbox_for_role("account-1", "archive").unwrap(),
+            Some((archive, "Archive".into()))
         );
     }
 }

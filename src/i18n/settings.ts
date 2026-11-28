@@ -371,6 +371,8 @@ export const settings = {
   ruleFlagRequired: "Choose a flag color.",
   ruleActionRequired: "Choose an action for the rule.",
   addRule: "Add rule",
+  editRule: "Edit",
+  saveRule: "Save rule",
   ruleSaved: "Rule saved.",
   ruleRemoved: "Rule removed.",
   ruleNameRequired: "Name the rule first.",

@@ -105,10 +105,16 @@ pub(crate) async fn connect_detailed(
                 .await
                 .map_err(|_| MailError::connection("Incoming TLS negotiation timed out."))?
                 .map_err(|error| {
-                    MailError::connection(crate::bridge::tls_error(
+                    let message = crate::bridge::tls_error_for_server(
                         &error,
                         "Incoming TLS negotiation",
-                    ))
+                        server.trusted_certificate.is_some(),
+                    );
+                    if crate::bridge::is_certificate_tls_error(&error) {
+                        MailError::certificate(message)
+                    } else {
+                        MailError::connection(message)
+                    }
                 })?;
             verify_pinned_stream(server, &tls)?;
             let mut client = async_imap::Client::new(tls);
@@ -152,7 +158,16 @@ pub(crate) async fn connect_detailed(
             .await
             .map_err(|_| MailError::connection("Incoming STARTTLS timed out."))?
             .map_err(|error| {
-                MailError::connection(crate::bridge::tls_error(&error, "Incoming STARTTLS"))
+                let message = crate::bridge::tls_error_for_server(
+                    &error,
+                    "Incoming STARTTLS",
+                    server.trusted_certificate.is_some(),
+                );
+                if crate::bridge::is_certificate_tls_error(&error) {
+                    MailError::certificate(message)
+                } else {
+                    MailError::connection(message)
+                }
             })?;
             verify_pinned_stream(server, &tls)?;
             async_imap::Client::new(tls)

@@ -15,8 +15,12 @@ export interface ServerConfig {
   username: string;
 }
 
+export type AppPasswordPolicy = "required" | "requiredWith2fa" | "none";
+export type PasswordFormat = "appleHyphenated" | "groupedSpaces" | "standard";
+
 export interface AccountSetupRequest {
   provider: ProviderKind;
+  providerId?: string;
   email: string;
   displayName: string;
   password: string;
@@ -32,10 +36,13 @@ export type MailSettingsDiscovery =
       providerId: string;
       providerName: string;
       accountProvider: ProviderKind;
-      source: "preset" | "mx" | "autoconfig";
+      source: "preset" | "mx" | "autoconfig" | "srv";
       imap: ServerConfig;
       smtp: ServerConfig;
       appPasswordUrl?: string | null;
+      appPasswordPolicy?: AppPasswordPolicy;
+      passwordFormat?: PasswordFormat;
+      setupHintKey?: string | null;
     }
   | {
       status: "unsupported";
@@ -51,6 +58,10 @@ export type DraftSourceKind = "reply" | "reply_all" | "forward" | "redirect";
 export interface AccountSummary {
   id: string;
   provider: ProviderKind;
+  providerId?: string | null;
+  appPasswordPolicy?: AppPasswordPolicy | null;
+  appPasswordUrl?: string | null;
+  passwordFormat?: PasswordFormat | null;
   email: string;
   displayName: string;
   syncState: SyncPhase;

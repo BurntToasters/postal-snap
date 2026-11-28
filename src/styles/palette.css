@@ -24,6 +24,7 @@
 .palette-dialog {
   align-self: start;
   margin-block-start: 12vh;
+  max-height: calc(100% - 12vh);
 }
 
 .palette-input {
