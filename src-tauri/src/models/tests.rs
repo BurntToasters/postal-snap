@@ -5,6 +5,7 @@ fn icloud_uses_local_part_for_imap_and_full_address_for_smtp() {
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email: "Jane@icloud.com".into(),
         display_name: "Jane".into(),
         password: "secret".into(),
@@ -22,7 +23,23 @@ fn icloud_uses_local_part_for_imap_and_full_address_for_smtp() {
 fn maps_special_use_before_fallback_names() {
     assert_eq!(mailbox_role("Bin", &["Trash".into()]), MailboxRole::Trash);
     assert_eq!(mailbox_role("Bin", &["\\Trash".into()]), MailboxRole::Trash);
-    assert_eq!(mailbox_role("Folder/Sent Messages", &[]), MailboxRole::Sent);
+    // Personal subfolders never steal system roles; provider namespaces do.
+    assert_eq!(
+        mailbox_role("Folder/Sent Messages", &[]),
+        MailboxRole::Other
+    );
+    assert_eq!(mailbox_role("Projects/Archive", &[]), MailboxRole::Other);
+    assert_eq!(mailbox_role("Work/Inbox", &[]), MailboxRole::Other);
+    assert_eq!(mailbox_role("Clients/Trash", &[]), MailboxRole::Other);
+    assert_eq!(mailbox_role("INBOX.Sent", &[]), MailboxRole::Sent);
+    assert_eq!(mailbox_role("INBOX/Drafts", &[]), MailboxRole::Drafts);
+    assert_eq!(mailbox_role("[Gmail]/All Mail", &[]), MailboxRole::Archive);
+    assert_eq!(mailbox_role("[Gmail]/Sent Mail", &[]), MailboxRole::Sent);
+    assert_eq!(mailbox_role("Bulk Mail", &[]), MailboxRole::Junk);
+    assert_eq!(mailbox_role("Gelöscht", &[]), MailboxRole::Trash);
+    assert!(is_all_mail_folder("All Mail", &[]));
+    assert!(is_all_mail_folder("Folder/Custom", &["\\All".into()]));
+    assert!(!is_all_mail_folder("Archive", &["\\Archive".into()]));
 }
 
 #[test]
@@ -30,6 +47,7 @@ fn manual_setup_rejects_unsafe_or_incomplete_servers() {
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Manual,
+        provider_id: None,
         email: "sam@example.com".into(),
         display_name: "Sam".into(),
         password: "secret".into(),
@@ -296,6 +314,7 @@ fn icloud_accepts_me_and_mac_addresses() {
         let request = AccountSetupRequest {
             certificate_reference: None,
             provider: ProviderKind::Icloud,
+            provider_id: None,
             email: email.into(),
             display_name: "Pat".into(),
             password: "secret".into(),
@@ -316,6 +335,7 @@ fn take_validated_setup_keeps_password_until_after_validation() {
     let mut request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email: "jane@icloud.com".into(),
         display_name: "Jane".into(),
         password: "abcd efgh ijkl mnop".into(),
@@ -333,6 +353,7 @@ fn take_validated_setup_rejects_whitespace_only_icloud_password() {
     let mut request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email: "jane@icloud.com".into(),
         display_name: "Jane".into(),
         password: " \t  ".into(),
@@ -348,6 +369,7 @@ fn taking_password_before_validation_would_fail() {
     let mut request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email: "jane@icloud.com".into(),
         display_name: "Jane".into(),
         password: "secret".into(),
@@ -364,6 +386,7 @@ fn manual_setup_trims_password_without_removing_internal_spaces() {
     let mut request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Manual,
+        provider_id: None,
         email: "sam@example.com".into(),
         display_name: "Sam".into(),
         password: "  phrase with spaces  ".into(),
@@ -538,4 +561,70 @@ fn timeouts_are_not_authentication_failures() {
         .code,
         "authenticationFailed"
     );
+}
+
+// Failure modes for 0.5.4 password normalization, zeroization, and IPC error classification:
+// 1. Blank password error matches "app-specific" and misclassifies as authenticationFailed instead of invalidInput.
+// 2. Saved Bridge certificate error matches "connection" and misclassifies as connectionFailed.
+// 3. Outgoing server change confirmation misses identityConfirmation.
+// 4. Non-iCloud app-password providers keep spaces or zero-width chars, breaking sign-in.
+// 5. Standard manual passwords strip internal spaces.
+// 6. Early validation failure in take_validated_setup drops request.password un-zeroized.
+#[test]
+fn password_normalization_zeroization_and_ipc_error_classification_054() {
+    assert_eq!(
+        IpcError::from("Enter the app-specific or email password.").code,
+        "invalidInput"
+    );
+    assert_eq!(
+        IpcError::from("IMAP connection test failed: The saved Bridge certificate is invalid.")
+            .code,
+        "certificateInvalid"
+    );
+    assert_eq!(
+        IpcError::from("Confirm the outgoing server change before saving.").code,
+        "identityConfirmation"
+    );
+    assert_eq!(
+        IpcError::from(
+            "SMTP connection test failed: Outgoing sign-in failed. Check the mail server, password, and internet connection."
+        )
+        .code,
+        "authenticationFailed"
+    );
+
+    assert_eq!(
+        normalize_setup_password_for(
+            &ProviderKind::Manual,
+            Some("gmail"),
+            "abcd efgh\u{200B} ijkl mnop"
+        ),
+        "abcdefghijklmnop"
+    );
+    assert_eq!(
+        normalize_setup_password_for(
+            &ProviderKind::Manual,
+            Some("fastmail"),
+            "  abcd efgh ijkl mnop \u{FEFF}"
+        ),
+        "abcdefghijklmnop"
+    );
+    assert_eq!(
+        normalize_setup_password_for(&ProviderKind::Manual, None, "  pass with spaces\u{200B}  "),
+        "pass with spaces"
+    );
+
+    let mut bad_request = AccountSetupRequest {
+        certificate_reference: None,
+        provider_id: None,
+        provider: ProviderKind::Manual,
+        email: "not-an-email".into(),
+        display_name: "Sam".into(),
+        password: "secret-password".into(),
+        imap: None,
+        smtp: None,
+        cache_policy: None,
+    };
+    assert!(take_validated_setup(&mut bad_request).is_err());
+    assert!(bad_request.password.is_empty());
 }

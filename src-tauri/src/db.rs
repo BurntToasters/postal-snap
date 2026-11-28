@@ -39,17 +39,17 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use migrations::migrate_schema;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
+use crate::date_time::{format_utc_seconds, now_utc, parse_rfc3339};
 #[cfg(test)]
 use crate::models::{
     AccountRecord, AccountSummary, CachePolicy, FilterRule, SearchQuery, ServerConfig,
 };
 use crate::models::{Attachment, ComposeDraft, MailboxRole, MessageSummary, ProviderKind, TlsMode};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 43;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 47;
 
 /// Hot write and read paths reuse prepared statements; rusqlite's default of 16 evicts them.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
@@ -269,14 +269,6 @@ impl Database {
         Ok(lock_connection(&self.connection))
     }
 
-    /// Copy the live frontend session before taking a database read lock.
-    pub(crate) fn current_undo_session(&self) -> Result<String, String> {
-        Ok(self
-            .undo_session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone())
-    }
 }
 }
 
@@ -429,15 +421,13 @@ pub(crate) fn db_error(error: rusqlite::Error) -> String {
 }
 
 pub(crate) fn references_from_raw(raw: &[u8]) -> Vec<String> {
-    let text = match std::str::from_utf8(raw) {
-        Ok(text) => text,
-        Err(_) => return Vec::new(),
-    };
-    let header_end = text
+    let head = &raw[..raw.len().min(16 * 1024)];
+    let lossy = String::from_utf8_lossy(head);
+    let header_end = lossy
         .find("\r\n\r\n")
-        .or_else(|| text.find("\n\n"))
-        .unwrap_or(text.len());
-    let headers = &text[..header_end];
+        .or_else(|| lossy.find("\n\n"))
+        .unwrap_or(lossy.len());
+    let headers = &lossy[..header_end];
     let mut unfolded = String::with_capacity(headers.len());
     for line in headers.lines() {
         if line.starts_with([' ', '\t']) {
@@ -622,12 +612,8 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
 /// Fractional seconds would otherwise sort on the wrong side of the
 /// text-compared `received_at` cursor used by message pagination.
 pub(crate) fn normalize_received_at(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|parsed| {
-            parsed
-                .with_timezone(&Utc)
-                .to_rfc3339_opts(SecondsFormat::Secs, false)
-        })
+    parse_rfc3339(value)
+        .map(format_utc_seconds)
         .unwrap_or_else(|_| value.to_string())
 }
 
@@ -655,7 +641,7 @@ fn recover_fts_index(connection: &Connection) -> Result<(), String> {
         .optional()
         .map_err(db_error)?;
     let due = last_checked
-        .map(|seconds| Utc::now().timestamp().saturating_sub(seconds) >= 86_400)
+        .map(|seconds| now_utc().unix_timestamp().saturating_sub(seconds) >= 86_400)
         .unwrap_or(true);
     if !due {
         return Ok(());
@@ -674,7 +660,9 @@ fn rebuild_fts_index(connection: &Connection) -> Result<(), String> {
         .execute_batch(
             "DELETE FROM message_fts;
              INSERT INTO message_fts(rowid, subject, sender, recipients, body)
-               SELECT id, subject, sender_name || ' ' || sender_address, recipients, text_body
+               SELECT id, subject, sender_name || ' ' || sender_address,
+                  recipients || ' ' || IFNULL((SELECT group_concat(j.value, ' ') FROM json_each(messages.bcc_json) AS j), ''),
+                  text_body
                FROM messages;",
         )
         .map_err(db_error)?;
@@ -685,7 +673,7 @@ fn mark_fts_checked(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "INSERT OR REPLACE INTO settings(key,value) VALUES('fts_checked_at',?1)",
-            [Utc::now().timestamp().to_string()],
+            [now_utc().unix_timestamp().to_string()],
         )
         .map_err(db_error)?;
     Ok(())

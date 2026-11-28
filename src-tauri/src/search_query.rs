@@ -15,7 +15,7 @@
 //! - quotes left open still parse; huge input is truncated;
 //! - conflicting `is:read` / `is:unread` is decided (last wins), not both.
 
-use chrono::{Datelike, NaiveDate};
+use time::Date;
 
 const MAX_INPUT_CHARS: usize = 200;
 const MAX_CLAUSES: usize = 12;
@@ -70,10 +70,10 @@ pub(crate) struct ParsedSearch {
     pub pinned: bool,
     /// `is:important` / `is:high`, or `is:low`. The stored mark, not one header.
     pub importance: Option<&'static str>,
-    pub before: Option<NaiveDate>,
-    pub after: Option<NaiveDate>,
+    pub before: Option<Date>,
+    pub after: Option<Date>,
     /// `on:` one UTC day. The last `on:` wins.
-    pub on: Option<NaiveDate>,
+    pub on: Option<Date>,
 }
 
 fn has_alnum(value: &str) -> bool {
@@ -202,7 +202,7 @@ pub(crate) fn filename_like_pattern(needle: &str) -> String {
     format!("%{escaped}%")
 }
 
-fn parse_date(value: &str) -> Option<NaiveDate> {
+fn parse_date(value: &str) -> Option<Date> {
     let bytes = value.as_bytes();
     let shaped = bytes.len() == 10
         && bytes[4] == b'-'
@@ -214,7 +214,7 @@ fn parse_date(value: &str) -> Option<NaiveDate> {
     if !shaped {
         return None;
     }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+    crate::date_time::parse_iso_date(value).ok()
 }
 
 /// Flag color names in Apple Mail's order. The index is the color value.
@@ -390,17 +390,25 @@ fn fts_phrase(value: &str) -> Option<String> {
     Some(format!("\"{}\"*", words.join(" ").replace('"', "\"\"")))
 }
 
-/// Double-quoted IMAP string: control characters dropped, `\` and `"`
-/// escaped.
-fn imap_quote(value: &str) -> Option<String> {
-    let cleaned = value
+/// Double-quoted IMAP string, or RFC 7888 `{N+}\r\n` UTF-8 literal when
+/// non-ASCII and `literal_plus` is advertised. Control chars are dropped.
+fn imap_value(value: &str, ascii: &mut bool, literal_plus: bool) -> Option<String> {
+    let cleaned: String = value
         .chars()
         .filter(|character| !character.is_control())
         .take(MAX_INPUT_CHARS)
-        .collect::<String>()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    (!cleaned.trim().is_empty()).then(|| format!("\"{cleaned}\""))
+        .collect();
+    if cleaned.trim().is_empty() {
+        return None;
+    }
+    let is_ascii = cleaned.is_ascii();
+    *ascii &= is_ascii;
+    if !is_ascii && literal_plus {
+        Some(format!("{{{}+}}\r\n{cleaned}", cleaned.len()))
+    } else {
+        let escaped = cleaned.replace('\\', "\\\\").replace('"', "\\\"");
+        Some(format!("\"{escaped}\""))
+    }
 }
 
 /// Account address and aliases, lowercased, for `from:me` and `to:me`.
@@ -421,12 +429,16 @@ pub(crate) fn search_identities(email: &str, aliases: &[String]) -> Vec<String> 
 }
 
 /// `FROM a`, or `OR FROM a FROM b`, or `OR OR FROM a FROM b FROM c`.
-fn imap_any(key: &str, identities: &[String], ascii: &mut bool) -> Option<String> {
+fn imap_any(
+    key: &str,
+    identities: &[String],
+    ascii: &mut bool,
+    literal_plus: bool,
+) -> Option<String> {
     let mut keys = Vec::new();
     for value in identities {
-        let quoted = imap_quote(value)?;
-        *ascii &= value.is_ascii();
-        keys.push(format!("{key} {quoted}"));
+        let arg = imap_value(value, ascii, literal_plus)?;
+        keys.push(format!("{key} {arg}"));
     }
     let mut keys = keys.into_iter();
     let mut combined = keys.next()?;
@@ -436,12 +448,26 @@ fn imap_any(key: &str, identities: &[String], ascii: &mut bool) -> Option<String
     Some(combined)
 }
 
-fn imap_date(date: NaiveDate) -> String {
+fn imap_date(date: Date) -> String {
+    let month = match date.month() {
+        time::Month::January => 0,
+        time::Month::February => 1,
+        time::Month::March => 2,
+        time::Month::April => 3,
+        time::Month::May => 4,
+        time::Month::June => 5,
+        time::Month::July => 6,
+        time::Month::August => 7,
+        time::Month::September => 8,
+        time::Month::October => 9,
+        time::Month::November => 10,
+        time::Month::December => 11,
+    };
     format!(
         // IMAP date-year is 4DIGIT; `0001` must not become `1`.
         "{}-{}-{:04}",
         date.day(),
-        MONTHS[date.month0() as usize],
+        MONTHS[month],
         date.year()
     )
 }
@@ -512,6 +538,14 @@ impl ParsedSearch {
     }
 
     pub(crate) fn imap_criteria_with(&self, identities: &[String]) -> Option<String> {
+        self.imap_criteria_with_options(identities, false)
+    }
+
+    pub(crate) fn imap_criteria_with_options(
+        &self,
+        identities: &[String],
+        literal_plus: bool,
+    ) -> Option<String> {
         if self.is_empty() || self.muted || self.pinned || self.importance.is_some() {
             // Mute, pins, and importance live in the local database. A server
             // search cannot see them, and one Importance header would miss
@@ -529,20 +563,19 @@ impl ParsedSearch {
         ];
         for (key, values) in operators {
             for value in values {
-                if let Some(quoted) = imap_quote(value) {
-                    ascii &= value.is_ascii();
-                    keys.push(format!("{key} {quoted}"));
+                if let Some(arg) = imap_value(value, &mut ascii, literal_plus) {
+                    keys.push(format!("{key} {arg}"));
                 }
             }
         }
         if self.from_self {
-            keys.push(imap_any("FROM", identities, &mut ascii)?);
+            keys.push(imap_any("FROM", identities, &mut ascii, literal_plus)?);
         }
         if self.to_self {
-            keys.push(imap_any("TO", identities, &mut ascii)?);
+            keys.push(imap_any("TO", identities, &mut ascii, literal_plus)?);
         }
         if self.cc_self {
-            keys.push(imap_any("CC", identities, &mut ascii)?);
+            keys.push(imap_any("CC", identities, &mut ascii, literal_plus)?);
         }
         match self.read {
             Some(true) => keys.push("SEEN".into()),
@@ -585,9 +618,8 @@ impl ParsedSearch {
             keys.push(format!("SMALLER {size}"));
         }
         for term in &self.plain {
-            if let Some(quoted) = imap_quote(&term.text) {
-                ascii &= term.text.is_ascii();
-                keys.push(format!("TEXT {quoted}"));
+            if let Some(arg) = imap_value(&term.text, &mut ascii, literal_plus) {
+                keys.push(format!("TEXT {arg}"));
             }
         }
         if keys.is_empty() {
@@ -611,8 +643,20 @@ impl ParsedSearch {
 mod tests {
     use super::*;
 
-    fn date(value: &str) -> NaiveDate {
-        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    fn date(value: &str) -> Date {
+        crate::date_time::parse_iso_date(value).unwrap()
+    }
+
+    #[test]
+    fn search_dates_keep_leap_day_and_reject_nonleap_day() {
+        assert_eq!(parse("on:2024-02-29").on, Some(date("2024-02-29")));
+        let invalid = parse("on:2023-02-29");
+        assert!(invalid.on.is_none());
+        assert_eq!(invalid.plain[0].text, "on:2023-02-29");
+        assert_eq!(
+            parse("on:2024-02-29").imap_criteria().as_deref(),
+            Some("ON 29-Feb-2024")
+        );
     }
 
     #[test]
@@ -995,5 +1039,20 @@ mod tests {
         assert!(parse("   ").is_empty());
         assert_eq!(parse("   ").imap_criteria(), None);
         assert_eq!(parse("!!! ???").imap_criteria(), None);
+    }
+
+    // Failure modes:
+    // 1. Non-ASCII search emits 8-bit quoted bytes instead of RFC 7888 LITERAL+ when supported.
+    #[test]
+    fn non_ascii_search_uses_literal_plus_when_advertised() {
+        let parsed = parse("café");
+        assert_eq!(
+            parsed.imap_criteria_with_options(&[], true).as_deref(),
+            Some("CHARSET UTF-8 TEXT {5+}\r\ncafé")
+        );
+        assert_eq!(
+            parsed.imap_criteria_with_options(&[], false).as_deref(),
+            Some("CHARSET UTF-8 TEXT \"café\"")
+        );
     }
 }

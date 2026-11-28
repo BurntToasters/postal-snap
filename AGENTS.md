@@ -17,12 +17,12 @@ The default density is Normal: a space-efficient professional layout. Comfortabl
 The current (0.5.x) scope is deliberately focused:
 
 - Guided iCloud Mail setup using an app-specific password.
-- Secure manual IMAP/SMTP setup, with provider presets and HTTPS autoconfig discovery.
+- Secure manual IMAP/SMTP setup, with provider presets, HTTPS autoconfig, and RFC 6186 SRV discovery. Gmail works with a Google App Password over the manual preset (`imap.gmail.com:993`, `smtp.gmail.com:465`).
 - Proton Bridge accounts over loopback with a pinned, user-approved certificate (experimental until the release checklist smoke passes).
 - Multiple isolated accounts; no unified inbox.
 - Familiar folders, message list, reader, search, drafts, outbox, attachments, and rich compose.
 - Shipped extras already in the tree: per-account signatures, filter rules (v2: any/all matching, flag, pin, and notify actions), optional thread grouping, undo-send / scheduled outbox, snooze, iCloud aliases, recipient suggestions, optional window glass, close-to-tray on Windows/macOS, colored flags (Apple Mail-compatible keywords), junk training, per-account new-mail notifications with tap-to-open, mbox import/export of a mailbox, `.eml` file viewer, attached-message view, and in-app PDF page preview.
-- Drag-out of attachments to Finder/Explorer is deferred to 0.5.3. The `start_attachment_drag` and `start_message_drag` commands are registered stubs that return "Not available yet."
+- Drag-out of attachments to Finder/Explorer is deferred to a later release. The `start_attachment_drag` and `start_message_drag` commands are registered stubs that return "Not available yet."
 - No telemetry, analytics, licensing server, trial logic, or Postal Snap cloud.
 - English-US first, with UI strings kept central for later localization.
 
@@ -62,7 +62,7 @@ Important files:
 - `src-tauri/src/settings.rs`: validated atomic `settings.json` storage, including the direct-edition `updateCheckInterval` cadence, `updateChannel`, and `closeToTray`.
 - `src-tauri/src/tray.rs`: Windows notification-area / macOS menu bar extra for close-to-tray.
 - `src-tauri/src/bridge.rs`: Proton Bridge certificate staging, approval, and fingerprint pinning.
-- `src-tauri/src/providers.rs`: provider presets, MX matching, and HTTPS autoconfig discovery.
+- `src-tauri/src/providers.rs`: provider presets, app-password metadata, MX matching, HTTPS autoconfig, and RFC 6186 SRV discovery.
 - `src-tauri/src/strings.rs`: user-facing text shown by native code (menus, tray, notifications, dialogs).
 - `src-tauri/src/window_fx.rs`: Mica on Windows, sidebar vibrancy with `macos-vibrancy`, and opaque fallbacks.
 - `src-tauri/src/notify.rs`: new-mail notifications, bounded notice-to-message map, and tap routing (ids only).

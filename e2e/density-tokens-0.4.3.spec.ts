@@ -13,7 +13,6 @@ const densities = ["comfortable", "normal", "compact"] as const;
 const scales = [1, 2] as const;
 
 async function load(page: Page, density: string, scale: number) {
-  await installMockIpc(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/?density=${density}&scale=${scale}`);
   await expect(page.locator(".message-row").first()).toBeVisible();
@@ -97,6 +96,7 @@ test.describe("density tokens 0.4.3", () => {
   for (const density of densities)
     for (const scale of scales)
       test(`probe ${density} ${scale}x`, async ({ page }) => {
+        await installMockIpc(page);
         await load(page, density, scale);
         await mountFixture(page);
         const p = await probe(page);
@@ -135,16 +135,15 @@ test.describe("density tokens 0.4.3", () => {
       });
 
   test("compact <= normal <= comfortable and sizes come from tokens", async ({
-    browser,
+    page,
   }) => {
     const out: Record<string, Probe> = {};
+    await installMockIpc(page);
     for (const density of densities)
       for (const scale of scales) {
-        const page = await browser.newPage();
         await load(page, density, scale);
         await mountFixture(page);
         out[`${density}-${scale}x`] = await probe(page);
-        await page.close();
       }
     for (const scale of scales) {
       const c = out[`comfortable-${scale}x`];

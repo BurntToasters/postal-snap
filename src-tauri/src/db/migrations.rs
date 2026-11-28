@@ -46,6 +46,10 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (41, step_v41),
     (42, step_v42),
     (43, step_v43),
+    (44, step_v44),
+    (45, step_v45),
+    (46, step_v46),
+    (47, step_v47),
 ];
 
 pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> {
@@ -69,6 +73,35 @@ pub(super) fn migrate_schema(connection: &mut Connection) -> Result<(), String> 
             VALUES(1,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)));").map_err(db_error)?;
     transaction
         .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
+        .map_err(db_error)?;
+    transaction.commit().map_err(db_error)
+}
+
+#[cfg(test)]
+pub(super) fn migrate_schema_to_version_for_test(
+    connection: &mut Connection,
+    target_version: u32,
+) -> Result<(), String> {
+    let transaction = connection.transaction().map_err(db_error)?;
+    let version: u32 = transaction
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if version > target_version || target_version > CURRENT_SCHEMA_VERSION {
+        return Err("Invalid test migration target".into());
+    }
+    for &(target, migrate) in MIGRATIONS {
+        if version < target && target <= target_version {
+            migrate(&transaction)?;
+        }
+    }
+    transaction.execute_batch("CREATE TABLE IF NOT EXISTS mailbox_id_sequence (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        last_id INTEGER NOT NULL CHECK(typeof(last_id)='integer' AND last_id>=0));
+        INSERT OR IGNORE INTO mailbox_id_sequence(singleton,last_id)
+            VALUES(1,(SELECT COALESCE(MAX(id),0) FROM (SELECT id FROM mailboxes UNION ALL SELECT mailbox_id AS id FROM folder_assignments)));"
+    ).map_err(db_error)?;
+    transaction
+        .pragma_update(None, "user_version", target_version)
         .map_err(db_error)?;
     transaction.commit().map_err(db_error)
 }
@@ -1022,6 +1055,186 @@ fn step_v43(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
     Ok(())
 }
 
+fn step_v45(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "state",
+        "ALTER TABLE offline_ops ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','needs_attention'))",
+    )?;
+    transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS offline_ops_account_state_due ON offline_ops(account_id,state,not_before)",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v46(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "offline_ops",
+        "attention_token",
+        "ALTER TABLE offline_ops ADD COLUMN attention_token TEXT",
+    )?;
+    transaction
+        .execute(
+            "UPDATE offline_ops SET attention_token=lower(hex(randomblob(16)))
+             WHERE state='needs_attention' AND attention_token IS NULL",
+            [],
+        )
+        .map_err(db_error)?;
+
+    transaction
+        .execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS offline_ops_attention_token_insert
+             AFTER INSERT ON offline_ops
+             WHEN NEW.state='needs_attention' OR NEW.attention_token IS NOT NULL
+             BEGIN
+               UPDATE offline_ops SET attention_token=
+                 CASE WHEN NEW.state='needs_attention' THEN lower(hex(randomblob(16))) ELSE NULL END
+               WHERE id=NEW.id;
+             END;
+             CREATE TRIGGER IF NOT EXISTS offline_ops_attention_token_update
+             AFTER UPDATE OF state,account_id,kind,payload ON offline_ops
+             WHEN NEW.state='needs_attention' OR NEW.attention_token IS NOT NULL
+             BEGIN
+               UPDATE offline_ops SET attention_token=
+                 CASE WHEN NEW.state='needs_attention' THEN
+                   CASE WHEN OLD.state<>'needs_attention'
+                          OR OLD.account_id IS NOT NEW.account_id
+                          OR OLD.kind IS NOT NEW.kind
+                          OR OLD.payload IS NOT NEW.payload
+                          OR OLD.attention_token IS NULL
+                        THEN lower(hex(randomblob(16)))
+                        ELSE OLD.attention_token END
+                 ELSE NULL END
+               WHERE id=NEW.id;
+             END;",
+        )
+        .map_err(db_error)?;
+
+    let rule_pending = super::messages::ARRIVAL_RULE_PENDING;
+    let notice_pending = super::messages::ARRIVAL_NOTICE_PENDING;
+    transaction
+        .execute_batch(&format!(
+            "CREATE INDEX IF NOT EXISTS messages_pending_rule_arrival
+               ON messages(account_id,id)
+               WHERE (notification_state & {rule_pending}) != 0;
+             CREATE INDEX IF NOT EXISTS messages_pending_notice_arrival
+               ON messages(account_id,id)
+               WHERE (notification_state & {notice_pending}) != 0;"
+        ))
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v47(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "accounts",
+        "provider_id",
+        "ALTER TABLE accounts ADD COLUMN provider_id TEXT",
+    )?;
+    ensure_column(
+        transaction,
+        "mailboxes",
+        "synced_max_uid",
+        "ALTER TABLE mailboxes ADD COLUMN synced_max_uid INTEGER",
+    )?;
+    ensure_column(
+        transaction,
+        "mailboxes",
+        "is_all_mail",
+        "ALTER TABLE mailboxes ADD COLUMN is_all_mail INTEGER NOT NULL DEFAULT 0",
+    )?;
+    let accounts = {
+        let mut statement = transaction
+            .prepare("SELECT id, provider, imap_host FROM accounts WHERE provider_id IS NULL")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?
+    };
+    for (id, provider_raw, imap_host) in accounts {
+        let provider = parse_provider(&provider_raw);
+        let provider_id = crate::providers::infer_provider_id(&provider, &imap_host);
+        transaction
+            .execute(
+                "UPDATE accounts SET provider_id=?2 WHERE id=?1",
+                params![id, provider_id],
+            )
+            .map_err(db_error)?;
+    }
+    transaction
+        .execute(
+            "UPDATE mailboxes
+             SET synced_max_uid = (
+                 SELECT MAX(uid) FROM messages
+                 WHERE messages.mailbox_id = mailboxes.id AND messages.uid > 0
+             )
+             WHERE synced_max_uid IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM messages
+                   WHERE messages.mailbox_id = mailboxes.id AND messages.uid > 0
+               )",
+            [],
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute(
+            "UPDATE mailboxes
+             SET is_all_mail = 1
+             WHERE role = 'archive'
+               AND (
+                   lower(name) LIKE '%all mail%'
+                   OR lower(name) LIKE '%alle nachrichten%'
+                   OR lower(name) LIKE '%tous les messages%'
+                   OR lower(name) LIKE '%todos%'
+               )",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn step_v44(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
+    ensure_column(
+        transaction,
+        "messages",
+        "notification_state",
+        "ALTER TABLE messages ADD COLUMN notification_state INTEGER NOT NULL DEFAULT 0",
+    )?;
+    let effective_role = super::mailboxes::effective_role_sql("f");
+    transaction
+        .execute(
+            &format!(
+                "UPDATE messages SET notification_state=notification_state|3
+                 WHERE id IN (
+                   SELECT m.id FROM messages m
+                   JOIN mailboxes f ON f.id=m.mailbox_id
+                   JOIN accounts a ON a.id=m.account_id
+                   WHERE a.rules_pending_from IS NOT NULL
+                     AND m.id>a.rules_pending_from
+                     AND m.is_read=0
+                     AND m.pending_move_to IS NULL
+                     AND {effective_role}='inbox'
+                 )"
+            ),
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
 /// Rules saved before v43 carry one condition and one action in legacy columns.
 /// The JSON shape matches the camelCase DTOs in `models/dto.rs`.
 fn backfill_filter_rule_json(transaction: &rusqlite::Transaction<'_>) -> Result<(), String> {
@@ -1534,8 +1747,8 @@ mod tests {
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 43);
-        assert_eq!(CURRENT_SCHEMA_VERSION, 43);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 47);
 
         let rows: Vec<(String, String, String, String)> = conn
             .prepare("SELECT id,match_mode,conditions_json,actions_json FROM filter_rules ORDER BY position")
@@ -1569,5 +1782,227 @@ mod tests {
             )
             .unwrap();
         assert_eq!((flag_color, notify), (0, 1));
+    }
+
+    #[test]
+    fn dismiss_failed_offline_migrates_v45_tokens_and_arrival_indexes() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE accounts(id TEXT PRIMARY KEY, provider TEXT, imap_host TEXT);
+                 CREATE TABLE mailboxes(id INTEGER PRIMARY KEY, name TEXT, role TEXT);
+                 CREATE TABLE folder_assignments(mailbox_id INTEGER);
+                 CREATE TABLE messages(
+                   id INTEGER PRIMARY KEY,
+                   account_id TEXT NOT NULL,
+                   mailbox_id INTEGER,
+                   uid INTEGER,
+                   notification_state INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE offline_ops(
+                   id INTEGER PRIMARY KEY,
+                   account_id TEXT NOT NULL,
+                   kind TEXT NOT NULL,
+                   payload TEXT NOT NULL,
+                   state TEXT NOT NULL DEFAULT 'queued'
+                 );
+                 WITH digits(x) AS (
+                   VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)
+                 )
+                 INSERT INTO messages(id,account_id,notification_state)
+                 SELECT 1 + a.x*10000 + b.x*1000 + c.x*100 + d.x*10 + e.x,
+                        'legacy-account', 0
+                 FROM digits a, digits b, digits c, digits d, digits e;
+                 INSERT INTO accounts(id,provider,imap_host)
+                   VALUES('legacy-account','manual','imap.example.test');
+                 INSERT INTO offline_ops(id,account_id,kind,payload,state)
+                   VALUES(7,'legacy-account','move','{}','needs_attention');
+                 PRAGMA user_version=45;",
+            )
+            .unwrap();
+
+        migrate_schema(&mut connection).unwrap();
+
+        let version: u32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        let legacy_token: String = connection
+            .query_row(
+                "SELECT attention_token FROM offline_ops WHERE id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_token.len(), 32);
+        assert!(legacy_token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let plan_for_mask = |mask: i64, ordering: &str| {
+            let sql = format!(
+                "EXPLAIN QUERY PLAN SELECT id FROM messages
+                 WHERE account_id=?1 AND (notification_state & ?2) != 0
+                 ORDER BY id {ordering} LIMIT 100"
+            );
+            let mut statement = connection.prepare(&sql).unwrap();
+            statement
+                .query_map(rusqlite::params!["legacy-account", mask], |row| {
+                    row.get::<_, String>(3)
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join(" ")
+        };
+        let rule_plan = plan_for_mask(crate::db::messages::ARRIVAL_RULE_PENDING, "ASC");
+        let notice_plan = plan_for_mask(crate::db::messages::ARRIVAL_NOTICE_PENDING, "DESC");
+        assert!(
+            rule_plan.contains("messages_pending_rule_arrival"),
+            "rule planner did not use its partial index: {rule_plan}"
+        );
+        assert!(
+            notice_plan.contains("messages_pending_notice_arrival"),
+            "notice planner did not use its partial index: {notice_plan}"
+        );
+        let cached_rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached_rows, 100_000);
+
+        connection
+            .execute(
+                "UPDATE offline_ops SET state='needs_attention' WHERE id=7",
+                [],
+            )
+            .unwrap();
+        let unchanged_token: String = connection
+            .query_row(
+                "SELECT attention_token FROM offline_ops WHERE id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged_token, legacy_token);
+        connection
+            .execute("UPDATE offline_ops SET state='queued' WHERE id=7", [])
+            .unwrap();
+        let queued_token: Option<String> = connection
+            .query_row(
+                "SELECT attention_token FROM offline_ops WHERE id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued_token, None);
+        connection
+            .execute(
+                "UPDATE offline_ops SET state='needs_attention' WHERE id=7",
+                [],
+            )
+            .unwrap();
+        let new_token: String = connection
+            .query_row(
+                "SELECT attention_token FROM offline_ops WHERE id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(new_token, legacy_token);
+        connection
+            .execute(
+                "UPDATE offline_ops SET payload='replacement' WHERE id=7",
+                [],
+            )
+            .unwrap();
+        let replaced_token: String = connection
+            .query_row(
+                "SELECT attention_token FROM offline_ops WHERE id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(replaced_token, new_token);
+    }
+
+    // Failure modes for v46 -> v47:
+    // 1. Legacy accounts lose provider_id or misclassify Fastmail/iCloud/Bridge.
+    // 2. mailboxes.synced_max_uid starts NULL on populated folders, forcing a full re-sync.
+    // 3. mailboxes.is_all_mail misses [Gmail]/All Mail or marks Archive as All Mail.
+    #[test]
+    fn v47_backfills_provider_id_synced_max_uid_and_is_all_mail() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.sqlite3");
+        {
+            let _database = Database::open(&path).unwrap();
+        }
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "PRAGMA foreign_keys=OFF;
+                     ALTER TABLE accounts DROP COLUMN provider_id;
+                     ALTER TABLE mailboxes DROP COLUMN synced_max_uid;
+                     ALTER TABLE mailboxes DROP COLUMN is_all_mail;
+                     INSERT INTO accounts(id,provider,email,display_name,imap_host,imap_port,imap_tls,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username)
+                       VALUES
+                       ('a-fm','manual','u@example.test','FM','imap.fastmail.com',993,'tls','u@example.test','smtp.fastmail.com',465,'tls','u@example.test'),
+                       ('a-ic','icloud','u@icloud.com','IC','imap.mail.me.com',993,'tls','u','smtp.mail.me.com',587,'startTls','u@icloud.com');
+                     INSERT INTO mailboxes(id,account_id,name,display_name,role)
+                       VALUES
+                       (1,'a-fm','INBOX','INBOX','inbox'),
+                       (2,'a-fm','Archive','Archive','archive'),
+                       (3,'a-fm','[Gmail]/All Mail','[Gmail]/All Mail','archive');
+                     INSERT INTO messages(id,account_id,mailbox_id,uid,received_at)
+                       VALUES
+                       (10,'a-fm',1,42,'2026-10-01T00:00:00Z'),
+                       (11,'a-fm',1,99,'2026-10-02T00:00:00Z');
+                     PRAGMA user_version=46;",
+                )
+                .unwrap();
+        }
+
+        let reopened = Database::open(&path).unwrap();
+        let conn = reopened.conn().unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+
+        let fm_provider: Option<String> = conn
+            .query_row(
+                "SELECT provider_id FROM accounts WHERE id='a-fm'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ic_provider: Option<String> = conn
+            .query_row(
+                "SELECT provider_id FROM accounts WHERE id='a-ic'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fm_provider.as_deref(), Some("fastmail"));
+        assert_eq!(ic_provider.as_deref(), Some("icloud"));
+
+        let (inbox_max, inbox_all): (Option<u32>, i64) = conn
+            .query_row(
+                "SELECT synced_max_uid, is_all_mail FROM mailboxes WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let archive_all: i64 = conn
+            .query_row("SELECT is_all_mail FROM mailboxes WHERE id=2", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let gmail_all: i64 = conn
+            .query_row("SELECT is_all_mail FROM mailboxes WHERE id=3", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!((inbox_max, inbox_all), (Some(99), 0));
+        assert_eq!(archive_all, 0);
+        assert_eq!(gmail_all, 1);
     }
 }

@@ -59,6 +59,15 @@
   }
 }
 
+/* Reclaim ornamental space and scope padding when enlarged text is in use. */
+html[data-text-scale="large"] .toolbar-flex-spacer {
+  display: none;
+}
+
+html[data-text-scale="large"] .search-scope {
+  padding-inline: calc(var(--space-1) / 2);
+}
+
 /* Only search shrinks; clipping Compose or the badge corrupts the bar. */
 .toolbar-trailing > :not(.search-box) {
   flex-shrink: 0;

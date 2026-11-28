@@ -8,7 +8,7 @@ import { useAppStore } from "../../store";
 import { preparePassword } from "../setup/request";
 import type { SettingsSaveUpdate } from "./useSettingsSave";
 import { forgetAccountSessions } from "../../accountSessions";
-import { errorText } from "../../errors";
+import { describeSetupError, errorText } from "../../errors";
 
 interface Options {
   onClose: () => void;
@@ -67,6 +67,9 @@ export function useSettingsAccountManagement({
   const [passwordStatus, setPasswordStatus] = useState<Record<string, string>>(
     {},
   );
+  const [passwordErrors, setPasswordErrors] = useState<
+    Record<string, { text: string; hint?: string; appPasswordUrl?: string }>
+  >({});
   const [updatingPasswordId, setUpdatingPasswordId] = useState<string>();
   const [nameInputs, setNameInputs] = useState<Record<string, string>>({});
   const [nameStatus, setNameStatus] = useState<Record<string, string>>({});
@@ -109,7 +112,8 @@ export function useSettingsAccountManagement({
       ([id, value]) =>
         value !==
         (accounts.find((account) => account.id === id)?.signatureHtml ?? ""),
-    );
+    ) ||
+    Object.values(passwordInputs).some((value) => value.length > 0);
 
   function clearAliasInputIfUnchanged(accountId: string, submitted: string) {
     setNewAliasInputs((previous) =>
@@ -298,7 +302,13 @@ export function useSettingsAccountManagement({
     const password = preparePassword(
       account?.provider ?? "manual",
       rawPassword,
+      {
+        providerId: account?.providerId,
+        passwordFormat: account?.passwordFormat,
+      },
     );
+    setPasswordStatus((prev) => withoutAccount(prev, accountId));
+    setPasswordErrors((prev) => withoutAccount(prev, accountId));
     setUpdatingPasswordId(accountId);
     try {
       const updated = await api.updateAccountPassword(accountId, password);
@@ -312,7 +322,24 @@ export function useSettingsAccountManagement({
         [accountId]: strings.settings.passwordUpdated,
       }));
     } catch (cause) {
-      setError(errorText(cause));
+      const described = describeSetupError(
+        cause,
+        account?.provider ?? "manual",
+        {
+          providerId: account?.providerId,
+          appPasswordPolicy: account?.appPasswordPolicy,
+          appPasswordUrl: account?.appPasswordUrl,
+        },
+      );
+      setPasswordErrors((prev) => ({
+        ...prev,
+        [accountId]: {
+          text: described.text,
+          hint: described.hint,
+          appPasswordUrl: described.appPasswordUrl,
+        },
+      }));
+      setError(described.text);
     } finally {
       setUpdatingPasswordId(undefined);
     }
@@ -431,6 +458,8 @@ export function useSettingsAccountManagement({
     setSignatureHtmlInputs({});
     setNewAliasInputs({});
     setPasswordInputs({});
+    setPasswordStatus({});
+    setPasswordErrors({});
   }, []);
 
   return {
@@ -443,6 +472,9 @@ export function useSettingsAccountManagement({
     passwordInputs,
     setPasswordInputs,
     passwordStatus,
+    passwordErrors,
+    setPasswordStatus,
+    setPasswordErrors,
     updatingPasswordId,
     handleUpdatePassword,
     nameInputs,

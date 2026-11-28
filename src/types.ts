@@ -15,8 +15,12 @@ export interface ServerConfig {
   username: string;
 }
 
+export type AppPasswordPolicy = "required" | "requiredWith2fa" | "none";
+export type PasswordFormat = "appleHyphenated" | "groupedSpaces" | "standard";
+
 export interface AccountSetupRequest {
   provider: ProviderKind;
+  providerId?: string;
   email: string;
   displayName: string;
   password: string;
@@ -32,10 +36,13 @@ export type MailSettingsDiscovery =
       providerId: string;
       providerName: string;
       accountProvider: ProviderKind;
-      source: "preset" | "mx" | "autoconfig";
+      source: "preset" | "mx" | "autoconfig" | "srv";
       imap: ServerConfig;
       smtp: ServerConfig;
       appPasswordUrl?: string | null;
+      appPasswordPolicy?: AppPasswordPolicy;
+      passwordFormat?: PasswordFormat;
+      setupHintKey?: string | null;
     }
   | {
       status: "unsupported";
@@ -51,6 +58,10 @@ export type DraftSourceKind = "reply" | "reply_all" | "forward" | "redirect";
 export interface AccountSummary {
   id: string;
   provider: ProviderKind;
+  providerId?: string | null;
+  appPasswordPolicy?: AppPasswordPolicy | null;
+  appPasswordUrl?: string | null;
+  passwordFormat?: PasswordFormat | null;
   email: string;
   displayName: string;
   syncState: SyncPhase;
@@ -441,6 +452,15 @@ export interface SearchQuery {
   text: string;
   allFolders: boolean;
   limit: number;
+  /** Continue an all-folder server search after this mailbox. */
+  resumeAfterMailboxId?: number;
+}
+
+export interface ServerSearchResult {
+  messages: MessageSummary[];
+  complete: boolean;
+  partial?: boolean;
+  resumeAfterMailboxId?: number | null;
 }
 
 export interface SyncState {
@@ -687,14 +707,36 @@ export interface BridgeCertificate {
   fingerprint: string;
   expiresAt: string;
 }
+export type FailedOfflineKind = "move" | "copy" | "flags" | "keyword" | "other";
+export interface FailedOfflineOperation {
+  id: number;
+  kind: FailedOfflineKind;
+  reviewToken: string;
+}
+export interface FailedOfflineOperationRef {
+  id: number;
+  reviewToken: string;
+}
+export interface FailedOfflineOperations {
+  items: FailedOfflineOperation[];
+  totalCount: number;
+}
+export interface ConnectionBlockers {
+  queuedChanges: number;
+  unsentMessages: number;
+}
+export interface FailedOfflineDismissal {
+  dismissedCount: number;
+  blockers: ConnectionBlockers;
+}
 export interface AccountConnection {
   imap: ServerConfig;
   smtp: ServerConfig;
   certificate?: BridgeCertificate | null;
-  blockers?: { queuedChanges: number; unsentMessages: number };
+  blockers?: ConnectionBlockers;
 }
 export interface FolderAssignment {
-  role: "sent" | "drafts" | "archive" | "junk" | "trash";
+  role: "inbox" | "sent" | "drafts" | "archive" | "junk" | "trash";
   mailboxId: number | null;
   missing: boolean;
 }

@@ -75,10 +75,17 @@ export function useComposerAttachments({
       for (const { attachment } of loaded)
         restoredInlineImages.current.add(attachment.token);
       if (loaded.length > 0) {
-        let html = editor.getHTML();
+        const doc = new DOMParser().parseFromString(
+          editor.getHTML(),
+          "text/html",
+        );
         for (const { attachment, dataUrl } of loaded) {
           const contentId = attachment.contentId!;
-          html = html.split(`cid:${contentId}`).join(dataUrl);
+          for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
+            if (image.getAttribute("src") !== `cid:${contentId}`) continue;
+            image.setAttribute("src", dataUrl);
+            image.setAttribute("data-inline-content-id", contentId);
+          }
         }
         setInlineImages((items) => {
           const next = new Map(items);
@@ -90,7 +97,7 @@ export function useComposerAttachments({
           }
           return next;
         });
-        editor.commands.setContent(sanitizeComposeHtml(html), {
+        editor.commands.setContent(sanitizeComposeHtml(doc.body.innerHTML), {
           emitUpdate: false,
         });
       }
@@ -184,7 +191,14 @@ export function useComposerAttachments({
           editorRef.current
             ?.chain()
             .focus()
-            .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
+            .insertContent({
+              type: "image",
+              attrs: {
+                src: dataUrl,
+                alt: strings.composer.inlineImage,
+                inlineContentId: contentId,
+              },
+            })
             .run();
           setInlineImages((items) =>
             new Map(items).set(selected.token, { dataUrl, contentId }),
@@ -221,7 +235,14 @@ export function useComposerAttachments({
       editor
         ?.chain()
         .focus()
-        .setImage({ src: dataUrl, alt: strings.composer.inlineImage })
+        .insertContent({
+          type: "image",
+          attrs: {
+            src: dataUrl,
+            alt: strings.composer.inlineImage,
+            inlineContentId: contentId,
+          },
+        })
         .run();
       setInlineImages((items) =>
         new Map(items).set(selected.token, { dataUrl, contentId }),
@@ -244,17 +265,17 @@ export function useComposerAttachments({
     if (sending || saveState === "saving" || attachments.length < 2) return;
     const current = attachments;
     if (editor) {
-      const sources = new Set(
+      const contentIds = new Set(
         current
-          .map((item) => inlineImages.get(item.token)?.dataUrl)
-          .filter((src): src is string => Boolean(src)),
+          .filter((item) => item.inline && item.contentId)
+          .map((item) => item.contentId!),
       );
-      if (sources.size > 0) {
+      if (contentIds.size > 0) {
         const ranges: Array<{ from: number; to: number }> = [];
         editor.state.doc.descendants((node, position) => {
           if (
             node.type.name === "image" &&
-            sources.has(String(node.attrs.src))
+            contentIds.has(String(node.attrs.inlineContentId ?? ""))
           ) {
             ranges.push({ from: position, to: position + node.nodeSize });
           }
@@ -262,7 +283,10 @@ export function useComposerAttachments({
         const transaction = editor.state.tr;
         for (const range of ranges.reverse())
           transaction.delete(range.from, range.to);
-        if (transaction.docChanged) editor.view.dispatch(transaction);
+        if (transaction.docChanged) {
+          transaction.setMeta("addToHistory", false);
+          editor.view.dispatch(transaction);
+        }
       }
     }
     setInlineImages(new Map());
@@ -288,18 +312,29 @@ export function useComposerAttachments({
   function removeAttachment(index: number) {
     const item = attachments[index];
     const inline = item ? inlineImages.get(item.token) : undefined;
-    if (inline && editor) {
+    const contentId = item?.inline
+      ? (item.contentId ?? inline?.contentId)
+      : undefined;
+    if (contentId && editor) {
       const ranges: Array<{ from: number; to: number }> = [];
       editor.state.doc.descendants((node, position) => {
-        if (node.type.name === "image" && node.attrs.src === inline.dataUrl)
+        if (
+          node.type.name === "image" &&
+          node.attrs.inlineContentId === contentId
+        )
           ranges.push({ from: position, to: position + node.nodeSize });
       });
       if (ranges.length > 0) {
         const transaction = editor.state.tr;
         for (const range of ranges.reverse())
           transaction.delete(range.from, range.to);
-        if (transaction.docChanged) editor.view.dispatch(transaction);
+        if (transaction.docChanged) {
+          transaction.setMeta("addToHistory", false);
+          editor.view.dispatch(transaction);
+        }
       }
+    }
+    if (item?.inline) {
       setInlineImages((items) => {
         const next = new Map(items);
         next.delete(item.token);

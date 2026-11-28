@@ -5,9 +5,11 @@
 
 use std::io::{self, BufRead, Read, Write};
 
-use chrono::{DateTime, Utc};
-
-use crate::mail::MAX_MESSAGE_BYTES;
+use crate::{
+    date_time::{format_asctime, now_utc, parse_rfc3339},
+    mail::MAX_MESSAGE_BYTES,
+};
+use time::UtcOffset;
 
 /// One message, the same ceiling the mail cache already enforces.
 pub(crate) const MAX_RECORD_BYTES: usize = MAX_MESSAGE_BYTES;
@@ -57,10 +59,11 @@ pub(crate) enum Record {
 
 /// The mbox `From ` line time, in UTC. Bad dates fall back to now.
 pub(crate) fn asctime_for(received_at: &str) -> String {
-    let when = DateTime::parse_from_rfc3339(received_at)
-        .map(|time| time.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now());
-    when.format("%a %b %e %H:%M:%S %Y").to_string()
+    let when = parse_rfc3339(received_at)
+        .ok()
+        .and_then(|time| time.checked_to_offset(UtcOffset::UTC))
+        .unwrap_or_else(now_utc);
+    format_asctime(when)
 }
 
 /// Bytes after the `>` run of a line.
@@ -404,6 +407,14 @@ mod tests {
         assert_eq!(
             asctime_for("2026-11-07T10:00:00Z"),
             "Sat Nov  7 10:00:00 2026"
+        );
+        assert_eq!(
+            asctime_for("2026-03-02T00:04:05+00:00"),
+            "Mon Mar  2 00:04:05 2026"
+        );
+        assert_eq!(
+            asctime_for("2026-03-12T00:04:05+00:00"),
+            "Thu Mar 12 00:04:05 2026"
         );
         assert_eq!(asctime_for("nonsense").len(), 24);
     }

@@ -186,7 +186,13 @@ export function AddressFields({
               aria-pressed={replyToOpen}
               onClick={(event) => {
                 event.preventDefault();
-                setShowReplyTo((value) => !value);
+                const opening = !replyToOpen;
+                setShowReplyTo(opening);
+                if (opening) {
+                  requestAnimationFrame(() =>
+                    document.getElementById("composer-reply-to")?.focus(),
+                  );
+                }
               }}
             >
               {strings.composer.replyTo}
@@ -287,5 +293,9 @@ function toggleCopyField(
     document.getElementById(inputId)?.focus();
     return;
   }
-  setShown(!shown);
+  const opening = !shown;
+  setShown(opening);
+  if (opening) {
+    requestAnimationFrame(() => document.getElementById(inputId)?.focus());
+  }
 }

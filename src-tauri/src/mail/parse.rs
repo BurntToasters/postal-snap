@@ -1,10 +1,15 @@
-use chrono::{DateTime, SecondsFormat, Utc};
 use lettre::message::Mailbox;
 use mail_parser::{MessageParser, MessagePart, MimeHeaders, PartType};
 use sha2::{Digest, Sha256};
 
 use super::{MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS, MAX_MULTIPART_DECLARATIONS};
-use crate::{db::CachedMessage, models::Attachment, security::safe_filename};
+use crate::{
+    date_time::{format_utc_seconds, now_utc, parse_rfc2822},
+    db::CachedMessage,
+    models::Attachment,
+    security::safe_filename,
+};
+use time::{format_description::StaticFormatDescription, OffsetDateTime, UtcOffset};
 
 pub(crate) fn parse_mailbox(value: &str) -> Result<Mailbox, String> {
     value
@@ -44,14 +49,16 @@ pub(crate) fn parse_envelope(
         .date
         .as_deref()
         .and_then(|raw| std::str::from_utf8(raw).ok())
-        .and_then(|date| DateTime::parse_from_rfc2822(date).ok())
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(parse_forgiving_date)
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
         .or_else(|| {
             fetch
                 .internal_date()
-                .map(|date| canonical_time(date.with_timezone(&Utc)))
+                .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+                .map(canonical_time)
         })
-        .unwrap_or_else(|| canonical_time(Utc::now()));
+        .unwrap_or_else(|| canonical_time(now_utc()));
     let recipients = to
         .iter()
         .chain(cc.iter())
@@ -288,15 +295,16 @@ fn imap_addresses(addresses: Option<&[async_imap::imap_proto::types::Address<'_>
 
 /// Canonical stored timestamp: whole seconds and an explicit UTC offset, so
 /// text comparison matches time order (see `normalize_received_at`).
-pub(crate) fn canonical_time(date: DateTime<Utc>) -> String {
-    date.to_rfc3339_opts(SecondsFormat::Secs, false)
+pub(crate) fn canonical_time(date: OffsetDateTime) -> String {
+    format_utc_seconds(date)
 }
 
 /// Server arrival time. Unlike the sender-controlled Date header it cannot be
 /// forged into the future, so retention and backfill cutoffs use it.
 pub(crate) fn internal_date(item: &async_imap::types::Fetch) -> Option<String> {
     item.internal_date()
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
 }
 
 /// Match system flags by variant. Keywords are free-form atoms, so a
@@ -343,7 +351,8 @@ pub(crate) fn received_at_fallback(
     cached_received_at: Option<&str>,
 ) -> Option<String> {
     item.internal_date()
-        .map(|date| canonical_time(date.with_timezone(&Utc)))
+        .and_then(|date| date.checked_to_offset(UtcOffset::UTC))
+        .map(canonical_time)
         .or_else(|| cached_received_at.map(ToOwned::to_owned))
 }
 
@@ -360,18 +369,34 @@ pub(crate) fn parse_message(
         .ok_or_else(|| "A malformed message was skipped.".to_string())?;
     check_mime_limits(&message)?;
     let invite = calendar_invite(&message);
-    let stored = Stored {
-        text_body: message
+    let text_parts = collect_text_parts(&message);
+    let html_body = collect_html_parts(&message);
+    let text_body = if !text_parts.is_empty() {
+        text_parts
+    } else {
+        message
             .body_text(0)
             .map(|body| body.into_owned())
-            .unwrap_or_default(),
-        html_body: message
-            .body_html(0)
-            .map(|body| crate::html_sanitize::sanitize_received_html(&body).html),
-        preview: message
+            .unwrap_or_default()
+    };
+    let preview = if !text_body.trim().is_empty() {
+        preview_of(&text_body)
+    } else {
+        message
             .body_preview(180)
-            .map(|body| body.split_whitespace().collect::<Vec<_>>().join(" "))
-            .unwrap_or_default(),
+            .map(|body| preview_of(&body))
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                html_body
+                    .as_deref()
+                    .map(|html| preview_of(&html_to_plain_text(html)))
+            })
+            .unwrap_or_default()
+    };
+    let stored = Stored {
+        text_body,
+        html_body,
+        preview,
         attachments: message
             .attachments()
             .take(MAX_ATTACHMENTS)
@@ -454,24 +479,29 @@ pub(crate) fn parse_partial_message(
             .part(id)
             .is_some_and(|part| part_ends_inside(prefix, part))
     };
-    let text = message
+    let text_parts: Vec<String> = message
         .text_body
         .iter()
         .copied()
         .filter(|&id| complete(id))
-        .find_map(|id| match &message.part(id)?.body {
+        .filter_map(|id| match &message.part(id)?.body {
             PartType::Text(text) => Some(text.to_string()),
             _ => None,
-        });
-    let html = message
+        })
+        .collect();
+    let text = (!text_parts.is_empty()).then(|| text_parts.join("\n"));
+    let html_parts: Vec<String> = message
         .html_body
         .iter()
         .copied()
         .filter(|&id| complete(id))
-        .find_map(|id| match &message.part(id)?.body {
-            PartType::Html(html) => Some(crate::html_sanitize::sanitize_received_html(html).html),
+        .filter_map(|id| match &message.part(id)?.body {
+            PartType::Html(html) => Some(html.to_string()),
             _ => None,
-        });
+        })
+        .collect();
+    let html = (!html_parts.is_empty())
+        .then(|| crate::html_sanitize::sanitize_received_html(&html_parts.join("\n")).html);
     if text.is_none() && html.is_none() {
         return Ok(None);
     }
@@ -492,9 +522,16 @@ pub(crate) fn parse_partial_message(
         .enumerate()
         .map(|(index, part)| attachment_from_part(part, index, declared_attachment_size(part)))
         .collect();
+    let fallback_plain = html.as_deref().map(html_to_plain_text);
+    let preview = text
+        .as_deref()
+        .map(preview_of)
+        .filter(|p| !p.is_empty())
+        .or_else(|| fallback_plain.as_deref().map(preview_of))
+        .unwrap_or_default();
     let stored = Stored {
-        preview: text.as_deref().map(preview_of).unwrap_or_default(),
-        text_body: text.unwrap_or_default(),
+        preview,
+        text_body: text.or(fallback_plain).unwrap_or_default(),
         html_body: html,
         attachments,
         has_calendar,
@@ -547,12 +584,19 @@ fn cached_message(
     let cc = parsed_addresses(message.cc());
     let bcc = parsed_addresses(message.bcc());
     let reply_to = parsed_addresses(message.reply_to()).into_iter().next();
+    let header_block = header_block_text(headers_from);
     let received_at = message
         .date()
-        .and_then(|date| DateTime::<Utc>::from_timestamp(date.to_timestamp(), 0))
+        .and_then(|date| OffsetDateTime::from_unix_timestamp(date.to_timestamp()).ok())
         .map(canonical_time)
+        .or_else(|| {
+            first_header_value(&header_block, "date")
+                .as_deref()
+                .and_then(parse_forgiving_date)
+                .map(|date| canonical_time(date.to_offset(UtcOffset::UTC)))
+        })
         .or_else(|| fallback_received_at.map(ToOwned::to_owned))
-        .unwrap_or_else(|| canonical_time(Utc::now()));
+        .unwrap_or_else(|| canonical_time(now_utc()));
     let recipients = to
         .iter()
         .chain(cc.iter())
@@ -600,9 +644,124 @@ fn cached_message(
         calendar_json: stored.calendar_json,
         list_unsubscribe,
         list_unsubscribe_post,
-        importance: importance_from_headers(&header_block_text(headers_from)),
-        disposition_to: disposition_notification_address(&header_block_text(headers_from)),
+        importance: importance_from_headers(&header_block),
+        disposition_to: disposition_notification_address(&header_block),
     }
+}
+
+fn collect_text_parts(message: &mail_parser::Message<'_>) -> String {
+    let parts: Vec<&str> = message
+        .text_body
+        .iter()
+        .copied()
+        .filter_map(|id| match &message.part(id)?.body {
+            PartType::Text(text) if !text.trim().is_empty() => Some(text.as_ref()),
+            _ => None,
+        })
+        .collect();
+    parts.join("\n")
+}
+
+fn collect_html_parts(message: &mail_parser::Message<'_>) -> Option<String> {
+    let parts: Vec<&str> = message
+        .html_body
+        .iter()
+        .copied()
+        .filter_map(|id| match &message.part(id)?.body {
+            PartType::Html(html) if !html.trim().is_empty() => Some(html.as_ref()),
+            _ => None,
+        })
+        .collect();
+    if parts.is_empty() {
+        message
+            .body_html(0)
+            .map(|body| crate::html_sanitize::sanitize_received_html(&body).html)
+    } else {
+        Some(crate::html_sanitize::sanitize_received_html(&parts.join("\n")).html)
+    }
+}
+
+fn html_to_plain_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len().min(8192));
+    let mut in_tag = false;
+    for ch in html.chars().take(16384) {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                if in_tag {
+                    in_tag = false;
+                    out.push(' ');
+                }
+            }
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+const FORGIVING_DATE: StaticFormatDescription = time::macros::format_description!(
+    "[day padding:zero] [month repr:short case_sensitive:false] [year] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]"
+);
+const FORGIVING_DATE_NO_SECONDS: StaticFormatDescription = time::macros::format_description!(
+    "[day padding:zero] [month repr:short case_sensitive:false] [year] [hour]:[minute] [offset_hour sign:mandatory][offset_minute]"
+);
+const IMAP_INTERNALDATE: StaticFormatDescription = time::macros::format_description!(
+    "[day padding:zero]-[month repr:short]-[year] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]"
+);
+
+pub(crate) fn parse_forgiving_date(raw: &str) -> Option<OffsetDateTime> {
+    let trimmed = raw.trim();
+    if let Ok(dt) = parse_rfc2822(trimmed) {
+        return Some(dt);
+    }
+    let without_comment = trimmed
+        .rsplit_once('(')
+        .filter(|(_, tail)| tail.trim_end().ends_with(')'))
+        .map_or(trimmed, |(head, _)| head.trim());
+    if let Ok(dt) = parse_rfc2822(without_comment) {
+        return Some(dt);
+    }
+    let without_day = without_comment
+        .split_once(',')
+        .map_or(without_comment, |(_, rest)| rest.trim());
+    let mut tokens: Vec<&str> = without_day.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return None;
+    }
+    // Pad single-digit day and map legacy alphabetic zone names.
+    let day = if tokens[0].len() == 1 {
+        format!("0{}", tokens[0])
+    } else {
+        tokens[0].to_string()
+    };
+    let tz = match tokens.last().copied().unwrap_or("") {
+        "GMT" | "UT" | "UTC" => "+0000",
+        "EST" => "-0500",
+        "EDT" => "-0400",
+        "CST" => "-0600",
+        "CDT" => "-0500",
+        "MST" => "-0700",
+        "MDT" => "-0600",
+        "PST" => "-0800",
+        "PDT" => "-0700",
+        other => other,
+    };
+    *tokens.last_mut().expect("non-empty") = tz;
+    let normalized = std::iter::once(day.as_str())
+        .chain(tokens[1..].iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    OffsetDateTime::parse(&normalized, &FORGIVING_DATE)
+        .or_else(|_| OffsetDateTime::parse(&normalized, &FORGIVING_DATE_NO_SECONDS))
+        .ok()
+}
+
+pub(crate) fn imap_internaldate_from_raw(raw: &[u8]) -> Option<String> {
+    let block = header_block_text(raw);
+    let raw_date = first_header_value(&block, "date")?;
+    let parsed = parse_forgiving_date(&raw_date)?;
+    Some(format!("\"{}\"", parsed.format(&IMAP_INTERNALDATE).ok()?))
 }
 
 fn check_mime_limits(message: &mail_parser::Message<'_>) -> Result<(), String> {
@@ -954,7 +1113,8 @@ pub(crate) fn normalize_rfc_message_id(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        importance_from_headers, normalize_rfc_message_id, parse_message, parse_partial_message,
+        canonical_time, importance_from_headers, normalize_rfc_message_id, parse_message,
+        parse_partial_message,
     };
     use crate::db::CachedMessage;
 
@@ -967,6 +1127,19 @@ mod tests {
     // 6. Ids over 998 bytes exceed the RFC 5322 line limit.
     // 7. Empty or bracket-only input must not yield "<>".
     // 8. Normal ids, bracketed or bare, must keep working.
+    #[test]
+    fn canonical_mail_time_keeps_seconds_and_explicit_utc_offset() {
+        let header = crate::date_time::parse_rfc2822("Thu, 29 Feb 2024 23:59:58 +0545")
+            .unwrap()
+            .to_offset(time::UtcOffset::UTC);
+        assert_eq!(canonical_time(header), "2024-02-29T18:14:58+00:00");
+
+        let timestamp = crate::date_time::parse_rfc3339("2024-02-29T23:59:58.987654321-05:00")
+            .unwrap()
+            .to_offset(time::UtcOffset::UTC);
+        assert_eq!(canonical_time(timestamp), "2024-03-01T04:59:58+00:00");
+    }
+
     #[test]
     fn normalize_rejects_unsafe_message_ids() {
         let long = format!("<{}@example.com>", "a".repeat(999));
@@ -1300,5 +1473,35 @@ mod tests {
             partial.attachments[0].id, full.attachments[0].id,
             "decoded size participates in the full attachment ID"
         );
+    }
+
+    // Failure modes:
+    // 1. Apple Mail multipart/mixed splits text/HTML around inline attachments; taking only index 0 drops tail text.
+    // 2. Partial HTML-only multipart/mixed leaves empty preview/FTS.
+    // 3. Envelope re-sync drops importance/Disposition-Notification-To if header fields omit them.
+    #[test]
+    fn apple_mail_multi_segment_text_and_html_concatenates_parts() {
+        let raw = b"From: a@example.test\r\nTo: b@example.test\r\nSubject: Multi\r\nDate: Mon, 5 Jan 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n--bnd\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nFirst paragraph.\r\n--bnd\r\nContent-Type: image/png; name=\"a.png\"\r\nContent-Disposition: inline; filename=\"a.png\"\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--bnd\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSecond paragraph.\r\n--bnd--\r\n";
+        let parsed = parse_message(1, raw, true, false, None).unwrap();
+        assert!(parsed.text_body.contains("First paragraph."));
+        assert!(parsed.text_body.contains("Second paragraph."));
+    }
+
+    #[test]
+    fn partial_html_only_message_derives_plain_preview() {
+        let raw = mixed_message(&format!(
+            "{}--bnd--\r\n",
+            html_part("<p>Important alert <b>inside HTML</b></p>")
+        ));
+        let msg = partial(&raw).unwrap().unwrap();
+        assert!(msg.preview.contains("Important alert"));
+        assert!(msg.preview.contains("inside HTML"));
+    }
+
+    #[test]
+    fn forgiving_envelope_date_parses_nonstandard_rfc2822() {
+        assert!(super::parse_forgiving_date("5 Jan 2026 10:00:00 +0000").is_some());
+        assert!(super::parse_forgiving_date("Mon, 5 Jan 2026 10:00:00 GMT").is_some());
+        assert!(super::parse_forgiving_date("Mon, 5 Jan 2026 10:00:00 -0500 (EST)").is_some());
     }
 }

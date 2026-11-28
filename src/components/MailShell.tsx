@@ -26,6 +26,7 @@ import { matchesListFilter, type MessageListFilter } from "../listFilter";
 import { sortFamily, type MessageListSort } from "../listSort";
 import { mailboxListView, rememberMailboxView } from "../mailboxView";
 import { folderLabel, folderParentLabel } from "../i18n/mail";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store";
 import type {
   AccountInboxCount,
@@ -98,11 +99,13 @@ import {
 import { hydrateRecentMoveMailbox } from "../recentMailbox";
 import { starLoadedConversation, toggleListedStar } from "../starConversation";
 import { beginMessageOpen } from "../messageOpen";
+import type { MoveFailureReconciler } from "../moveConversation";
 import {
   adjacentMessage,
   conversationNeighbor,
   conversationUnreadTarget,
   groupThreads,
+  navigationOrder,
   unreadStep,
 } from "../threads";
 import { errorText } from "../errors";
@@ -128,20 +131,8 @@ function shellSettings(settings: AppSettings) {
     collapsedMailboxes: settings.collapsedMailboxes,
   };
 }
-type ShellSettings = ReturnType<typeof shellSettings>;
-
 interface Props {
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
-}
-
-function relativeMessage(delta: number): MessageSummary | undefined {
-  const state = useAppStore.getState();
-  return adjacentMessage(
-    state.messages,
-    state.settings.groupThreads && (state.mailboxSort ?? "date") === "date",
-    state.selectedMessage?.id,
-    delta,
-  );
 }
 
 // Reads the whole sync map here, so one account's sync tick skips MailShell.
@@ -174,13 +165,8 @@ export function MailShell({ onOpenSettings }: Props) {
   const selectedMessage = useAppStore((state) => state.selectedMessage);
   const selectMessage = useAppStore((state) => state.selectMessage);
   const openComposer = useAppStore((state) => state.openComposer);
-  // Save responses replace every array, so compare the picked fields by content.
-  const settingsJson = useAppStore((state) =>
-    JSON.stringify(shellSettings(state.settings)),
-  );
-  const settings = useMemo(
-    () => JSON.parse(settingsJson) as ShellSettings,
-    [settingsJson],
+  const settings = useAppStore(
+    useShallow((state) => shellSettings(state.settings)),
   );
   const setSettings = useAppStore((state) => state.setSettings);
   const setError = useAppStore((state) => state.setError);
@@ -395,6 +381,8 @@ export function MailShell({ onOpenSettings }: Props) {
   }
 
   const mailboxRequest = useRef(0);
+  // Count-only refreshes; a full load also takes one so it can own mailboxes.
+  const countsRequest = useRef(0);
   const messageRequest = useRef(0);
   const pagingRequest = useRef(0);
   const searchRequest = useRef(0);
@@ -450,6 +438,7 @@ export function MailShell({ onOpenSettings }: Props) {
     if (previousAccountId.current === activeAccountId) return;
     previousAccountId.current = activeAccountId;
     mailboxRequest.current += 1;
+    countsRequest.current += 1;
     messageRequest.current += 1;
     pagingRequest.current += 1;
     beginMessageOpen();
@@ -470,6 +459,7 @@ export function MailShell({ onOpenSettings }: Props) {
     if (!activeAccountId) return;
     const accountId = activeAccountId;
     const request = ++mailboxRequest.current;
+    const counts = ++countsRequest.current;
     try {
       const [mailboxesResult, draftsResult, outboxResult, snoozedResult] =
         await Promise.allSettled([
@@ -483,7 +473,11 @@ export function MailShell({ onOpenSettings }: Props) {
         useAppStore.getState().activeAccountId !== accountId
       )
         return;
-      if (mailboxesResult.status === "fulfilled")
+      // A newer count refresh owns mailboxes; drafts and friends still apply.
+      if (
+        mailboxesResult.status === "fulfilled" &&
+        counts === countsRequest.current
+      )
         setMailboxes(mailboxesResult.value);
       if (draftsResult.status === "fulfilled") setDrafts(draftsResult.value);
       if (outboxResult.status === "fulfilled") setOutbox(outboxResult.value);
@@ -508,22 +502,29 @@ export function MailShell({ onOpenSettings }: Props) {
   ]);
 
   // Mailbox counts only; used after a read flag change.
-  const loadMailboxCounts = useCallback(async () => {
-    if (!activeAccountId) return;
+  const refreshMailboxCounts = useCallback(async (): Promise<
+    "refreshed" | "failed" | "superseded"
+  > => {
+    if (!activeAccountId) return "superseded";
     const accountId = activeAccountId;
-    const request = ++mailboxRequest.current;
+    const request = ++countsRequest.current;
     try {
       const mailboxes = await api.listMailboxes(accountId);
       if (
-        request !== mailboxRequest.current ||
+        request !== countsRequest.current ||
         useAppStore.getState().activeAccountId !== accountId
       )
-        return;
+        return "superseded";
       setMailboxes(mailboxes);
+      return "refreshed";
     } catch (cause) {
-      if (request === mailboxRequest.current) setError(errorText(cause));
+      if (request === countsRequest.current) setError(errorText(cause));
+      return "failed";
     }
   }, [activeAccountId, setError, setMailboxes]);
+  const loadMailboxCounts = useCallback(async () => {
+    await refreshMailboxCounts();
+  }, [refreshMailboxCounts]);
 
   const { scheduledSendInFlight, isScheduledSendInFlight, sendScheduledNow } =
     useScheduledOutbox(
@@ -538,12 +539,17 @@ export function MailShell({ onOpenSettings }: Props) {
     loadMessages,
     loadMoreMessages,
     runSearch,
+    refreshSubmittedSearch,
     canDownloadOlder,
     loadingMessages,
+    serverSearchMore,
+    searchMoreFolders,
   } = useMailboxMessages({
     listFilter,
     listSort,
+    query,
     submittedQuery,
+    allFolders,
     setSubmittedQuery,
     setRecentByAccount,
     messageRequestRef: messageRequest,
@@ -598,9 +604,72 @@ export function MailShell({ onOpenSettings }: Props) {
     loadAccountData,
     loadAccountCounts,
     loadMessages,
-    runSearch,
+    refreshSubmittedSearch,
     setError,
   });
+
+  const loadersRef = useRef({
+    loadAccountData,
+    loadMailboxCounts,
+    refreshMailboxCounts,
+    loadMessages,
+    runSearch,
+    refreshSubmittedSearch,
+  });
+  useEffect(() => {
+    loadersRef.current = {
+      loadAccountData,
+      loadMailboxCounts,
+      refreshMailboxCounts,
+      loadMessages,
+      runSearch,
+      refreshSubmittedSearch,
+    };
+  });
+
+  const reconcileMoveFailure: MoveFailureReconciler = async (
+    accountId,
+    mailboxId,
+    localView,
+  ) => {
+    const current = useAppStore.getState();
+    if (
+      current.activeAccountId !== accountId ||
+      current.activeMailboxId !== mailboxId ||
+      current.activeLocalView !== localView
+    )
+      return { counts: false, messages: false };
+    const currentLoaders = loadersRef.current;
+    const [initialCountStatus, messages] = await Promise.all([
+      currentLoaders.refreshMailboxCounts(),
+      submittedQueryRef.current
+        ? currentLoaders.refreshSubmittedSearch()
+        : currentLoaders.loadMessages(),
+    ]);
+    let countStatus = initialCountStatus;
+    let latest = useAppStore.getState();
+    if (
+      countStatus === "superseded" &&
+      latest.activeAccountId === accountId &&
+      latest.activeMailboxId === mailboxId &&
+      latest.activeLocalView === localView
+    ) {
+      countStatus = await loadersRef.current.refreshMailboxCounts();
+      latest = useAppStore.getState();
+    }
+    return {
+      counts:
+        countStatus === "refreshed" &&
+        latest.activeAccountId === accountId &&
+        latest.activeMailboxId === mailboxId &&
+        latest.activeLocalView === localView,
+      messages:
+        messages &&
+        latest.activeAccountId === accountId &&
+        latest.activeMailboxId === mailboxId &&
+        latest.activeLocalView === localView,
+    };
+  };
 
   const {
     openFolderDialog,
@@ -646,15 +715,45 @@ export function MailShell({ onOpenSettings }: Props) {
       resetListState,
     });
   useNotificationOpen({ openFoundMessage, setError });
-  const listedMessages =
-    activeLocalView || submittedQuery || listFilter === "all"
-      ? messages
-      : messages.filter(
-          (message) =>
-            matchesListFilter(message, listFilter) ||
-            (selectedMessage?.id === message.id &&
-              selectedMessage.mailboxId === message.mailboxId),
-        );
+  const listedMessages = useMemo(
+    () =>
+      activeLocalView || submittedQuery || listFilter === "all"
+        ? messages
+        : messages.filter(
+            (message) =>
+              matchesListFilter(message, listFilter) ||
+              (selectedMessage?.id === message.id &&
+                selectedMessage.mailboxId === message.mailboxId),
+          ),
+    [activeLocalView, listFilter, messages, selectedMessage, submittedQuery],
+  );
+  const listedMessagesRef = useRef<MessageSummary[]>(listedMessages);
+  useEffect(() => {
+    listedMessagesRef.current = listedMessages;
+  });
+  const relativeMessage = useCallback(
+    (delta: number): MessageSummary | undefined => {
+      const state = useAppStore.getState();
+      return adjacentMessage(
+        listedMessagesRef.current,
+        state.settings.groupThreads && (state.mailboxSort ?? "date") === "date",
+        state.selectedMessage?.id,
+        delta,
+      );
+    },
+    [],
+  );
+  const edgeMessage = useCallback(
+    (edge: "first" | "last"): MessageSummary | undefined => {
+      const state = useAppStore.getState();
+      const items = navigationOrder(
+        listedMessagesRef.current,
+        state.settings.groupThreads && (state.mailboxSort ?? "date") === "date",
+      );
+      return edge === "first" ? items[0] : items[items.length - 1];
+    },
+    [],
+  );
 
   const {
     toggleSelectIds,
@@ -702,6 +801,7 @@ export function MailShell({ onOpenSettings }: Props) {
     selectMessage,
     setError,
     openComposer,
+    reconcileMoveFailure,
   });
 
   useEffect(() => {
@@ -712,21 +812,6 @@ export function MailShell({ onOpenSettings }: Props) {
     const timer = window.setTimeout(() => void loadMessages(), 0);
     return () => window.clearTimeout(timer);
   }, [loadMessages]);
-
-  const loadersRef = useRef({
-    loadAccountData,
-    loadMailboxCounts,
-    loadMessages,
-    runSearch,
-  });
-  useEffect(() => {
-    loadersRef.current = {
-      loadAccountData,
-      loadMailboxCounts,
-      loadMessages,
-      runSearch,
-    };
-  });
 
   useMailEvents({
     loadAccountCounts,
@@ -754,6 +839,7 @@ export function MailShell({ onOpenSettings }: Props) {
     searchInput,
     chooseMessage,
     relativeMessage,
+    edgeMessage,
     openCommandPalette,
     openShortcutOverlay,
   });
@@ -853,6 +939,7 @@ export function MailShell({ onOpenSettings }: Props) {
   useEffect(() => {
     contextActionRef.current = {
       refreshAccount,
+      reconcileMoveFailure,
       selectAccount,
       onOpenSettings,
       openComposer,
@@ -935,9 +1022,39 @@ export function MailShell({ onOpenSettings }: Props) {
     setSidebarOpen(false);
     if (sameMailbox) void loadMessages();
   }
+  const jumpToLocalViewRef = useRef<
+    (localView: "drafts" | "outbox" | "snoozed") => void
+  >(() => undefined);
   useEffect(() => {
     jumpToMailboxRef.current = jumpToMailbox;
+    jumpToLocalViewRef.current = (localView) => {
+      messageRequest.current += 1;
+      searchRequest.current += 1;
+      clearQuery();
+      resetListState();
+      selectLocalView(localView);
+      setSidebarOpen(false);
+    };
   });
+  useEffect(() => {
+    const onJumpMailbox = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          mailboxId?: number;
+          localView?: "drafts" | "outbox" | "snoozed";
+        }>
+      ).detail;
+      if (!detail) return;
+      if (typeof detail.mailboxId === "number") {
+        jumpToMailboxRef.current(detail.mailboxId);
+      } else if (detail.localView) {
+        jumpToLocalViewRef.current(detail.localView);
+      }
+    };
+    window.addEventListener("postal:jump-mailbox", onJumpMailbox);
+    return () =>
+      window.removeEventListener("postal:jump-mailbox", onJumpMailbox);
+  }, []);
 
   function openRoleMailbox(role: "inbox" | "sent") {
     closeMailboxMore();
@@ -974,11 +1091,96 @@ export function MailShell({ onOpenSettings }: Props) {
     : activeMailbox
       ? folderLabel(activeMailbox)
       : strings.mail.mail;
-  const canFoldConversations =
-    settings.groupThreads &&
-    listSort === "date" &&
-    !selecting &&
-    groupThreads(listedMessages).some((group) => group.items.length > 1);
+  const canFoldConversations = useMemo(
+    () =>
+      settings.groupThreads &&
+      listSort === "date" &&
+      !selecting &&
+      groupThreads(listedMessages).some((group) => group.items.length > 1),
+    [listedMessages, listSort, selecting, settings.groupThreads],
+  );
+  const chooseMessageRef = useRef(chooseMessage);
+  useEffect(() => {
+    chooseMessageRef.current = chooseMessage;
+  });
+  const readerPrevious = useMemo(
+    () =>
+      adjacentMessage(
+        listedMessages,
+        settings.groupThreads && listSort === "date",
+        selectedMessage?.id,
+        -1,
+      ),
+    [listedMessages, listSort, selectedMessage?.id, settings.groupThreads],
+  );
+  const readerNext = useMemo(
+    () =>
+      adjacentMessage(
+        listedMessages,
+        settings.groupThreads && listSort === "date",
+        selectedMessage?.id,
+        1,
+      ),
+    [listedMessages, listSort, selectedMessage?.id, settings.groupThreads],
+  );
+  const readerOlder = useMemo(
+    () =>
+      selectedMessage
+        ? conversationNeighbor(messages, selectedMessage, 1)
+        : undefined,
+    [messages, selectedMessage],
+  );
+  const readerNewer = useMemo(
+    () =>
+      selectedMessage
+        ? conversationNeighbor(messages, selectedMessage, -1)
+        : undefined,
+    [messages, selectedMessage],
+  );
+  const readerUnread = useMemo(
+    () =>
+      selectedMessage
+        ? conversationUnreadTarget(messages, selectedMessage)
+        : undefined,
+    [messages, selectedMessage],
+  );
+  const onReaderPrevious = useMemo(
+    () =>
+      readerPrevious
+        ? () => void chooseMessageRef.current(readerPrevious)
+        : undefined,
+    [readerPrevious],
+  );
+  const onReaderNext = useMemo(
+    () =>
+      readerNext ? () => void chooseMessageRef.current(readerNext) : undefined,
+    [readerNext],
+  );
+  const onReaderOlder = useMemo(
+    () =>
+      readerOlder
+        ? () => void chooseMessageRef.current(readerOlder)
+        : undefined,
+    [readerOlder],
+  );
+  const onReaderNewer = useMemo(
+    () =>
+      readerNewer
+        ? () => void chooseMessageRef.current(readerNewer)
+        : undefined,
+    [readerNewer],
+  );
+  const onReaderOpenInConversation = useCallback(
+    (item: MessageSummary) => void chooseMessageRef.current(item),
+    [],
+  );
+  const onReaderUnread = useMemo(
+    () =>
+      readerUnread
+        ? () => void chooseMessageRef.current(readerUnread)
+        : undefined,
+    [readerUnread],
+  );
   const openAccount =
     accounts.length > 1
       ? accounts.find((account) => account.id === activeAccountId)
@@ -1555,6 +1757,16 @@ export function MailShell({ onOpenSettings }: Props) {
                 hasMoreMessages ? undefined : strings.mail.loadOlderFromServer
               }
               searchQuery={submittedQuery}
+              serverSearchStopped={
+                serverSearchMore
+                  ? {
+                      onSearchMore:
+                        serverSearchMore.resumeAfterMailboxId == null
+                          ? undefined
+                          : () => void searchMoreFolders(),
+                    }
+                  : undefined
+              }
               showFolders={Boolean(submittedQuery) && allFolders}
               selecting={selecting}
               selectedIds={selectedIds}
@@ -1654,75 +1866,16 @@ export function MailShell({ onOpenSettings }: Props) {
         focusSelector='#reader-pane [role="toolbar"] button'
       >
         <MessageReader
+          reconcileMoveFailure={reconcileMoveFailure}
           onSnoozed={handleSnoozedMessage}
           onConversationSnoozed={handleConversationSnoozed}
-          onPrevious={
-            relativeMessage(-1)
-              ? () => {
-                  const previous = relativeMessage(-1);
-                  if (previous) void chooseMessage(previous);
-                }
-              : undefined
-          }
-          onNext={
-            relativeMessage(1)
-              ? () => {
-                  const next = relativeMessage(1);
-                  if (next) void chooseMessage(next);
-                }
-              : undefined
-          }
-          onOlderInConversation={
-            selectedMessage &&
-            conversationNeighbor(messages, selectedMessage, 1)
-              ? () => {
-                  const current = useAppStore.getState().selectedMessage;
-                  const older = current
-                    ? conversationNeighbor(
-                        useAppStore.getState().messages,
-                        current,
-                        1,
-                      )
-                    : undefined;
-                  if (older) void chooseMessage(older);
-                }
-              : undefined
-          }
+          onPrevious={onReaderPrevious}
+          onNext={onReaderNext}
+          onOlderInConversation={onReaderOlder}
           searchQuery={submittedQuery}
-          onNewerInConversation={
-            selectedMessage &&
-            conversationNeighbor(messages, selectedMessage, -1)
-              ? () => {
-                  const current = useAppStore.getState().selectedMessage;
-                  const newer = current
-                    ? conversationNeighbor(
-                        useAppStore.getState().messages,
-                        current,
-                        -1,
-                      )
-                    : undefined;
-                  if (newer) void chooseMessage(newer);
-                }
-              : undefined
-          }
-          onOpenInConversation={(item) => {
-            void chooseMessage(item);
-          }}
-          onUnreadInConversation={
-            selectedMessage &&
-            conversationUnreadTarget(messages, selectedMessage)
-              ? () => {
-                  const current = useAppStore.getState().selectedMessage;
-                  const unread = current
-                    ? conversationUnreadTarget(
-                        useAppStore.getState().messages,
-                        current,
-                      )
-                    : undefined;
-                  if (unread) void chooseMessage(unread);
-                }
-              : undefined
-          }
+          onNewerInConversation={onReaderNewer}
+          onOpenInConversation={onReaderOpenInConversation}
+          onUnreadInConversation={onReaderUnread}
           onShowInFolder={
             selectedMessage &&
             (submittedQuery ||

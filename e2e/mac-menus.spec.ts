@@ -3,6 +3,7 @@ import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { attachArtifacts } from "./ipc";
+import { pressAppShortcut } from "./keyboard";
 
 // Failure modes (WP4.2 menus, popovers, command palette):
 // FM1. Menu rows are 2.25rem in Normal, Comfortable and Compact, and grow with 200% text.
@@ -272,7 +273,7 @@ test("FM7 command palette uses a 16px radius and window shadow", async ({
 }) => {
   await page.goto("/");
   await page.locator(".mail-shell").waitFor();
-  await page.keyboard.press("ControlOrMeta+K");
+  await pressAppShortcut(page, "K");
   const dialog = page.locator(".palette-dialog");
   await expect(dialog).toBeVisible();
   const style = await dialog.evaluate((node) => {
@@ -297,7 +298,7 @@ for (const theme of ["light", "dark"] as const) {
   test(`FM7 palette screenshot (${theme})`, async ({ page }, testInfo) => {
     await page.goto(`/?theme=${theme}`);
     await page.locator(".mail-shell").waitFor();
-    await page.keyboard.press("ControlOrMeta+K");
+    await pressAppShortcut(page, "K");
     await expect(page.locator(".palette-dialog")).toBeVisible();
     await attachArtifacts(page, testInfo, `command-palette-${theme}`);
   });

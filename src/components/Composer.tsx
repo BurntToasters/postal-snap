@@ -309,6 +309,7 @@ export function Composer({ accountId, onDraftSaved }: Props) {
   );
 
   const bodyFormatRef = useRef(bodyFormat);
+  const inlineImageSourcesRef = useRef<Map<string, string | null>>(new Map());
 
   const {
     editor,
@@ -331,13 +332,21 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     setError,
     plainRef,
     bodyFormatRef,
+    inlineImageSourcesRef,
     setPlainBody,
     minimized,
     setMinimized,
   });
 
   const composerSubModalOpen = Boolean(
-    audienceWarning || confirmPlain || linkDialogOpen,
+    audienceWarning ||
+    confirmPlain ||
+    linkDialogOpen ||
+    bodyWarning ||
+    subjectWarning ||
+    attachmentWarning ||
+    duplicateWarning ||
+    noreplyWarning,
   );
   useEffect(() => {
     const windowEl = dialogRef.current;
@@ -425,6 +434,14 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     markUnsaved,
     setError,
   });
+  inlineImageSourcesRef.current = new Map(
+    attachments
+      .filter((item) => item.inline && item.contentId)
+      .map((item) => [
+        item.contentId!,
+        inlineImages.get(item.token)?.dataUrl ?? null,
+      ]),
+  );
   pasteImageRef.current = pasteImage;
   // The Preview button that opened the picture preview gets focus back on close.
   const previewTriggerRef = useRef<HTMLButtonElement>(null);
@@ -433,9 +450,28 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     const plain = bodyFormat === "plain";
     // A plain draft carries text only; the editor keeps the last rich copy.
     let htmlBody = plain ? "" : (editor?.getHTML() ?? "");
-    if (!plain)
-      for (const { dataUrl, contentId } of inlineImages.values())
-        htmlBody = htmlBody.split(dataUrl).join(`cid:${contentId}`);
+    if (!plain && htmlBody) {
+      const contentIds = new Set(
+        attachments
+          .filter((item) => item.inline && item.contentId)
+          .map((item) => item.contentId!),
+      );
+      const doc = new DOMParser().parseFromString(htmlBody, "text/html");
+      for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
+        const source = image.getAttribute("src") ?? "";
+        const marked = image.getAttribute("data-inline-content-id");
+        const contentId =
+          marked ??
+          (/^cid:/i.test(source)
+            ? source.slice(4).replace(/^<|>$/g, "")
+            : null);
+        if (contentId && contentIds.has(contentId))
+          image.setAttribute("src", `cid:${contentId}`);
+        else if (/^cid:/i.test(source)) image.removeAttribute("src");
+        image.removeAttribute("data-inline-content-id");
+      }
+      htmlBody = doc.body.innerHTML || "<p></p>";
+    }
     return {
       id: draftId,
       accountId,
@@ -480,7 +516,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
     includeSignature,
     requestReceipt,
     replyTo,
-    inlineImages,
     plainBody,
     redirecting,
     seed,
@@ -979,7 +1014,6 @@ export function Composer({ accountId, onDraftSaved }: Props) {
             (account?.signatureHtml || account?.signature)) ||
             (bodyFormat === "plain" && account?.signature)) &&
           includeSignature &&
-          !seed?.draft &&
           !redirecting ? (
             <aside className="composer-signature-preview">
               <strong>{strings.composer.signaturePreview}</strong>

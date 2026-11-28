@@ -54,6 +54,7 @@ pub async fn test_saved_account(
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: account.summary.provider.clone(),
+        provider_id: account.summary.provider_id.clone(),
         email: account.summary.email.clone(),
         display_name: account.summary.display_name.clone(),
         password: String::new(),
@@ -78,11 +79,16 @@ pub async fn update_account_password(
     if account.summary.auth_method != "password" {
         return Err("This account signs in without a password. Reconnect it instead.".into());
     }
-    let normalized = take_normalized_account_password(&account.summary.provider, password)?;
+    let normalized = take_normalized_account_password(
+        &account.summary.provider,
+        account.summary.provider_id.as_deref(),
+        password,
+    )?;
     let (imap, smtp) = mail::test_account(
         &AccountSetupRequest {
             certificate_reference: None,
             provider: account.summary.provider.clone(),
+            provider_id: account.summary.provider_id.clone(),
             email: account.summary.email.clone(),
             display_name: account.summary.display_name.clone(),
             password: String::new(),
@@ -113,6 +119,9 @@ pub async fn update_account_password(
         return Err(error.into());
     }
     state.db.set_account_state(&account_id, "idle", None)?;
+    if let Ok(actor) = state.actor(&account_id) {
+        actor.request(super::wake::CREDENTIALS);
+    }
     drop(_guard);
     let _ = sync_one(&account_id, &app, &state).await;
     let summary = state
@@ -140,20 +149,33 @@ pub async fn add_account(
     {
         return Err("Choose a valid download setting.".into());
     }
+    let normalized_email = request.email.trim().to_lowercase();
+    if state.db.email_taken(&normalized_email)? {
+        return Err("An account with this email address is already set up.".into());
+    }
     let (imap, smtp) = mail::test_account(&request, &imap, &smtp, &password).await?;
     let mut aliases = Vec::new();
     if request.provider == ProviderKind::Icloud {
-        if let Ok(found) = mail::discover_icloud_aliases(&request.email, &password).await {
+        if let Ok(found) = mail::discover_icloud_aliases(&normalized_email, &password).await {
             aliases = found;
         }
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let provider_meta = crate::providers::provider_account_meta(
+        &request.provider,
+        request.provider_id.as_deref(),
+        &imap.host,
+    );
     let summary = AccountSummary {
         notify_new_mail: true,
         default_body_format: crate::models::BodyFormat::Html,
         id: id.clone(),
         provider: request.provider.clone(),
-        email: request.email.trim().to_lowercase(),
+        provider_id: provider_meta.provider_id,
+        app_password_policy: None,
+        app_password_url: None,
+        password_format: None,
+        email: normalized_email,
         display_name: request.display_name.trim().to_string(),
         sync_state: "idle".into(),
         error: None,
@@ -165,10 +187,8 @@ pub async fn add_account(
         color: Some(
             ACCOUNT_COLORS[state.db.account_count().unwrap_or(0) % ACCOUNT_COLORS.len()].into(),
         ),
-    };
-    if state.db.email_taken(&summary.email)? {
-        return Err("An account with this email address is already set up.".into());
     }
+    .with_provider_meta(&imap.host);
     let account = AccountRecord {
         summary: summary.clone(),
         imap,
@@ -236,14 +256,19 @@ async fn save_oauth_account(
     let (imap, smtp) = oauth_servers(provider, &signed.email);
     mail::probe_mail_login(&imap, &smtp, &signed.email, &signed.access_token, true).await?;
     let id = uuid::Uuid::new_v4().to_string();
+    let provider_kind = match provider {
+        oauth::OAuthProvider::Gmail => ProviderKind::Gmail,
+        oauth::OAuthProvider::Outlook => ProviderKind::Outlook,
+    };
     let summary = AccountSummary {
         notify_new_mail: true,
         default_body_format: BodyFormat::Html,
         id: id.clone(),
-        provider: match provider {
-            oauth::OAuthProvider::Gmail => ProviderKind::Gmail,
-            oauth::OAuthProvider::Outlook => ProviderKind::Outlook,
-        },
+        provider_id: Some(provider.as_str().to_string()),
+        provider: provider_kind,
+        app_password_policy: None,
+        app_password_url: None,
+        password_format: None,
         email: signed.email,
         display_name: signed.display_name,
         sync_state: "idle".into(),

@@ -15,6 +15,35 @@ export const settings = {
   moveAccountDown: (name: string) => `Move ${name} down`,
   accountOrderFailed: "The account order could not be saved. Try again.",
   connection: "Connection",
+  connectionRecovery: "Connection recovery",
+  connectionRecoveryHelp:
+    "Review failed local changes for this account. Dismissing selected changes removes only their local pending work; it does not retry or change mail on the server.",
+  connectionRecoveryLoading: "Loading failed local changes…",
+  connectionRecoveryLoadFailed: "Could not load failed local changes.",
+  connectionRecoveryRetry: "Refresh failed changes",
+  connectionRecoveryNone: "No failed local changes need review.",
+  connectionRecoveryCount: (count: number) =>
+    `${count} failed local ${count === 1 ? "change needs" : "changes need"} review.`,
+  connectionRecoveryMore:
+    "Showing the first 100 failed changes. Dismiss reviewed changes to see more.",
+  connectionRecoveryKinds: {
+    move: "Move",
+    copy: "Copy",
+    flags: "Flag change",
+    keyword: "Keyword change",
+    other: "Local change",
+  },
+  connectionRecoveryChange: (id: number) => `change ${id}`,
+  reviewFailedChanges: "Review selected failed changes",
+  connectionRecoveryConfirmTitle: "Dismiss failed local changes?",
+  connectionRecoveryConfirmHelp: (ids: string) =>
+    `Dismiss reviewed change IDs ${ids} from this device? Postal Snap will not retry them or change anything on your mail server. Unsent Outbox items and other local changes will stay.`,
+  connectionRecoveryCancel: "Cancel",
+  connectionRecoveryDismiss: "Dismiss reviewed changes",
+  connectionRecoveryDismissed: (count: number) =>
+    `Dismissed ${count} failed ${count === 1 ? "local change" : "local changes"}.`,
+  connectionRecoveryDismissFailed:
+    "Some selected failed changes could not be dismissed. Refresh the list and try again.",
   folders: "Folders",
   identity: "Identity",
   rulesSection: "Rules",
@@ -342,6 +371,8 @@ export const settings = {
   ruleFlagRequired: "Choose a flag color.",
   ruleActionRequired: "Choose an action for the rule.",
   addRule: "Add rule",
+  editRule: "Edit",
+  saveRule: "Save rule",
   ruleSaved: "Rule saved.",
   ruleRemoved: "Rule removed.",
   ruleNameRequired: "Name the rule first.",

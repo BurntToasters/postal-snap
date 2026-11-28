@@ -23,7 +23,7 @@ use crate::{
     },
     models::{
         IpcError, MessageCursor, MessageDetail, MessageListFilter, MessageListSort, MessagePage,
-        MessageSummary, SearchQuery,
+        MessageSummary, SearchQuery, ServerSearchResult,
     },
 };
 
@@ -962,8 +962,8 @@ fn junk_keyword_for_roles(source_role: &str, destination_role: &str) -> Option<b
     (source_role == "junk" && destination_role == "inbox").then_some(false)
 }
 
-fn undo_not_before() -> chrono::DateTime<chrono::Utc> {
-    chrono::Utc::now() + chrono::TimeDelta::seconds(UNDO_HOLD_SECONDS)
+fn undo_not_before() -> time::OffsetDateTime {
+    crate::date_time::now_utc() + time::Duration::seconds(UNDO_HOLD_SECONDS)
 }
 
 /// Undo tokens come from the frontend. Keep them short and plain.
@@ -981,17 +981,14 @@ fn validate_undo_token(token: &str) -> Result<(), String> {
 
 /// Local bookkeeping after the server committed a live move. The copies are
 /// removed and their snoozes follow to the destination, like replayed moves.
-/// Best effort: a database error must not report a completed move as failed.
+/// Best effort: this local finalization either fully commits or can be retried.
 pub(crate) fn record_live_moves(
     db: &crate::db::Database,
     account_id: &str,
     row_ids: &[i64],
-    destination_mailbox_id: i64,
+    _destination_mailbox_id: i64,
     destination: &str,
 ) {
-    for &row_id in row_ids {
-        let _ = db.mark_pending_move(row_id, destination_mailbox_id);
-    }
     let _ = db.remove_moved_messages(account_id, row_ids, destination);
 }
 
@@ -1124,22 +1121,19 @@ pub(crate) async fn bulk_apply_flags(
         .await;
         match remote {
             Ok(()) => {
-                for (id, _) in &entries {
-                    if state
-                        .db
-                        .record_colored_flag_change(
-                            account_id, *id, is_read, is_starred, color, None,
-                        )
-                        .is_ok()
-                    {
-                        updated += 1;
-                    } else {
-                        failed += 1;
-                    }
-                }
+                let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                    entries.iter().map(|(id, _)| (*id, None)).collect();
+                let failed_ids = state
+                    .db
+                    .record_bulk_flag_changes(account_id, &batch, is_read, is_starred, color)
+                    .unwrap_or_else(|_| entries.iter().map(|(id, _)| *id).collect());
+                let bad = failed_ids.len();
+                failed += bad;
+                updated += entries.len().saturating_sub(bad);
             }
             Err(error) if error.terminal => failed += ids.len(),
             Err(_) => {
+                let mut payloads = Vec::with_capacity(entries.len());
                 for (id, uid) in &entries {
                     let operation = FlagOperation {
                         message_id: *id,
@@ -1155,23 +1149,17 @@ pub(crate) async fn bulk_apply_flags(
                     };
                     let payload = serde_json::to_value(&operation)
                         .map_err(|_| "Could not queue the flag change.".to_string())?;
-                    if state
-                        .db
-                        .record_colored_flag_change(
-                            account_id,
-                            *id,
-                            is_read,
-                            is_starred,
-                            color,
-                            Some(&payload),
-                        )
-                        .is_ok()
-                    {
-                        queued += 1;
-                    } else {
-                        failed += 1;
-                    }
+                    payloads.push((*id, payload));
                 }
+                let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                    payloads.iter().map(|(id, p)| (*id, Some(p))).collect();
+                let failed_ids = state
+                    .db
+                    .record_bulk_flag_changes(account_id, &batch, is_read, is_starred, color)
+                    .unwrap_or_else(|_| entries.iter().map(|(id, _)| *id).collect());
+                let bad = failed_ids.len();
+                failed += bad;
+                queued += entries.len().saturating_sub(bad);
             }
         }
     }
@@ -1555,35 +1543,46 @@ pub async fn mark_mailbox_read(
         queued: 0,
         failed: 0,
     };
-    for chunk in unread.chunks(200) {
-        let items: Vec<(i64, String, u32)> = chunk
-            .iter()
-            .map(|(id, uid)| (*id, name.clone(), *uid))
-            .collect();
-        let batch = bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
-        outcome.updated += batch.updated;
-        outcome.queued += batch.queued;
-        outcome.failed += batch.failed;
-    }
-    // Only cached rows were flagged above; older unread mail exists only on
-    // the server. Mark everything up to the current UIDNEXT there too, so the
-    // authoritative STATUS count agrees on the next refresh.
+    let mut marked_remotely = false;
     if let Ok(account) = state.db.account(&account_id) {
-        let Ok(password) = crate::oauth::session_secret(&account).await else {
-            emit_message_change(&app, &account_id, None, "flags");
-            emit_folder_counts(&app, &account_id);
-            return Ok(outcome);
-        };
-        if let Some(validity) = state.db.mailbox_uid_validity(&account_id, &name)? {
+        if let (Ok(password), Some(validity)) = (
+            crate::oauth::session_secret(&account).await,
+            state.db.mailbox_uid_validity(&account_id, &name)?,
+        ) {
             if mail::mark_folder_read(&account, &password, &name, validity)
                 .await
                 .is_ok()
             {
+                marked_remotely = true;
+                for chunk in unread.chunks(500) {
+                    let batch: Vec<(i64, Option<&serde_json::Value>)> =
+                        chunk.iter().map(|(id, _)| (*id, None)).collect();
+                    let failed_ids = state
+                        .db
+                        .record_bulk_flag_changes(&account_id, &batch, Some(true), None, None)
+                        .unwrap_or_else(|_| chunk.iter().map(|(id, _)| *id).collect());
+                    let bad = failed_ids.len();
+                    outcome.failed += bad;
+                    outcome.updated += chunk.len().saturating_sub(bad);
+                }
                 let policy = account_policy(&state, &account_id).unwrap_or_default();
                 let _ =
                     mail::refresh_mailbox_envelopes(&account, &password, &name, &state.db, &policy)
                         .await;
             }
+        }
+    }
+    if !marked_remotely {
+        for chunk in unread.chunks(200) {
+            let items: Vec<(i64, String, u32)> = chunk
+                .iter()
+                .map(|(id, uid)| (*id, name.clone(), *uid))
+                .collect();
+            let batch =
+                bulk_apply_flags(&state, &account_id, &items, Some(true), None, None).await?;
+            outcome.updated += batch.updated;
+            outcome.queued += batch.queued;
+            outcome.failed += batch.failed;
         }
     }
     emit_message_change(&app, &account_id, None, "flags");
@@ -1670,7 +1669,7 @@ pub async fn search_cached_messages(
 pub async fn search_server_messages(
     query: SearchQuery,
     state: State<'_, AppState>,
-) -> CommandResult<Vec<MessageSummary>> {
+) -> CommandResult<ServerSearchResult> {
     // Search progress is shown by the search UI. It must not overwrite the
     // account's sync state, which may be reporting "Sign-in failed".
     let actor = state.actor(&query.account_id)?;
@@ -1679,6 +1678,8 @@ pub async fn search_server_messages(
     let mut hooks = SearchHooks {
         actor,
         guard: Some(guard),
+        db: state.db.clone(),
+        account_id: query.account_id.clone(),
     };
     let account = state.db.account(&query.account_id)?;
     let password = crate::oauth::session_secret(&account).await?;
@@ -1690,9 +1691,15 @@ pub async fn search_server_messages(
 struct SearchHooks {
     actor: std::sync::Arc<super::AccountActor>,
     guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    db: crate::db::Database,
+    account_id: String,
 }
 
 impl mail::SyncHooks for SearchHooks {
+    fn validate_connection(&self, previous: &crate::models::AccountRecord) -> Result<(), String> {
+        super::sync::validate_connection_identity(&self.db, &self.account_id, previous)
+    }
+
     fn contended(&self) -> bool {
         self.actor.contended()
     }
@@ -1700,6 +1707,7 @@ impl mail::SyncHooks for SearchHooks {
     async fn yield_account(&mut self) {
         self.guard.take();
         tokio::task::yield_now().await;
+        self.actor.request(super::wake::OPERATION);
         self.guard = Some(self.actor.acquire().await);
     }
 
@@ -1784,6 +1792,10 @@ mod download_parse_settle_tests {
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -1810,6 +1822,32 @@ mod download_parse_settle_tests {
                 username: "sam@example.com".into(),
             },
         }
+    }
+
+    #[test]
+    fn yielded_search_rejects_a_revoked_bridge_pin() {
+        let db = Database::memory();
+        let account = test_account();
+        db.insert_account(&account).unwrap();
+        assert!(crate::commands::sync::validate_connection_identity(
+            &db,
+            &account.summary.id,
+            &account,
+        )
+        .is_ok());
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET bridge_certificate='revoked-pin' WHERE id=?1",
+                [&account.summary.id],
+            )
+            .unwrap();
+        assert!(crate::commands::sync::validate_connection_identity(
+            &db,
+            &account.summary.id,
+            &account,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1915,10 +1953,12 @@ mod content_plan_tests {
 
 #[cfg(test)]
 mod undo_session_tls_tests {
-    use chrono::{Duration as ChronoDuration, Utc};
+    use std::time::Duration;
     use tempfile::TempDir;
+    use time::{Duration as TimeDuration, OffsetDateTime};
 
     use crate::{
+        date_time::now_utc,
         db::Database,
         mail,
         models::{
@@ -1948,6 +1988,10 @@ mod undo_session_tls_tests {
                 notify_new_mail: true,
                 id: uuid::Uuid::new_v4().to_string(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: EMAIL.into(),
                 display_name: "Undo session integration fixture".into(),
                 sync_state: "idle".into(),
@@ -2046,7 +2090,7 @@ mod undo_session_tls_tests {
         }
     }
 
-    fn defer(fixture: &Fixture, token: &str, not_before: chrono::DateTime<Utc>) {
+    fn defer(fixture: &Fixture, token: &str, not_before: OffsetDateTime) {
         let operation = serde_json::json!({
             "messageId": fixture.row_id,
             "uid": fixture.uid,
@@ -2093,79 +2137,113 @@ mod undo_session_tls_tests {
         matches.len()
     }
 
-    // Failure modes for A19: a live frontend's move replays at its expired
-    // deadline; offline Undo leaves a replayable move behind; startup leaves
-    // an abandoned hold permanent; stale enqueue races rotation; or replay
-    // moves the message more than once.
+    // Failure modes for A19: future Undo fails to cancel, an expired move is
+    // held past its deadline, restart leaves an abandoned hold stuck, a stale
+    // token enqueues work, or replay moves a message more than once.
     #[tokio::test]
     #[ignore = "requires npm run test:mail-integration"]
-    async fn greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart() {
-        let fixture = fixture().await;
-        let live_session = fixture.db.begin_undo_session().unwrap();
-        let live_token = format!("{live_session}{}", "c".repeat(32));
-        defer(
-            &fixture,
-            &live_token,
-            Utc::now() - ChronoDuration::seconds(1),
-        );
+    async fn greenmail_undo_session_finite_hold_replays_expired_and_recovers_after_restart() {
+        let live = fixture().await;
+        let live_session = live.db.begin_undo_session().unwrap();
+        let future_token = format!("{live_session}{}", "c".repeat(32));
+        defer(&live, &future_token, now_utc() + TimeDuration::minutes(5));
 
-        assert!(fixture
+        assert!(live
             .db
-            .queued_operations(&fixture.account_id)
+            .queued_operations(&live.account_id)
             .unwrap()
             .is_empty());
-        assert!(fixture
+        assert!(live
             .db
-            .next_deferred_due(&fixture.account_id)
+            .next_deferred_due(&live.account_id)
             .unwrap()
-            .is_none());
-        assert!(!replay(&fixture).await);
-        assert_eq!(server_count(&fixture, "INBOX").await, 1);
-        assert_eq!(server_count(&fixture, "Archive").await, 0);
+            .is_some_and(|due| due > Duration::from_secs(240)));
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 1);
+        assert_eq!(server_count(&live, "Archive").await, 0);
 
         assert_eq!(
-            fixture
-                .db
-                .undo_deferred(&fixture.account_id, &live_token)
+            live.db
+                .undo_deferred(&live.account_id, &future_token)
                 .unwrap(),
             (1, false),
-            "undo edits the local queue while the account is offline"
+            "offline Undo cancels a future move"
         );
-        assert!(!replay(&fixture).await);
-        assert_eq!(server_count(&fixture, "INBOX").await, 1);
-        assert_eq!(server_count(&fixture, "Archive").await, 0);
+        assert!(live
+            .db
+            .queued_operations(&live.account_id)
+            .unwrap()
+            .is_empty());
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 1);
+        assert_eq!(server_count(&live, "Archive").await, 0);
 
-        let restart_token = format!("{live_session}{}", "d".repeat(32));
-        defer(
-            &fixture,
-            &restart_token,
-            Utc::now() + ChronoDuration::minutes(5),
+        let expired_token = format!("{live_session}{}", "d".repeat(32));
+        defer(&live, &expired_token, now_utc() - TimeDuration::seconds(1));
+        assert_eq!(
+            live.db.queued_operations(&live.account_id).unwrap().len(),
+            1
         );
-        let database_path = fixture._directory.path().join("mail.sqlite3");
-        let account_id = fixture.account_id.clone();
-        let account = fixture.account.clone();
-        let message_id = fixture.message_id.clone();
-        let row_id = fixture.row_id;
-        let uid = fixture.uid;
-        let uid_validity = fixture.uid_validity;
-        let archive_id = fixture.archive_id;
+        assert!(live
+            .db
+            .next_deferred_due(&live.account_id)
+            .unwrap()
+            .is_none());
+        assert!(!replay(&live).await, "the expired move should drain once");
+        assert!(live
+            .db
+            .queued_operations(&live.account_id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(server_count(&live, "INBOX").await, 0);
+        assert_eq!(server_count(&live, "Archive").await, 1);
+        assert!(!replay(&live).await);
+        assert_eq!(server_count(&live, "INBOX").await, 0);
+        assert_eq!(server_count(&live, "Archive").await, 1);
+
+        let abandoned = fixture().await;
+        let abandoned_session = abandoned.db.begin_undo_session().unwrap();
+        let abandoned_token = format!("{abandoned_session}{}", "e".repeat(32));
+        defer(
+            &abandoned,
+            &abandoned_token,
+            now_utc() + TimeDuration::minutes(5),
+        );
+        assert!(abandoned
+            .db
+            .queued_operations(&abandoned.account_id)
+            .unwrap()
+            .is_empty());
+        assert!(abandoned
+            .db
+            .next_deferred_due(&abandoned.account_id)
+            .unwrap()
+            .is_some());
+        let database_path = abandoned._directory.path().join("mail.sqlite3");
+        let account_id = abandoned.account_id.clone();
+        let account = abandoned.account.clone();
+        let message_id = abandoned.message_id.clone();
+        let row_id = abandoned.row_id;
+        let uid = abandoned.uid;
+        let uid_validity = abandoned.uid_validity;
+        let archive_id = abandoned.archive_id;
         let Fixture {
             db,
             _directory: directory,
             ..
-        } = fixture;
+        } = abandoned;
         drop(db);
 
         let db = Database::open(&database_path).expect("reopen durable mail database");
         let restarted_session = db.begin_undo_session().unwrap();
-        assert_ne!(restarted_session, live_session);
+        assert_ne!(restarted_session, abandoned_session);
         assert_eq!(db.queued_operations(&account_id).unwrap().len(), 1);
         assert!(db
             .defer_moves::<serde_json::Value>(
                 &account_id,
                 &[],
-                &restart_token,
-                Utc::now() + ChronoDuration::minutes(5),
+                &abandoned_token,
+                now_utc() + TimeDuration::minutes(5),
             )
             .is_err());
         let reopened = Fixture {
@@ -2182,6 +2260,11 @@ mod undo_session_tls_tests {
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);
+        assert!(reopened
+            .db
+            .queued_operations(&reopened.account_id)
+            .unwrap()
+            .is_empty());
         assert!(!replay(&reopened).await);
         assert_eq!(server_count(&reopened, "INBOX").await, 0);
         assert_eq!(server_count(&reopened, "Archive").await, 1);
@@ -2336,6 +2419,10 @@ mod eml_save_tests {
                 notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::ProtonBridge,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "fixture@example.test".into(),
                 display_name: "Fixture".into(),
                 sync_state: "idle".into(),

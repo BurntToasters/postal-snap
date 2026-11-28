@@ -1,7 +1,8 @@
 use super::{
     adjust_mailbox_counts, db_error, fts_query, has_remote_images, json_or_default,
-    map_message_summary, provisional_thread_root, references_from_raw, BodyState, CachedMessage,
-    Database, MailboxSyncState, MESSAGE_DETAIL_SELECT, MESSAGE_SUMMARY_SELECT,
+    mailboxes::effective_role_sql, map_message_summary, provisional_thread_root,
+    references_from_raw, BodyState, CachedMessage, Database, MailboxSyncState,
+    MESSAGE_DETAIL_SELECT, MESSAGE_SUMMARY_SELECT,
 };
 use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
@@ -132,8 +133,47 @@ pub(crate) const NOT_SNOOZED_SQL: &str = "NOT EXISTS (SELECT 1 FROM snoozed_mess
 /// Unfinished parses in a row before a message is quarantined. One is
 /// forgiven: the app may simply have quit mid-parse.
 pub(crate) const PARSE_QUARANTINE_AT: u32 = 2;
+pub(crate) const ARRIVAL_RULE_PENDING: i64 = 1;
+pub(crate) const ARRIVAL_NOTICE_PENDING: i64 = 2;
+pub(crate) const RULE_NOTICE_CLAIMED: i64 = 4;
+pub(crate) const NEW_MAIL_NOTICE_CLAIMED: i64 = 8;
+const RULE_ARRIVAL_PAGE_LIMIT: i64 = 100;
 /// Subtree visits one thread repair may make for each arrived message.
 const THREAD_REPAIR_ROUNDS: usize = 2000;
+
+fn pending_rule_arrival_sql() -> String {
+    let effective_role = effective_role_sql("f");
+    format!(
+        "SELECT m.id FROM messages m INDEXED BY messages_pending_rule_arrival
+         JOIN mailboxes f ON f.id=m.mailbox_id
+         WHERE m.account_id=?1 AND {effective_role}='inbox' AND m.is_read=0
+           AND m.pending_move_to IS NULL
+           AND (m.notification_state & {ARRIVAL_RULE_PENDING}) != 0
+         ORDER BY m.id ASC LIMIT ?2"
+    )
+}
+
+fn consume_new_mail_arrival_select_sql() -> String {
+    let effective_role = effective_role_sql("box");
+    format!(
+        "{MESSAGE_SUMMARY_SELECT} INDEXED BY messages_pending_notice_arrival
+         JOIN mailboxes box ON box.id=m.mailbox_id
+         WHERE m.account_id=?1 AND {effective_role}='inbox'
+           AND m.pending_move_to IS NULL AND m.is_read=0
+           AND (m.notification_state & {ARRIVAL_NOTICE_PENDING}) != 0
+           AND (m.notification_state & ?2) = 0
+         ORDER BY m.id DESC LIMIT 1"
+    )
+}
+
+fn consume_new_mail_arrival_clear_sql() -> String {
+    format!(
+        "UPDATE messages SET notification_state=
+           (notification_state & ~?2) |
+           CASE WHEN (notification_state & ?3)=0 THEN ?4 ELSE 0 END
+         WHERE account_id=?1 AND (notification_state & {ARRIVAL_NOTICE_PENDING}) != 0"
+    )
+}
 
 database_operations! {
 impl Database {
@@ -149,14 +189,7 @@ impl Database {
         }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, color) in colors {
-            transaction
-                .execute(
-                    "UPDATE messages SET flag_color=?3 WHERE mailbox_id=?1 AND uid=?2 AND flag_color<>?3",
-                    params![mailbox_id, uid, i64::from(*color)],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_flag_colors_tx(&transaction, mailbox_id, colors)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -171,6 +204,7 @@ impl Database {
             .map_err(db_error)
     }
 
+    #[cfg(test)]
     pub fn reconcile_flags(
         &self,
         mailbox_id: i64,
@@ -179,62 +213,27 @@ impl Database {
     ) -> Result<(), String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, is_read, is_starred) in seen {
-            let overlay: Option<(bool, Option<i64>, bool)> = transaction
-                .query_row(
-                    "SELECT m.is_read != 0,m.pending_move_to,
-                            COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
-                     FROM messages m LEFT JOIN mailboxes d ON d.id=m.pending_move_to
-                     WHERE m.mailbox_id=?1 AND m.uid=?2",
-                    params![mailbox_id, uid],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()
-                .map_err(db_error)?;
-            if let Some((was_read, Some(destination_id), true)) = overlay {
-                if was_read != *is_read {
-                    let delta = if *is_read { -1 } else { 1 };
-                    adjust_mailbox_counts(&transaction, destination_id, 0, Some(delta))?;
-                }
-            }
-            transaction
-                .execute(
-                    "UPDATE messages SET is_read=?3,is_starred=?4 WHERE mailbox_id=?1 AND uid=?2",
-                    params![mailbox_id, uid, *is_read as i32, *is_starred as i32],
-                )
-                .map_err(db_error)?;
-        }
-        let returned = seen
-            .iter()
-            .map(|item| item.0)
-            .collect::<std::collections::HashSet<_>>();
-        for uid in requested.iter().filter(|uid| !returned.contains(uid)) {
-            transaction
-                .execute(
-                    "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
-                    params![mailbox_id, uid],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_flags_tx(&transaction, mailbox_id, seen, requested)?;
         transaction.commit().map_err(db_error)
     }
 
-    /// Server truth for `\\Answered` / `$Forwarded`, keyed by UID.
-    pub fn reconcile_reply_flags(
+    /// Reconcile seen/starred, reply/forward, and flag colors in one transaction.
+    pub fn reconcile_flag_batch(
         &self,
         mailbox_id: i64,
-        seen: &[(u32, bool, bool)],
+        flags: &[(u32, bool, bool)],
+        replies: &[(u32, bool, bool)],
+        colors: &[(u32, u8)],
+        requested: &[u32],
     ) -> Result<(), String> {
+        if flags.is_empty() && replies.is_empty() && colors.is_empty() && requested.is_empty() {
+            return Ok(());
+        }
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for (uid, answered, forwarded) in seen {
-            transaction
-                .execute(
-                    "UPDATE messages SET is_answered=?3,is_forwarded=?4 WHERE mailbox_id=?1 AND uid=?2",
-                    params![mailbox_id, uid, *answered as i32, *forwarded as i32],
-                )
-                .map_err(db_error)?;
-        }
+        reconcile_reply_flags_tx(&transaction, mailbox_id, replies)?;
+        reconcile_flags_tx(&transaction, mailbox_id, flags, requested)?;
+        reconcile_flag_colors_tx(&transaction, mailbox_id, colors)?;
         transaction.commit().map_err(db_error)
     }
 
@@ -408,15 +407,188 @@ impl Database {
         mailbox_id: i64,
         messages: &[CachedMessage],
     ) -> Result<(), String> {
-        if messages.is_empty() {
-            return Ok(());
-        }
+        upsert_envelopes_inner(
+            self,
+            account_id,
+            mailbox_id,
+            messages,
+            EnvelopeArrival::None,
+        )
+    }
+
+    /// Catch-up sync only: records true Inbox arrivals separately from search,
+    /// initial discovery, and historical backfill cache writes.
+    pub fn upsert_arrival_envelopes(
+        &self,
+        account_id: &str,
+        mailbox_id: i64,
+        messages: &[CachedMessage],
+    ) -> Result<(), String> {
+        upsert_envelopes_inner(
+            self,
+            account_id,
+            mailbox_id,
+            messages,
+            EnvelopeArrival::All,
+        )
+    }
+
+    pub fn upsert_search_arrival_envelopes(
+        &self,
+        account_id: &str,
+        mailbox_id: i64,
+        messages: &[CachedMessage],
+        arrival_uid_floor: u32,
+    ) -> Result<(), String> {
+        upsert_envelopes_inner(
+            self,
+            account_id,
+            mailbox_id,
+            messages,
+            EnvelopeArrival::UidAtOrAbove(arrival_uid_floor),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn record_new_mail_arrival(
+        &self,
+        account_id: &str,
+        message_id: i64,
+    ) -> Result<(), String> {
+        self.conn()?
+            .execute(
+                "UPDATE messages SET notification_state=notification_state | ?3
+                 WHERE account_id=?1 AND id=?2 AND (notification_state & ?4)=0",
+                params![
+                    account_id,
+                    message_id,
+                    ARRIVAL_RULE_PENDING | ARRIVAL_NOTICE_PENDING,
+                    RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                ],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
+    /// Oldest pending unread Inbox arrivals for one automatic-rule pass.
+    pub fn pending_rule_arrival_ids(&self, account_id: &str) -> Result<Vec<i64>, String> {
+        let conn = self.read_conn()?;
+        let mut statement = conn
+            .prepare(&pending_rule_arrival_sql())
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![account_id, RULE_ARRIVAL_PAGE_LIMIT], |row| row.get(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        Ok(rows)
+    }
+
+    /// Consumes one account's pending arrival burst and returns its newest
+    /// unread Inbox message. The claim lands before the native notice is shown.
+    pub fn consume_new_mail_arrival(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<MessageSummary>, String> {
         let mut conn = self.conn()?;
         let transaction = conn.transaction().map_err(db_error)?;
-        for message in messages {
-            write_envelope(&transaction, account_id, mailbox_id, message)?;
+        let message = transaction
+            .query_row(
+                &consume_new_mail_arrival_select_sql(),
+                params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+                map_message_summary,
+            )
+            .optional()
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                &consume_new_mail_arrival_clear_sql(),
+                params![
+                    account_id,
+                    ARRIVAL_NOTICE_PENDING,
+                    RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                    NEW_MAIL_NOTICE_CLAIMED,
+                ],
+            )
+            .map_err(db_error)?;
+        transaction.commit().map_err(db_error)?;
+        Ok(message)
+    }
+
+    /// Claims a rule's selected notice before the OS is asked to display it.
+    pub fn claim_rule_notification(
+        &self,
+        account_id: &str,
+        message_id: i64,
+    ) -> Result<bool, String> {
+        let claimed = self
+            .conn()?
+            .execute(
+                "UPDATE messages SET notification_state=
+                   (notification_state & ~?3) | ?4
+                 WHERE account_id=?1 AND id=?2 AND (notification_state & ?5)=0",
+                params![
+                    account_id,
+                    message_id,
+                    ARRIVAL_NOTICE_PENDING,
+                    RULE_NOTICE_CLAIMED,
+                    RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                ],
+            )
+            .map_err(db_error)?;
+        Ok(claimed == 1)
+    }
+
+    /// Advances durable rule provenance by successful candidates, independent
+    /// of the batch cap. Notify matches also suppress the generic arrival path.
+    pub fn finish_rule_arrivals(
+        &self,
+        account_id: &str,
+        complete: bool,
+        handled_ids: &[i64],
+        notify_ids: &[i64],
+    ) -> Result<(), String> {
+        let mut conn = self.conn()?;
+        let transaction = conn.transaction().map_err(db_error)?;
+        let mut clear_rule = transaction
+            .prepare_cached(
+                "UPDATE messages SET notification_state=notification_state & ~?3
+                 WHERE account_id=?1 AND id=?2",
+            )
+            .map_err(db_error)?;
+        for id in handled_ids {
+            clear_rule
+                .execute(params![account_id, id, ARRIVAL_RULE_PENDING])
+                .map_err(db_error)?;
         }
-        super::snooze_transfers::apply_in_transaction(&transaction, account_id, mailbox_id)?;
+        drop(clear_rule);
+        if complete {
+            transaction
+                .execute(
+                    "UPDATE messages SET notification_state=notification_state & ~?2
+                     WHERE account_id=?1 AND (notification_state & ?2) != 0",
+                    params![account_id, ARRIVAL_RULE_PENDING],
+                )
+                .map_err(db_error)?;
+        }
+        let mut suppress = transaction
+            .prepare_cached(
+                "UPDATE messages SET notification_state=
+                   (notification_state & ~?3) | ?4
+                 WHERE account_id=?1 AND id=?2",
+            )
+            .map_err(db_error)?;
+        for id in notify_ids {
+            suppress
+                .execute(params![
+                    account_id,
+                    id,
+                    ARRIVAL_NOTICE_PENDING,
+                    RULE_NOTICE_CLAIMED,
+                ])
+                .map_err(db_error)?;
+        }
+        drop(suppress);
         transaction.commit().map_err(db_error)
     }
 
@@ -712,12 +884,16 @@ impl Database {
             .map_err(db_error)
     }
 
-    /// Highest Inbox row id. Ids rise in arrival order; the Date header does not.
+    /// Legacy test helper for old row-id high-water behavior.
+    #[cfg(test)]
     pub fn inbox_high_water(&self, account_id: &str) -> Result<Option<i64>, String> {
+        let effective_role = effective_role_sql("box");
         self.read_conn()?
             .query_row(
-                "SELECT MAX(m.id) FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
-                 WHERE m.account_id=?1 AND box.role='inbox'",
+                &format!(
+                    "SELECT MAX(m.id) FROM messages m JOIN mailboxes box ON box.id=m.mailbox_id
+                     WHERE m.account_id=?1 AND {effective_role}='inbox'"
+                ),
                 [account_id],
                 |row| row.get(0),
             )
@@ -734,7 +910,8 @@ impl Database {
         self.newest_unread_inbox_after_excluding(account_id, after, &[])
     }
 
-    /// Newest unread Inbox arrival cached after `after`, skipping already-notified ids.
+    /// Legacy row-id helper retained only by notification regression tests.
+    #[cfg(test)]
     pub fn newest_unread_inbox_after_excluding(
         &self,
         account_id: &str,
@@ -743,9 +920,10 @@ impl Database {
     ) -> Result<Option<MessageSummary>, String> {
         let conn = self.read_conn()?;
         let excluded: std::collections::HashSet<i64> = exclude_ids.iter().copied().collect();
+        let effective_role = effective_role_sql("box");
         let mut statement = conn
             .prepare(&format!(
-                "{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND box.role='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC",
+                "{} JOIN mailboxes box ON box.id=m.mailbox_id WHERE m.account_id=?1 AND {effective_role}='inbox' AND m.pending_move_to IS NULL AND m.is_read=0 AND (?2 IS NULL OR m.id>?2) ORDER BY m.id DESC",
                 MESSAGE_SUMMARY_SELECT
             ))
             .map_err(db_error)?;
@@ -897,7 +1075,7 @@ impl Database {
         let (thread_parent, raw): (Option<String>, Vec<u8>) = self
             .read_conn()?
             .query_row(
-                "SELECT thread_parent, raw_message FROM messages WHERE id=?1 AND account_id=?2",
+                "SELECT thread_parent, substr(raw_message, 1, 16384) FROM messages WHERE id=?1 AND account_id=?2",
                 params![id, account_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -922,12 +1100,13 @@ impl Database {
         if header_id.is_empty() {
             return Ok(None);
         }
+        let effective_role = crate::db::mailboxes::effective_role_sql("box");
         self.read_conn()?
             .query_row(
                 &format!(
                     "{MESSAGE_SUMMARY_SELECT} JOIN mailboxes box ON box.id=m.mailbox_id \
                      WHERE m.account_id=?1 AND m.message_id=?2 AND m.pending_move_to IS NULL \
-                     ORDER BY CASE WHEN box.role IN ('trash','junk') THEN 1 ELSE 0 END, \
+                     ORDER BY CASE WHEN {effective_role} IN ('trash','junk') THEN 1 ELSE 0 END, \
                      m.received_at DESC, m.uid DESC LIMIT 1"
                 ),
                 params![account_id, header_id],
@@ -1188,7 +1367,8 @@ impl Database {
         self.clear_mailbox_messages(mailbox_id)?;
         self.conn()?
             .execute(
-                "DELETE FROM offline_ops WHERE account_id=?1 AND ((kind='flags' AND json_extract(payload,'$.mailbox')=?2) OR (kind='move' AND json_extract(payload,'$.source')=?2))",
+                "UPDATE offline_ops SET state='needs_attention',not_before=NULL,undo_token=NULL
+                 WHERE account_id=?1 AND ((kind IN ('flags','keyword') AND json_extract(payload,'$.mailbox')=?2) OR (kind IN ('move','copy') AND json_extract(payload,'$.source')=?2))",
                 params![account_id, mailbox_name],
             )
             .map_err(db_error)?;
@@ -1343,18 +1523,11 @@ impl Database {
         if remaining == 0 {
             return Ok(suggestions);
         }
+        let effective_role = effective_role_sql("f");
         let mut received = conn
-            .prepare(
+            .prepare(&format!(
                 "WITH effective_mailbox_roles AS (
-                   SELECT f.id,f.account_id,
-                     COALESCE(
-                       (SELECT a.role FROM folder_assignments a
-                        WHERE a.account_id=f.account_id AND a.mailbox_id=f.id),
-                       CASE WHEN EXISTS(
-                         SELECT 1 FROM folder_assignments a
-                         WHERE a.account_id=f.account_id AND a.role=f.role
-                       ) THEN 'other' ELSE f.role END
-                     ) AS effective_role
+                   SELECT f.id,f.account_id,{effective_role} AS effective_role
                    FROM mailboxes f
                  )
                  SELECT m.sender_address,m.sender_name
@@ -1371,8 +1544,8 @@ impl Database {
                      WHERE mu.account_id=m.account_id
                        AND (mu.message_id=m.message_id OR mu.message_id=m.thread_parent)
                    )
-                 ORDER BY m.received_at DESC,m.id DESC LIMIT 500",
-            )
+                 ORDER BY m.received_at DESC,m.id DESC LIMIT 500"
+            ))
             .map_err(db_error)?;
         let rows = received
             .query_map(params![account_id, like], |row| {
@@ -1516,14 +1689,6 @@ impl Database {
             "SELECT m.account_id, m.mailbox_id, f.name, m.uid, m.size FROM messages m JOIN mailboxes f ON f.id=m.mailbox_id WHERE m.id=?1",
             [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get::<_, i64>(4)?.max(0) as u64)),
         ).optional().map_err(db_error)?.ok_or_else(|| "Message not found.".into())
-    }
-
-    pub fn latest_message_rowid(&self) -> Result<i64, String> {
-        self.read_conn()?
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
-                row.get(0)
-            })
-            .map_err(db_error)
     }
 
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<MessageSummary>, String> {
@@ -1707,18 +1872,18 @@ impl Database {
         }
         // Dates are UTC days; received_at is RFC 3339, so text compares.
         if let Some(date) = parsed.after {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
         }
         if let Some(date) = parsed.before {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
         }
         if let Some(date) = parsed.on {
-            values.push(Value::from(date.format("%Y-%m-%d").to_string()));
+            values.push(Value::from(crate::date_time::format_iso_date(date)));
             sql.push_str(&format!(" AND m.received_at >= ?{}", values.len()));
-            if let Some(next) = date.checked_add_signed(chrono::Duration::days(1)) {
-                values.push(Value::from(next.format("%Y-%m-%d").to_string()));
+            if let Some(next) = date.next_day() {
+                values.push(Value::from(crate::date_time::format_iso_date(next)));
                 sql.push_str(&format!(" AND m.received_at < ?{}", values.len()));
             }
         }
@@ -2075,9 +2240,12 @@ pub(crate) fn mark_pending_move_in_transaction(
 }
 
 fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, String> {
+    let effective_role = crate::db::mailboxes::effective_role_sql("f");
     conn.query_row(
-        "SELECT m.account_id, m.mailbox_id, f.name, f.role, m.uid, m.pending_move_to, f.uid_validity
-         FROM messages m JOIN mailboxes f ON f.id = m.mailbox_id WHERE m.id=?1",
+        &format!(
+            "SELECT m.account_id, m.mailbox_id, f.name, {effective_role}, m.uid, m.pending_move_to, f.uid_validity
+             FROM messages m JOIN mailboxes f ON f.id = m.mailbox_id WHERE m.id=?1"
+        ),
         [id],
         |row| {
             Ok(TrashRow {
@@ -2095,11 +2263,168 @@ fn trash_row(conn: &rusqlite::Connection, id: i64) -> Result<Option<TrashRow>, S
     .map_err(db_error)
 }
 
+fn reconcile_flag_colors_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    colors: &[(u32, u8)],
+) -> Result<(), String> {
+    if colors.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = transaction
+        .prepare_cached(
+            "UPDATE messages SET flag_color=?3 WHERE mailbox_id=?1 AND uid=?2 AND flag_color<>?3",
+        )
+        .map_err(db_error)?;
+    for (uid, color) in colors {
+        stmt.execute(params![mailbox_id, uid, i64::from(*color)])
+            .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn reconcile_flags_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    seen: &[(u32, bool, bool)],
+    requested: &[u32],
+) -> Result<(), String> {
+    let mut select_overlay = transaction
+        .prepare_cached(
+            "SELECT m.is_read != 0,m.pending_move_to,
+                    COALESCE(m.pending_move_to IS NOT NULL AND m.pending_destination_generation=d.counts_generation,0)
+             FROM messages m LEFT JOIN mailboxes d ON d.id=m.pending_move_to
+             WHERE m.mailbox_id=?1 AND m.uid=?2",
+        )
+        .map_err(db_error)?;
+    let mut update_flags = transaction
+        .prepare_cached(
+            "UPDATE messages SET is_read=?3,is_starred=?4 WHERE mailbox_id=?1 AND uid=?2 AND (is_read<>?3 OR is_starred<>?4)",
+        )
+        .map_err(db_error)?;
+    for (uid, is_read, is_starred) in seen {
+        let overlay: Option<(bool, Option<i64>, bool)> = select_overlay
+            .query_row(params![mailbox_id, uid], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .optional()
+            .map_err(db_error)?;
+        if let Some((was_read, Some(destination_id), true)) = overlay {
+            if was_read != *is_read {
+                let delta = if *is_read { -1 } else { 1 };
+                adjust_mailbox_counts(transaction, destination_id, 0, Some(delta))?;
+            }
+        }
+        update_flags
+            .execute(params![
+                mailbox_id,
+                uid,
+                *is_read as i32,
+                *is_starred as i32
+            ])
+            .map_err(db_error)?;
+    }
+    let returned = seen
+        .iter()
+        .map(|item| item.0)
+        .collect::<std::collections::HashSet<_>>();
+    let mut delete_missing = transaction
+        .prepare_cached(
+            "DELETE FROM messages WHERE mailbox_id=?1 AND uid=?2 AND pending_move_to IS NULL",
+        )
+        .map_err(db_error)?;
+    for uid in requested.iter().filter(|uid| !returned.contains(uid)) {
+        delete_missing
+            .execute(params![mailbox_id, uid])
+            .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn reconcile_reply_flags_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    mailbox_id: i64,
+    seen: &[(u32, bool, bool)],
+) -> Result<(), String> {
+    if seen.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = transaction
+        .prepare_cached(
+            "UPDATE messages SET is_answered=?3,is_forwarded=?4 WHERE mailbox_id=?1 AND uid=?2 AND (is_answered<>?3 OR is_forwarded<>?4)",
+        )
+        .map_err(db_error)?;
+    for (uid, answered, forwarded) in seen {
+        stmt.execute(params![
+            mailbox_id,
+            uid,
+            *answered as i32,
+            *forwarded as i32
+        ])
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct TrashExpungePlan {
     pub mailbox_name: String,
     pub uid_validity: u32,
     pub uids: Vec<u32>,
+}
+
+fn record_new_mail_arrival_in_connection(
+    connection: &rusqlite::Connection,
+    account_id: &str,
+    message_id: i64,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE messages SET notification_state=notification_state | ?3
+             WHERE account_id=?1 AND id=?2 AND (notification_state & ?4)=0",
+            params![
+                account_id,
+                message_id,
+                ARRIVAL_RULE_PENDING | ARRIVAL_NOTICE_PENDING,
+                RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+            ],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum EnvelopeArrival {
+    None,
+    All,
+    UidAtOrAbove(u32),
+}
+
+fn upsert_envelopes_inner(
+    db: &Database,
+    account_id: &str,
+    mailbox_id: i64,
+    messages: &[CachedMessage],
+    arrival: EnvelopeArrival,
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let mut conn = db.conn()?;
+    let transaction = conn.transaction().map_err(db_error)?;
+    for message in messages {
+        let id = write_envelope(&transaction, account_id, mailbox_id, message)?;
+        let records_arrival = match arrival {
+            EnvelopeArrival::None => false,
+            EnvelopeArrival::All => true,
+            EnvelopeArrival::UidAtOrAbove(floor) => message.uid >= floor,
+        };
+        if records_arrival {
+            record_new_mail_arrival_in_connection(&transaction, account_id, id)?;
+        }
+    }
+    super::snooze_transfers::apply_in_transaction(&transaction, account_id, mailbox_id)?;
+    transaction.commit().map_err(db_error)
 }
 
 // IDs may outlive cache rows in an open reader or composer.
@@ -2165,7 +2490,8 @@ fn write_full_message(
             message_id=excluded.message_id, subject=excluded.subject, sender_name=excluded.sender_name,
             sender_address=excluded.sender_address, recipients=excluded.recipients, received_at=excluded.received_at,
             preview=excluded.preview, is_read=excluded.is_read, is_starred=excluded.is_starred,
-            has_attachments=excluded.has_attachments, size=excluded.size, to_json=excluded.to_json,
+            has_attachments=CASE WHEN excluded.body_partial<>0 THEN MAX(messages.has_attachments, excluded.has_attachments) ELSE excluded.has_attachments END,
+            size=excluded.size, to_json=excluded.to_json,
             cc_json=excluded.cc_json,
             bcc_json=CASE WHEN excluded.bcc_json != '[]' THEN excluded.bcc_json ELSE messages.bcc_json END,
             reply_to=excluded.reply_to, thread_parent=excluded.thread_parent,
@@ -2421,19 +2747,20 @@ struct MuteHit {
 
 fn muted_inbox_hits(db: &Database, account_id: &str) -> Result<Vec<MuteHit>, String> {
     let conn = db.read_conn()?;
+    let effective_role = effective_role_sql("box");
     let mut statement = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT m.id, m.uid, m.message_id, m.thread_parent, box.name
              FROM messages m
              JOIN mailboxes box ON box.id = m.mailbox_id
-             WHERE m.account_id=?1 AND box.role='inbox' AND box.server_available=1
+             WHERE m.account_id=?1 AND {effective_role}='inbox' AND box.server_available=1
                AND m.pending_move_to IS NULL
                AND (
                  m.message_id IN (SELECT message_id FROM muted_ids WHERE account_id=?1)
                  OR m.thread_parent IN (SELECT message_id FROM muted_ids WHERE account_id=?1)
                )
-             LIMIT 100",
-        )
+             LIMIT 100"
+        ))
         .map_err(db_error)?;
     let rows = statement
         .query_map(params![account_id], |row| {
@@ -2521,6 +2848,13 @@ mod tests {
         AccountRecord, AccountSummary, MailboxRole, ProviderKind, SearchQuery, ServerConfig,
         TlsMode,
     };
+    use rusqlite::{Connection, StatementStatus};
+
+    use super::{
+        consume_new_mail_arrival_clear_sql, consume_new_mail_arrival_select_sql,
+        pending_rule_arrival_sql, ARRIVAL_NOTICE_PENDING, ARRIVAL_RULE_PENDING,
+        NEW_MAIL_NOTICE_CLAIMED, RULE_NOTICE_CLAIMED,
+    };
 
     fn with_account() -> (Database, String, i64) {
         let database = Database::memory();
@@ -2530,6 +2864,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -2607,6 +2945,213 @@ mod tests {
         }
     }
 
+    fn seed_arrival_query_rows(db: &Database, account_id: &str, mailbox_id: i64) {
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "WITH digits(x) AS (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9))
+             INSERT INTO messages(account_id,mailbox_id,uid,received_at,notification_state)
+             SELECT ?1,?2,
+                    1 + a.x*10000 + b.x*1000 + c.x*100 + d.x*10 + e.x,
+                    '2026-01-01T00:00:00+00:00',0
+             FROM digits a,digits b,digits c,digits d,digits e",
+            rusqlite::params![account_id, mailbox_id],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE account_id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 100_000);
+    }
+
+    fn measured_ids<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> (Vec<i64>, i32) {
+        let mut statement = connection.prepare(sql).unwrap();
+        let ids = statement
+            .query_map(parameters, |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let vm_steps = statement.get_status(StatementStatus::VmStep);
+        (ids, vm_steps)
+    }
+
+    fn measured_update<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> (usize, i32) {
+        let mut statement = connection.prepare(sql).unwrap();
+        let changed = statement.execute(parameters).unwrap();
+        let vm_steps = statement.get_status(StatementStatus::VmStep);
+        (changed, vm_steps)
+    }
+
+    fn query_plan<P: rusqlite::Params>(
+        connection: &Connection,
+        sql: &str,
+        parameters: P,
+    ) -> String {
+        let mut statement = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        statement
+            .query_map(parameters, |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" | ")
+    }
+
+    // Failure-first actual-query fixture: the page and notice selects retain
+    // their runtime-bound masks and production joins/order/limits. A 100K-row
+    // no-match or sparse queue must not walk the account's unrelated mail.
+    #[test]
+    fn arrival_page_and_notice_claim_queries_use_bounded_work_at_100k() {
+        let (db, account_id, inbox) = with_account();
+        seed_arrival_query_rows(&db, &account_id, inbox);
+        let conn = db.conn().unwrap();
+
+        let rule_sql = pending_rule_arrival_sql();
+        let rule_plan = query_plan(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        let (ids, steps) = measured_ids(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        assert!(ids.is_empty());
+        let rule_no_match_steps = steps;
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=100000",
+            [ARRIVAL_RULE_PENDING],
+        )
+        .unwrap();
+        let (ids, steps) = measured_ids(&conn, &rule_sql, rusqlite::params![account_id, 100]);
+        assert_eq!(ids, vec![100000]);
+        let rule_sparse_steps = steps;
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE account_id=?2",
+            rusqlite::params![ARRIVAL_RULE_PENDING, account_id],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(
+            db.pending_rule_arrival_ids(&account_id).unwrap(),
+            (1..=100).collect::<Vec<_>>(),
+            "the production page remains capped and oldest-first"
+        );
+
+        let conn = db.conn().unwrap();
+        let notice_sql = consume_new_mail_arrival_select_sql();
+        let clear_sql = consume_new_mail_arrival_clear_sql();
+        let notice_plan = query_plan(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        let (ids, steps) = measured_ids(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        assert!(ids.is_empty());
+        let notice_no_match_steps = steps;
+        let (no_match_updates, notice_update_no_match_steps) = measured_update(
+            &conn,
+            &clear_sql,
+            rusqlite::params![
+                account_id,
+                ARRIVAL_NOTICE_PENDING,
+                RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                NEW_MAIL_NOTICE_CLAIMED
+            ],
+        );
+        assert_eq!(no_match_updates, 0);
+
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=1",
+            [ARRIVAL_NOTICE_PENDING],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages SET notification_state=?1 WHERE id=2",
+            [ARRIVAL_NOTICE_PENDING | RULE_NOTICE_CLAIMED],
+        )
+        .unwrap();
+        let (ids, steps) = measured_ids(
+            &conn,
+            &notice_sql,
+            rusqlite::params![account_id, RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED],
+        );
+        assert_eq!(ids, vec![1]);
+        let notice_sparse_steps = steps;
+
+        let (changed, steps) = measured_update(
+            &conn,
+            &clear_sql,
+            rusqlite::params![
+                account_id,
+                ARRIVAL_NOTICE_PENDING,
+                RULE_NOTICE_CLAIMED | NEW_MAIL_NOTICE_CLAIMED,
+                NEW_MAIL_NOTICE_CLAIMED
+            ],
+        );
+        assert_eq!(changed, 2);
+        let notice_update_sparse_steps = steps;
+        let states: (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT notification_state FROM messages WHERE id=1),
+                        (SELECT notification_state FROM messages WHERE id=2)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(states, (NEW_MAIL_NOTICE_CLAIMED, RULE_NOTICE_CLAIMED));
+        drop(conn);
+
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET notification_state=?1 WHERE id=3",
+                [ARRIVAL_NOTICE_PENDING],
+            )
+            .unwrap();
+        let claimed = db.consume_new_mail_arrival(&account_id).unwrap().unwrap();
+        assert_eq!(claimed.id, 3);
+        let state: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT notification_state FROM messages WHERE id=3",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, NEW_MAIL_NOTICE_CLAIMED);
+
+        assert!(
+            rule_no_match_steps < 5_000
+                && rule_sparse_steps < 5_000
+                && notice_no_match_steps < 5_000
+                && notice_sparse_steps < 5_000
+                && notice_update_no_match_steps < 5_000
+                && notice_update_sparse_steps < 5_000,
+            "100K-row query VM steps: rule no-match={rule_no_match_steps}, rule sparse={rule_sparse_steps}, notice no-match={notice_no_match_steps}, notice sparse={notice_sparse_steps}, notice update no-match={notice_update_no_match_steps}, notice update sparse={notice_update_sparse_steps}"
+        );
+        assert!(
+            rule_plan.contains("messages_pending_rule_arrival"),
+            "production-shaped rule page missed its partial index: {rule_plan}"
+        );
+        assert!(
+            notice_plan.contains("messages_pending_notice_arrival"),
+            "production-shaped notice select missed its partial index: {notice_plan}"
+        );
+    }
+
     /// Search must match what lists show: a snoozed row answers nothing until
     /// it surfaces again.
     #[test]
@@ -2621,6 +3166,7 @@ mod tests {
             text: "dictionary".into(),
             limit: 10,
             all_folders: true,
+            resume_after_mailbox_id: None,
         };
         assert_eq!(db.search(&query).unwrap().len(), 1);
 

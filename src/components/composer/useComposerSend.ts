@@ -82,7 +82,6 @@ export function useComposerSend({
   sourceArchive,
   sending,
   setSending,
-  saveState,
   isSendingRef,
   isDiscarding,
   pendingCloseRef,
@@ -109,13 +108,12 @@ export function useComposerSend({
         editor &&
         !sending &&
         !isDiscarding() &&
-        saveState !== "saving" &&
         [...splitAddresses(to), ...splitAddresses(cc), ...splitAddresses(bcc)]
           .length > 0 &&
         validateRecipientFields(to, cc, bcc) === undefined &&
         validateSubject(subject) === undefined,
       ),
-    [bcc, cc, editor, isDiscarding, saveState, sending, subject, to],
+    [bcc, cc, editor, isDiscarding, sending, subject, to],
   );
 
   const sendMessage = useCallback(
@@ -347,15 +345,20 @@ export function useComposerSend({
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         setSendMenuOpen(false);
         setScheduleOpen(false);
+        sendMenuRef.current
+          ?.querySelector<HTMLElement>(".send-chevron")
+          ?.focus();
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
   }, [sendMenuOpen]);
 

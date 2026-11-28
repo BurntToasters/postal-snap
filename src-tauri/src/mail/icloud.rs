@@ -4,6 +4,25 @@ use zeroize::Zeroizing;
 
 use crate::security::redact_error;
 
+const MAX_CALDAV_RESPONSE_BYTES: usize = 1024 * 1024;
+
+async fn read_caldav_body(response: reqwest::Response) -> Result<String, String> {
+    if let Some(len) = response.content_length() {
+        if len > MAX_CALDAV_RESPONSE_BYTES as u64 {
+            return Err("iCloud alias response exceeded the size limit.".into());
+        }
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+    if bytes.len() > MAX_CALDAV_RESPONSE_BYTES {
+        return Err("iCloud alias response exceeded the size limit.".into());
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| "iCloud alias service returned an unreadable reply.".into())
+}
+
 pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -13,10 +32,11 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         .map_err(|_| "Could not connect to iCloud alias service.".to_string())?;
 
     let raw = Zeroizing::new(format!("{email}:{password}"));
-    let auth = Zeroizing::new(format!(
-        "Basic {}",
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw.as_bytes())
+    let encoded = Zeroizing::new(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        raw.as_bytes(),
     ));
+    let auth = Zeroizing::new(format!("Basic {}", encoded.as_str()));
 
     let propfind_principal = r#"<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:">
@@ -39,6 +59,9 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
 
     let status = response.status();
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        return Err("iCloud rejected sign-in during alias discovery.".into());
+    }
     if status.is_redirection() {
         return Ok(Vec::new());
     }
@@ -46,10 +69,7 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+    let text = read_caldav_body(response).await?;
 
     let principal_href = extract_tag_value(&text, "current-user-principal")
         .and_then(|tag| extract_tag_value(&tag, "href"))
@@ -83,6 +103,9 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
 
     let addr_status = address_res.status();
+    if addr_status.as_u16() == 401 || addr_status.as_u16() == 403 {
+        return Err("iCloud rejected sign-in during alias discovery.".into());
+    }
     if addr_status.is_redirection() {
         return Ok(Vec::new());
     }
@@ -90,10 +113,7 @@ pub async fn discover_icloud_aliases(email: &str, password: &str) -> Result<Vec<
         return Ok(Vec::new());
     }
 
-    let address_xml = address_res
-        .text()
-        .await
-        .map_err(|error| redact_error(&error, "iCloud alias discovery"))?;
+    let address_xml = read_caldav_body(address_res).await?;
 
     let mut aliases = Vec::new();
     let primary_lower = email.trim().to_lowercase();
@@ -136,7 +156,11 @@ pub fn icloud_follow_up_url(href: &str) -> Option<String> {
         format!("https://caldav.icloud.com{path}")
     };
     let parsed = reqwest::Url::parse(&candidate).ok()?;
-    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !matches!(parsed.port(), None | Some(443))
+    {
         return None;
     }
     let host = parsed.host_str()?;
@@ -194,4 +218,29 @@ pub fn extract_tag_value(xml: &str, tag_name: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::icloud_follow_up_url;
+
+    // Failure modes:
+    // 1. A non-iCloud principal redirect host is accepted.
+    // 2. A non-443 explicit port on an iCloud principal URL is accepted.
+    // 3. Credentials in the URL or non-HTTPS schemes pass validation.
+    #[test]
+    fn icloud_follow_up_url_allows_only_default_https_icloud_hosts() {
+        assert_eq!(
+            icloud_follow_up_url("/12345/principal/").as_deref(),
+            Some("https://caldav.icloud.com/12345/principal/")
+        );
+        assert_eq!(
+            icloud_follow_up_url("https://p01-caldav.icloud.com/12345/principal/").as_deref(),
+            Some("https://p01-caldav.icloud.com/12345/principal/")
+        );
+        assert!(icloud_follow_up_url("https://caldav.icloud.com:8443/12345/").is_none());
+        assert!(icloud_follow_up_url("https://user:pass@caldav.icloud.com/").is_none());
+        assert!(icloud_follow_up_url("http://caldav.icloud.com/").is_none());
+        assert!(icloud_follow_up_url("https://evil.example/").is_none());
+    }
 }

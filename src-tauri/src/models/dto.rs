@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +103,8 @@ pub struct ServerConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AccountSetupRequest {
     pub provider: ProviderKind,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub email: String,
     pub display_name: String,
     pub password: String,
@@ -114,10 +117,17 @@ pub struct AccountSetupRequest {
     pub certificate_reference: Option<String>,
 }
 
+impl Drop for AccountSetupRequest {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
 impl std::fmt::Debug for AccountSetupRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AccountSetupRequest")
             .field("provider", &self.provider)
+            .field("provider_id", &self.provider_id)
             .field("email", &self.email)
             .field("display_name", &self.display_name)
             .field("password", &"[REDACTED]")
@@ -132,6 +142,14 @@ impl std::fmt::Debug for AccountSetupRequest {
 pub struct AccountSummary {
     pub id: String,
     pub provider: ProviderKind,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub app_password_policy: Option<String>,
+    #[serde(default)]
+    pub app_password_url: Option<String>,
+    #[serde(default)]
+    pub password_format: Option<String>,
     pub email: String,
     pub display_name: String,
     pub sync_state: String,
@@ -157,6 +175,21 @@ pub struct AccountSummary {
     pub notify_new_mail: bool,
 }
 
+impl AccountSummary {
+    pub fn with_provider_meta(mut self, imap_host: &str) -> Self {
+        let meta = crate::providers::provider_account_meta(
+            &self.provider,
+            self.provider_id.as_deref(),
+            imap_host,
+        );
+        self.provider_id = meta.provider_id;
+        self.app_password_policy = Some(meta.app_password_policy.as_str().to_string());
+        self.app_password_url = meta.app_password_url;
+        self.password_format = Some(meta.password_format.as_str().to_string());
+        self
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRemovalOutcome {
@@ -180,6 +213,45 @@ pub struct AccountRemovalImpact {
 pub struct ConnectionBlockers {
     pub queued_changes: u32,
     pub unsent_messages: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FailedOfflineKind {
+    Move,
+    Copy,
+    Flags,
+    Keyword,
+    Other,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperation {
+    pub id: i64,
+    pub kind: FailedOfflineKind,
+    pub review_token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperationRef {
+    pub id: i64,
+    pub review_token: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineOperations {
+    pub items: Vec<FailedOfflineOperation>,
+    pub total_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOfflineDismissal {
+    pub dismissed_count: u32,
+    pub blockers: ConnectionBlockers,
 }
 
 /// Avatar colors an account may use. Kept in sync with the frontend tokens.
@@ -611,6 +683,19 @@ pub struct SearchQuery {
     pub text: String,
     pub all_folders: bool,
     pub limit: u32,
+    #[serde(default)]
+    pub resume_after_mailbox_id: Option<i64>,
+}
+
+/// One server search call. `complete` is false when a deadline stopped this
+/// page. `partial` records UIDs skipped by the first-folder ceiling.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSearchResult {
+    pub messages: Vec<MessageSummary>,
+    pub complete: bool,
+    pub partial: bool,
+    pub resume_after_mailbox_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -673,9 +758,9 @@ impl CachePolicy {
     }
 
     /// Oldest server arrival time whose body belongs in the cache, if any.
-    pub fn cutoff(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn cutoff(&self) -> Option<time::OffsetDateTime> {
         (self.mode == "recent")
-            .then(|| chrono::Utc::now() - chrono::Duration::days(i64::from(self.days)))
+            .then(|| crate::date_time::now_utc() - time::Duration::days(i64::from(self.days)))
     }
 
     /// True when `self` keeps mail that `previous` did not, so backfill that

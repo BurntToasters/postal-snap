@@ -38,6 +38,7 @@ export interface ComposerEditorInput {
   setError: (error?: string) => void;
   plainRef: RefObject<HTMLTextAreaElement | null>;
   bodyFormatRef: RefObject<BodyFormat>;
+  inlineImageSourcesRef: RefObject<Map<string, string | null>>;
   setPlainBody: (value: string) => void;
   minimized: boolean;
   setMinimized: (value: boolean) => void;
@@ -54,6 +55,7 @@ export function useComposerEditor({
   setError,
   plainRef,
   bodyFormatRef,
+  inlineImageSourcesRef,
   setPlainBody,
   minimized,
   setMinimized,
@@ -110,7 +112,30 @@ export function useComposerEditor({
           "aria-multiline": "true",
           "aria-label": strings.composer.messageBody,
         },
-        transformPastedHTML: (html) => sanitizeComposeHtml(html),
+        transformPastedHTML: (html) => {
+          const sanitized = sanitizeComposeHtml(html);
+          const doc = new DOMParser().parseFromString(sanitized, "text/html");
+          for (const image of doc.querySelectorAll<HTMLImageElement>("img")) {
+            const source = image.getAttribute("src") ?? "";
+            const marked = image.getAttribute("data-inline-content-id");
+            const contentId =
+              marked ??
+              (/^cid:/i.test(source)
+                ? source.slice(4).replace(/^<|>$/g, "")
+                : null);
+            if (!contentId) continue;
+            if (!inlineImageSourcesRef.current.has(contentId)) {
+              image.removeAttribute("data-inline-content-id");
+              if (/^cid:/i.test(source)) image.remove();
+              continue;
+            }
+            image.setAttribute("data-inline-content-id", contentId);
+            const trustedSource = inlineImageSourcesRef.current.get(contentId);
+            if (trustedSource) image.setAttribute("src", trustedSource);
+            else if (!/^cid:/i.test(source)) image.removeAttribute("src");
+          }
+          return doc.body.innerHTML || "<p></p>";
+        },
         handleDOMEvents: {
           keydown: (_view, event) => {
             if (!isPlainPasteShortcut(event)) return false;
@@ -138,7 +163,7 @@ export function useComposerEditor({
       immediatelyRender: false,
       onUpdate: markUnsaved,
     }),
-    [extensions, content, markUnsaved, takePastedImages],
+    [extensions, content, inlineImageSourcesRef, markUnsaved, takePastedImages],
   );
 
   const editor = useEditor(options);

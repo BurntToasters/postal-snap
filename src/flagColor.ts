@@ -46,15 +46,15 @@ export async function setFlagColorFor(
     await api.setMessagesFlagColor(accountId, messageIds, color);
   } catch (cause) {
     const current = useAppStore.getState();
-    current.setError(errorText(cause));
     if (
-      generation !== flagColorGeneration ||
       current.activeAccountId !== accountId ||
       current.activeMailboxId !== snapshotMailboxId ||
       current.activeLocalView !== snapshotView
     ) {
       return;
     }
+    current.setError(errorText(cause));
+    if (generation !== flagColorGeneration) return;
     current.setMessages(
       current.messages.map((item) => {
         const before = previous.get(item.id);
@@ -72,12 +72,24 @@ export async function setFlagColorFor(
 /** Opens the row menu of the selected message, where the Flag color submenu lives. */
 export function openFlagMenuForSelection(): void {
   const id = useAppStore.getState().selectedMessage?.id;
-  const row = document.querySelector<HTMLElement>(
-    `.message-row[data-message-id="${id}"]`,
-  );
-  if (!row) return;
-  const box = row.getBoundingClientRect();
-  row.dispatchEvent(
+  const overlayOpen = useAppStore.getState().settings.readingPane === "hidden";
+  const target =
+    (!overlayOpen && id !== undefined
+      ? document.querySelector<HTMLElement>(
+          `.message-row[data-message-id="${id}"]`,
+        )
+      : null) ??
+    document.querySelector<HTMLElement>(
+      ".reader-flag-button, .reader-actions button[aria-haspopup]",
+    ) ??
+    (id !== undefined
+      ? document.querySelector<HTMLElement>(
+          `.message-row[data-message-id="${id}"]`,
+        )
+      : null);
+  if (!target) return;
+  const box = target.getBoundingClientRect();
+  target.dispatchEvent(
     new MouseEvent("contextmenu", {
       bubbles: true,
       cancelable: true,

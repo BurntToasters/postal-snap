@@ -1,4 +1,9 @@
-import type { ProviderKind, ServerConfig, TlsMode } from "../../types";
+import type {
+  PasswordFormat,
+  ProviderKind,
+  ServerConfig,
+  TlsMode,
+} from "../../types";
 
 export function emptyManualImap(username = ""): ServerConfig {
   return { host: "", port: 993, tlsMode: "tls", username };
@@ -19,11 +24,28 @@ export function isStandardPort(kind: "imap" | "smtp", port: number): boolean {
     : port === 465 || port === 587;
 }
 
+const INVISIBLE_CHARS = /[\u200B-\u200D\uFEFF]/g;
+
 export function preparePassword(
   provider: ProviderKind,
   password: string,
+  options?: {
+    providerId?: string | null;
+    passwordFormat?: PasswordFormat | null;
+  },
 ): string {
-  return provider === "icloud" ? password.replace(/\s+/g, "") : password;
+  const cleaned = password.replace(INVISIBLE_CHARS, "");
+  const stripSpaces =
+    provider === "icloud" ||
+    options?.passwordFormat === "appleHyphenated" ||
+    options?.passwordFormat === "groupedSpaces" ||
+    options?.providerId === "gmail" ||
+    options?.providerId === "yahoo" ||
+    options?.providerId === "aol" ||
+    options?.providerId === "att" ||
+    options?.providerId === "fastmail" ||
+    options?.providerId === "zoho";
+  return stripSpaces ? cleaned.replace(/\s+/g, "") : cleaned.trim();
 }
 
 export function trimServer(server: ServerConfig): ServerConfig {

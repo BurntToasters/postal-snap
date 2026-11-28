@@ -2,6 +2,7 @@ import type { Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { attachArtifacts, emitTauriEvent, ipcCalls, ipcCommands } from "./ipc";
+import { pressAppShortcut } from "./keyboard";
 
 // Failure modes covered here (WP5.13):
 // 1. The eml-opened event does not show the viewer, or shows it without the subject.
@@ -12,6 +13,7 @@ import { attachArtifacts, emitTauriEvent, ipcCalls, ipcCommands } from "./ipc";
 // 6. Saving an attachment sends anything besides the token and attachment id.
 // 7. A nested message/rfc822 in an opened file offers View (no backend), or a reader View misses its real ids.
 // 8. The "Open email file" palette command does not reach the file flow, or a cancel shows a viewer.
+// 9. A bounded OS-open burst can acknowledge a failed token and still open the next valid file.
 
 type MockWindow = Window & { __pwned?: unknown };
 
@@ -43,6 +45,160 @@ test.describe("eml viewer", () => {
       dialog(page).getByText("Opened from a file. It is not in your mailbox."),
     ).toBeVisible();
     await attachArtifacts(page, testInfo, "eml-viewer-open");
+  });
+
+  test("cold startup drains a native OS-open token before it is evicted", async ({
+    page,
+  }) => {
+    await page.goto("/?emlColdOpen=1");
+    await expect(dialog(page, "Cold launch message")).toBeVisible();
+    const calls = await ipcCalls(page);
+    expect(
+      calls.filter((call) => call.command === "drain_opened_message_tokens"),
+    ).toHaveLength(1);
+    expect(
+      calls
+        .filter((call) => call.command === "get_opened_message")
+        .map((call) => call.args),
+    ).toEqual([{ token: "opened-eml-cold" }]);
+    expect(
+      calls
+        .filter((call) => call.command === "acknowledge_opened_message_token")
+        .map((call) => call.args),
+    ).toEqual([{ token: "opened-eml-cold" }]);
+    expect(JSON.stringify(calls)).not.toMatch(/file:|\/tmp\/|private-folder/);
+  });
+
+  test("a bounded OS-open burst redacts a read failure, acknowledges it, and opens the next file", async ({
+    page,
+  }) => {
+    const tokens = [
+      "missing-eml-0",
+      "missing-eml-1",
+      "missing-eml-2",
+      "missing-eml-3",
+      "missing-eml-4",
+      "missing-eml-5",
+      "missing-eml-6",
+      "opened-eml-1",
+    ];
+    await page.goto("/?emlSeeded=1");
+    await expect(page.locator(".app-viewport")).toBeVisible();
+    await expect
+      .poll(() => ipcCommands(page))
+      .toContain("drain_opened_message_tokens");
+
+    for (const token of tokens)
+      await emitTauriEvent(page, "eml-opened", { token });
+
+    await expect(dialog(page)).toContainText(SUBJECT);
+    await expect
+      .poll(
+        async () =>
+          (await ipcCalls(page)).filter(
+            (call) => call.command === "acknowledge_opened_message_token",
+          ).length,
+      )
+      .toBe(tokens.length);
+
+    const calls = await ipcCalls(page);
+    const tokensFor = (command: string) =>
+      calls
+        .filter((call) => call.command === command)
+        .map((call) => {
+          const args = call.args;
+          if (
+            !args ||
+            typeof args !== "object" ||
+            !("token" in args) ||
+            typeof args.token !== "string"
+          ) {
+            throw new Error(`${command} did not include an opaque token.`);
+          }
+          return args.token;
+        });
+    expect(tokensFor("get_opened_message")).toEqual(tokens);
+    expect(tokensFor("acknowledge_opened_message_token")).toEqual(tokens);
+    expect(page.locator(".error-toast")).toHaveCount(1);
+    await expect(page.locator(".error-toast")).toContainText(
+      "That item is no longer available. Refresh mail and try again.",
+    );
+    await expect(page.locator(".error-toast")).not.toContainText(
+      /missing-eml|\/Users\/|@example/,
+    );
+  });
+
+  test("deduplicates the startup race and opens multiple OS files in order", async ({
+    page,
+  }) => {
+    await page.goto("/?emlHandoffOrder=1");
+    await expect(dialog(page, "Second open")).toBeVisible();
+    const orderedReads = () =>
+      ipcCalls(page).then((calls) =>
+        calls
+          .filter((call) => call.command === "get_opened_message")
+          .map((call) => {
+            const args = call.args;
+            if (
+              !args ||
+              typeof args !== "object" ||
+              !("token" in args) ||
+              typeof args.token !== "string"
+            ) {
+              throw new Error("Opened-message call did not include a token.");
+            }
+            return args.token;
+          }),
+      );
+    await expect
+      .poll(orderedReads)
+      .toEqual(["opened-eml-slow", "opened-eml-fast"]);
+    expect(
+      (await ipcCalls(page)).filter(
+        (call) => call.command === "close_opened_message",
+      ),
+    ).toContainEqual({
+      command: "close_opened_message",
+      args: { token: "opened-eml-slow" },
+    });
+
+    await emitTauriEvent(page, "eml-opened", { token: "opened-eml-fast" });
+    await page.waitForTimeout(50);
+    expect(await orderedReads()).toEqual([
+      "opened-eml-slow",
+      "opened-eml-fast",
+    ]);
+    await page.keyboard.press("Escape");
+    await expect(dialog(page, "Second open")).toHaveCount(0);
+    await emitTauriEvent(page, "eml-opened", { token: "opened-eml-fast" });
+    await page.waitForTimeout(50);
+    await expect(dialog(page, "Second open")).toHaveCount(0);
+    expect(await orderedReads()).toHaveLength(2);
+  });
+
+  test("a webview unmount during startup drain leaves the native token recoverable", async ({
+    page,
+  }) => {
+    await page.goto("/?emlColdOpen=1&emlSlowDrain=1");
+    await expect
+      .poll(
+        async () =>
+          (await ipcCommands(page)).filter(
+            (command) => command === "drain_opened_message_tokens",
+          ).length,
+      )
+      .toBe(1);
+    await page.reload();
+    await expect(dialog(page, "Cold launch message")).toBeVisible();
+    const calls = await ipcCalls(page);
+    expect(
+      calls.filter((call) => call.command === "get_opened_message"),
+    ).toHaveLength(1);
+    expect(
+      calls.filter(
+        (call) => call.command === "acknowledge_opened_message_token",
+      ),
+    ).toHaveLength(1);
   });
 
   test("body iframe uses the exact sandbox and no allow-scripts", async ({
@@ -203,7 +359,7 @@ test.describe("eml viewer", () => {
   }, testInfo: TestInfo) => {
     await page.goto("/");
     await expect(page.locator(".app-viewport")).toBeVisible();
-    await page.keyboard.press("ControlOrMeta+K");
+    await pressAppShortcut(page, "K");
     const combobox = page.getByRole("combobox", { name: /Search commands/ });
     await expect(combobox).toBeFocused();
     await combobox.fill("Open email file");
@@ -218,7 +374,7 @@ test.describe("eml viewer", () => {
   }, testInfo: TestInfo) => {
     await page.goto("/?emlCancel=1");
     await expect(page.locator(".app-viewport")).toBeVisible();
-    await page.keyboard.press("ControlOrMeta+K");
+    await pressAppShortcut(page, "K");
     await page
       .getByRole("combobox", { name: /Search commands/ })
       .fill("Open email file");

@@ -47,6 +47,17 @@ pub fn close_opened_message(token: String) -> CommandResult<()> {
     Ok(())
 }
 
+#[tauri::command(async)]
+pub fn drain_opened_message_tokens() -> CommandResult<Vec<String>> {
+    Ok(opened_mail::pending_os_open_tokens())
+}
+
+#[tauri::command(async)]
+pub fn acknowledge_opened_message_token(token: String) -> CommandResult<()> {
+    opened_mail::acknowledge_os_open(&token);
+    Ok(())
+}
+
 /// Save one attachment of an opened message to a Rust-chosen path.
 #[tauri::command]
 pub async fn save_opened_attachment(

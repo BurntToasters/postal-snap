@@ -36,6 +36,30 @@ pub fn get_account_connection(
     })
 }
 
+#[tauri::command(async)]
+pub fn get_failed_offline_operations(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<crate::models::FailedOfflineOperations> {
+    Ok(state.db.failed_offline_operations(&account_id)?)
+}
+
+#[tauri::command(async)]
+pub async fn dismiss_failed_offline_operations(
+    account_id: String,
+    operations: Vec<crate::models::FailedOfflineOperationRef>,
+    state: State<'_, AppState>,
+) -> CommandResult<crate::models::FailedOfflineDismissal> {
+    let _guard = state.lock_account(&account_id).await?;
+    let dismissed_count = state
+        .db
+        .dismiss_failed_offline_operations(&account_id, &operations)?;
+    Ok(crate::models::FailedOfflineDismissal {
+        dismissed_count,
+        blockers: state.db.connection_blockers(&account_id)?,
+    })
+}
+
 #[tauri::command]
 pub async fn update_account_connection(
     account_id: String,
@@ -56,10 +80,7 @@ pub async fn update_account_connection(
         bridge::validate_loopback(&imap.host)?;
         bridge::validate_loopback(&smtp.host)?;
     }
-    let changed = account.imap.host != imap.host
-        || account.imap.port != imap.port
-        || account.imap.tls_mode != imap.tls_mode
-        || account.imap.username != imap.username;
+    let changed = account.imap.host != imap.host || account.imap.username != imap.username;
     // The saved password goes to whichever server is named here.
     let outgoing_changed = account.smtp.host != smtp.host || account.smtp.username != smtp.username;
     if outgoing_changed && !confirm_identity_change {
@@ -77,6 +98,7 @@ pub async fn update_account_connection(
     smtp.trusted_certificate = account.smtp.trusted_certificate.clone();
     let request = AccountSetupRequest {
         provider: account.summary.provider.clone(),
+        provider_id: account.summary.provider_id.clone(),
         email: account.summary.email.clone(),
         display_name: account.summary.display_name.clone(),
         password: String::new(),
@@ -166,6 +188,7 @@ pub async fn approve_bridge_certificate(
         account.smtp.trusted_certificate = Some(pem.clone());
         let request = AccountSetupRequest {
             provider: account.summary.provider.clone(),
+            provider_id: None,
             email: account.summary.email.clone(),
             display_name: account.summary.display_name.clone(),
             password: String::new(),
@@ -203,7 +226,9 @@ pub async fn remove_bridge_certificate(
     let _guard = state.lock_account(&account_id).await?;
     state.db.save_bridge_certificate(&account_id, None)?;
     mail::pool::forget(&account_id);
-    state.actor(&account_id)?.request(wake::SYNC);
+    state
+        .actor(&account_id)?
+        .request(wake::CREDENTIALS | wake::SYNC);
     Ok(())
 }
 
@@ -215,6 +240,8 @@ pub fn get_folder_assignments(
     Ok(state.db.folder_assignments(&account_id)?)
 }
 
+/// Assigning a role can move the effective Inbox. Restart the watcher now
+/// instead of waiting for its 30-second polling check.
 #[tauri::command]
 pub async fn set_folder_assignment(
     account_id: String,
@@ -223,9 +250,14 @@ pub async fn set_folder_assignment(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<crate::db::compatibility::FolderAssignment>> {
     let _guard = state.lock_account(&account_id).await?;
+    let previous_inbox = crate::db::mailboxes::effective_inbox_name(&state.db, &account_id);
     state
         .db
         .set_folder_assignment(&account_id, &role, mailbox_id)?;
-    state.actor(&account_id)?.request(wake::SYNC);
+    let actor = state.actor(&account_id)?;
+    if previous_inbox != crate::db::mailboxes::effective_inbox_name(&state.db, &account_id) {
+        actor.watch().signal_restart();
+    }
+    actor.request(wake::SYNC);
     Ok(state.db.folder_assignments(&account_id)?)
 }

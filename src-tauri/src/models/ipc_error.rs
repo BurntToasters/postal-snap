@@ -150,7 +150,9 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
     if lower.contains("assigned folder needs attention") {
         return ("folderAttention", false);
     }
-    if lower.contains("confirm the incoming server identity change") {
+    if lower.contains("confirm the incoming server identity change")
+        || lower.contains("confirm the outgoing server change")
+    {
         return ("identityConfirmation", false);
     }
     if lower.contains("resolve queued changes and unsent mail") {
@@ -160,6 +162,7 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
         || lower.contains("public certificate")
         || lower.contains("selected certificate")
         || lower.contains("one public pem")
+        || lower.contains("certificate is invalid")
     {
         return ("certificateInvalid", false);
     }
@@ -182,6 +185,19 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
     {
         return ("limitExceeded", false);
     }
+    if lower.starts_with("enter ")
+        || lower.starts_with("choose ")
+        || lower.starts_with("add ")
+        || lower.contains("invalid")
+        || lower.contains("required")
+        || lower.contains("unsupported")
+        || lower.starts_with("only ")
+    {
+        if lower.contains("certificate") && lower.contains("invalid") {
+            return ("certificateInvalid", false);
+        }
+        return ("invalidInput", false);
+    }
     if lower.contains("sign-in") || lower.contains("credential") || lower.contains("app-specific") {
         return ("authenticationFailed", true);
     }
@@ -191,16 +207,6 @@ fn classify_ipc_message(lower: &str) -> (&'static str, bool) {
         || lower.contains("offline")
     {
         return ("connectionFailed", true);
-    }
-    if lower.contains("invalid")
-        || lower.starts_with("enter ")
-        || lower.starts_with("choose ")
-        || lower.starts_with("add ")
-        || lower.contains("required")
-        || lower.contains("unsupported")
-        || lower.starts_with("only ")
-    {
-        return ("invalidInput", false);
     }
     if lower.contains("database")
         || lower.contains("password vault")

@@ -17,10 +17,12 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api, inTauri } from "./api";
-import { errorText } from "./errors";
-import { OPENED_MESSAGE_EVENT } from "./openedMessage";
+import {
+  OPENED_MESSAGE_EVENT,
+  subscribeOsOpenedMessages,
+} from "./openedMessage";
 import type { OpenedMessage } from "./types";
-import { reconcileAccountList } from "./accountMerge";
+import { mergeAccountFields, reconcileAccountList } from "./accountMerge";
 import { CONTEXT_DISMISS_EVENT } from "./contextMenu";
 import { strings } from "./i18n";
 import { PostalError } from "./errors";
@@ -283,34 +285,14 @@ export default function App() {
     });
   }, [accounts, activeAccountId, mailboxes]);
 
-  // A token that arrives before this listener is registered is not replayed;
-  // the file flow and the viewer's own actions never depend on it.
   useEffect(() => {
-    let active = true;
-    const unlisten: Array<() => void> = [];
     const onOpened = (event: Event) =>
       showViewer((event as CustomEvent<OpenedMessage>).detail);
     window.addEventListener(OPENED_MESSAGE_EVENT, onOpened);
-    void api
-      .onEmlOpened(({ token }) => {
-        if (viewerRef.current?.token === token) return;
-        api
-          .getOpenedMessage(token)
-          .then((opened) => {
-            if (active) showViewer(opened);
-          })
-          .catch((cause) => {
-            if (active) setError(errorText(cause));
-          });
-      })
-      .then((stop) => {
-        if (active) unlisten.push(stop);
-        else stop();
-      });
+    const unsubscribe = subscribeOsOpenedMessages(showViewer, setError);
     return () => {
-      active = false;
       window.removeEventListener(OPENED_MESSAGE_EVENT, onOpened);
-      unlisten.forEach((stop) => stop());
+      unsubscribe();
     };
   }, [showViewer, setError]);
 
@@ -359,6 +341,12 @@ export default function App() {
     void api
       .onSyncState((syncState) => {
         setSync(syncState);
+        if (syncState.phase === "idle") {
+          mergeAccountFields(syncState.accountId, {
+            syncState: "idle",
+            error: null,
+          });
+        }
         if (syncState.phase === "authFailed" || syncState.phase === "offline") {
           void api
             .listAccounts()
@@ -449,6 +437,7 @@ export default function App() {
     void api.setComposerOpen(composerOpen).catch(() => undefined);
   }, [composerOpen]);
 
+  const lastGuardedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const syncGuard = () => {
       const target = document.activeElement as HTMLElement | null;
@@ -461,6 +450,8 @@ export default function App() {
         target?.closest("[contenteditable='true']") ||
         target?.matches(TEXT_ENTRY_SELECTOR),
       );
+      if (lastGuardedRef.current === guarded) return;
+      lastGuardedRef.current = guarded;
       void api.setMailShortcutGuard(guarded).catch(() => undefined);
     };
     document.addEventListener("focusin", syncGuard);
@@ -469,7 +460,10 @@ export default function App() {
     return () => {
       document.removeEventListener("focusin", syncGuard);
       document.removeEventListener("focusout", syncGuard);
-      void api.setMailShortcutGuard(false).catch(() => undefined);
+      if (lastGuardedRef.current !== false) {
+        lastGuardedRef.current = false;
+        void api.setMailShortcutGuard(false).catch(() => undefined);
+      }
     };
   }, [composerOpen, settingsOpen]);
 

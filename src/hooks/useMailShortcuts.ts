@@ -33,6 +33,7 @@ export interface MailShortcutsOptions {
   searchInput: RefObject<HTMLInputElement | null>;
   chooseMessage: (msg: MessageSummary) => Promise<unknown>;
   relativeMessage: (delta: number) => MessageSummary | undefined;
+  edgeMessage?: (edge: "first" | "last") => MessageSummary | undefined;
   openCommandPalette: () => void;
   openShortcutOverlay: () => void;
 }
@@ -58,6 +59,7 @@ export function useMailShortcuts({
   searchInput,
   chooseMessage,
   relativeMessage,
+  edgeMessage,
   openCommandPalette,
   openShortcutOverlay,
 }: MailShortcutsOptions) {
@@ -253,13 +255,17 @@ export function useMailShortcuts({
         }
         case "first-last": {
           if (inMessageList) return;
-          const state = useAppStore.getState();
-          const items = navigationOrder(
-            state.messages,
-            state.settings.groupThreads,
-          );
-          const edge =
-            event.key === "Home" ? items[0] : items[items.length - 1];
+          const which = event.key === "Home" ? "first" : "last";
+          const edge = edgeMessage
+            ? edgeMessage(which)
+            : (() => {
+                const state = useAppStore.getState();
+                const items = navigationOrder(
+                  state.messages,
+                  state.settings.groupThreads,
+                );
+                return which === "first" ? items[0] : items[items.length - 1];
+              })();
           if (!edge) return;
           event.preventDefault();
           void chooseMessage(edge);
@@ -288,6 +294,7 @@ export function useMailShortcuts({
   }, [
     accounts,
     chooseMessage,
+    edgeMessage,
     onOpenSettings,
     openComposer,
     openCommandPalette,

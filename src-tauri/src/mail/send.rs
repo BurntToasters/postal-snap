@@ -43,7 +43,9 @@ pub async fn prepare_message(
 ) -> Result<PreparedMessage, String> {
     let message_id = format!("<{}@run.rosie.snap>", uuid::Uuid::new_v4());
     let message = build_message_with_id(account, draft, &message_id, false).await?;
-    let bytes = message.formatted();
+    let bytes = tokio::task::spawn_blocking(move || message.formatted())
+        .await
+        .map_err(|_| "Could not finish preparing this message.".to_string())?;
     if bytes.len() > MAX_OUTGOING_BYTES {
         return Err("The message and its attachments are too large to send safely.".into());
     }
@@ -55,9 +57,10 @@ pub async fn prepare_draft_message(
     draft: &ComposeDraft,
     message_id: &str,
 ) -> Result<Vec<u8>, String> {
-    let bytes = build_message_with_id(account, draft, message_id, true)
-        .await?
-        .formatted();
+    let message = build_message_with_id(account, draft, message_id, true).await?;
+    let bytes = tokio::task::spawn_blocking(move || message.formatted())
+        .await
+        .map_err(|_| "Could not finish preparing this draft.".to_string())?;
     if bytes.len() > MAX_OUTGOING_BYTES {
         return Err("The message and its attachments are too large to send safely.".into());
     }
@@ -107,7 +110,7 @@ fn redirect_headers(
         .filter(|addr| !addr.is_empty())
         .unwrap_or(account.summary.email.as_str());
     let from = redirect_from(&account.summary.display_name, sender_email)?;
-    let date = chrono::Utc::now().to_rfc2822();
+    let date = crate::date_time::format_rfc2822(crate::date_time::now_utc());
     if date.chars().any(char::is_control) {
         return Err("The message envelope is invalid.".into());
     }
@@ -356,6 +359,10 @@ fn send_timeout(len: usize) -> Duration {
         .min(SEND_TIMEOUT_CAP)
 }
 
+pub(crate) fn append_timeout(len: usize) -> Duration {
+    IMAP_COMMAND_TIMEOUT.max(send_timeout(len))
+}
+
 #[cfg(test)]
 static NON_PINNED_SEND_IN_FLIGHT: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
@@ -462,11 +469,12 @@ pub async fn send_prepared(
         .await?;
         return Ok(());
     }
-    let transport = smtp_transport(&account.smtp, &password, xoauth2).map_err(refused)?;
     #[cfg(test)]
     let limit = begin_non_pinned_send(bytes.len()).await;
     #[cfg(not(test))]
     let limit = non_pinned_send_timeout(bytes.len());
+    let transport =
+        smtp_transport_with_timeout(&account.smtp, &password, xoauth2, limit).map_err(refused)?;
     let send_result = within_send_timeout(limit, async {
         transport
             .send_raw(&envelope, bytes)
@@ -502,7 +510,7 @@ pub async fn ensure_sent_copy(
     let existing = search_header_id(&mut session, header, message_id, "Sent folder").await?;
     if existing.is_empty() {
         tokio::time::timeout(
-            IMAP_COMMAND_TIMEOUT,
+            append_timeout(bytes.len()),
             session.append(&wire_mailbox, Some("(\\Seen)"), None, bytes),
         )
         .await
@@ -779,7 +787,10 @@ async fn pinned_connect_steps(
             &Credentials::new(server.username.clone(), password.to_owned()),
         )
         .await
-        .map_err(|error| PinnedConnectError::refused(redact_error(&error, "Outgoing sign-in")))?;
+        .map_err(|error| PinnedConnectError {
+            kind: classify_send_failure(SmtpErrorTraits::of(&error, false)),
+            message: redact_error(&error, "Outgoing sign-in"),
+        })?;
     Ok(connection)
 }
 
@@ -815,7 +826,18 @@ pub(crate) async fn test_smtp_auth(
     let connected = tokio::time::timeout(CONNECT_TIMEOUT, transport.test_connection())
         .await
         .map_err(|_| "Outgoing server timed out.".to_string())?
-        .map_err(|error| crate::bridge::tls_error(&error, "Outgoing connection"))?;
+        .map_err(|error| {
+            if error.is_permanent() {
+                "Outgoing sign-in failed. Check the mail server, password, and internet connection."
+                    .into()
+            } else {
+                crate::bridge::tls_error_for_server(
+                    &error,
+                    "Outgoing connection",
+                    server.trusted_certificate.is_some(),
+                )
+            }
+        })?;
     if !connected {
         return Err("The outgoing server declined the secure connection.".into());
     }
@@ -846,6 +868,15 @@ fn smtp_transport(
     password: &Zeroizing<String>,
     xoauth2: bool,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
+    smtp_transport_with_timeout(server, password, xoauth2, CONNECT_TIMEOUT)
+}
+
+fn smtp_transport_with_timeout(
+    server: &ServerConfig,
+    password: &Zeroizing<String>,
+    xoauth2: bool,
+    timeout: Duration,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
     if xoauth2 {
         guard_xoauth2_server(server, false)?;
     }
@@ -872,7 +903,7 @@ fn smtp_transport(
             .port(server.port)
             .tls(tls)
             .credentials(credentials)
-            .timeout(Some(CONNECT_TIMEOUT));
+            .timeout(Some(timeout));
         if xoauth2 {
             transport = transport.authentication(smtp_auth_mechanisms(true));
         }
@@ -886,7 +917,7 @@ fn smtp_transport(
     let mut transport = builder
         .port(server.port)
         .credentials(credentials)
-        .timeout(Some(CONNECT_TIMEOUT));
+        .timeout(Some(timeout));
     if xoauth2 {
         transport = transport.authentication(smtp_auth_mechanisms(true));
     }
@@ -1026,9 +1057,10 @@ pub(crate) fn read_receipt_bytes(
         notice.push_str(&format!("Original-Message-ID: {original}\r\n"));
     }
     notice.push_str("Disposition: manual-action/MDN-sent-manually; displayed\r\n");
+    let date = crate::date_time::format_rfc2822(crate::date_time::now_utc());
     let human = format!("This is a read receipt for \"{subject}\".\r\n");
     let message = format!(
-        "From: {from}\r\nTo: {to}\r\nSubject: {header_subject}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=disposition-notification; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{human}\r\n--{boundary}\r\nContent-Type: message/disposition-notification\r\n\r\n{notice}\r\n--{boundary}--\r\n"
+        "Date: {date}\r\nFrom: {from}\r\nTo: {to}\r\nSubject: {header_subject}\r\nMessage-ID: {message_id}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=disposition-notification; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{human}\r\n--{boundary}\r\nContent-Type: message/disposition-notification\r\n\r\n{notice}\r\n--{boundary}--\r\n"
     );
     Ok(message.into_bytes())
 }
@@ -1498,6 +1530,16 @@ mod plain_tests {
     };
     use async_imap::Authenticator;
 
+    #[test]
+    fn fixed_utc_rfc2822_header_format_is_stable() {
+        assert_eq!(
+            crate::date_time::format_rfc2822(
+                crate::date_time::parse_rfc3339("2026-03-07T20:14:59Z").unwrap()
+            ),
+            "Sat, 7 Mar 2026 20:14:59 +0000"
+        );
+    }
+
     // Failure modes for plain-text sends:
     // 1. A plain draft still ships text/html or multipart/alternative.
     // 2. The plain part lacks charset=utf-8 or format=flowed.
@@ -1518,6 +1560,10 @@ mod plain_tests {
                 default_body_format: BodyFormat::Plain,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -2077,6 +2123,21 @@ mod plain_tests {
         let hidden = String::from_utf8(hidden).unwrap();
         assert!(!hidden.contains("Original-Message-ID"));
         assert!(!hidden.contains("evil@example.com"));
+        assert!(
+            text.starts_with("Date: ") || text.contains("\r\nDate: "),
+            "MDN receipt must include RFC 5322 Date"
+        );
+    }
+
+    // Failure modes:
+    // 1. Non-pinned SMTP transport locks DATA timeout at CONNECT_TIMEOUT (20s).
+    // 2. APPEND of large Sent copy uses fixed 30s IMAP_COMMAND_TIMEOUT.
+    #[test]
+    fn append_timeout_scales_with_message_size() {
+        let small = super::append_timeout(1024);
+        let large = super::append_timeout(20 * 1024 * 1024);
+        assert!(small >= super::IMAP_COMMAND_TIMEOUT);
+        assert!(large > small);
     }
 
     #[test]
@@ -2175,6 +2236,10 @@ mod send_timeout_tests {
                 default_body_format: BodyFormat::Plain,
                 id: "account-timeout".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -2250,6 +2315,10 @@ mod sender_and_pinned_failure_tests {
                 default_body_format: BodyFormat::Plain,
                 id: "account-sender".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: display_name.into(),
                 sync_state: "idle".into(),

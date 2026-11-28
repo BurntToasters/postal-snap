@@ -11,6 +11,7 @@ import {
 import {
   moveListedMessage,
   moveLoadedConversation,
+  type MoveFailureReconciler,
 } from "../../moveConversation";
 import { beginMessageOpen } from "../../messageOpen";
 import { conversationMessages } from "../../threads";
@@ -24,6 +25,7 @@ interface Options {
   selectMessage: AppState["selectMessage"];
   setError: AppState["setError"];
   openComposer: AppState["openComposer"];
+  reconcileMoveFailure: MoveFailureReconciler;
 }
 
 export function useRowActions({
@@ -32,6 +34,7 @@ export function useRowActions({
   selectMessage,
   setError,
   openComposer,
+  reconcileMoveFailure,
 }: Options) {
   function archiveFocused(message: MessageSummary, conversation: boolean) {
     const current = useAppStore.getState();
@@ -62,13 +65,28 @@ export function useRowActions({
           setError(strings.mail.noInbox);
           return;
         }
-        void moveLoadedConversation(message, inbox.id, after);
+        void moveLoadedConversation(
+          message,
+          inbox.id,
+          after,
+          reconcileMoveFailure,
+        );
         return;
       }
-      void moveLoadedConversation(message, "archive", after);
+      void moveLoadedConversation(
+        message,
+        "archive",
+        after,
+        reconcileMoveFailure,
+      );
       return;
     }
-    void moveListedMessage(message, toInbox ? "inbox" : "archive", after);
+    void moveListedMessage(
+      message,
+      toInbox ? "inbox" : "archive",
+      after,
+      reconcileMoveFailure,
+    );
   }
 
   function trashFocused(message: MessageSummary, conversation: boolean) {
@@ -99,10 +117,15 @@ export function useRowActions({
       return;
     }
     if (members.length > 1) {
-      void moveLoadedConversation(message, "trash", after);
+      void moveLoadedConversation(
+        message,
+        "trash",
+        after,
+        reconcileMoveFailure,
+      );
       return;
     }
-    void moveListedMessage(message, "trash", after);
+    void moveListedMessage(message, "trash", after, reconcileMoveFailure);
   }
 
   function junkFocused(message: MessageSummary, conversation: boolean) {
@@ -134,13 +157,23 @@ export function useRowActions({
           setError(strings.mail.noInbox);
           return;
         }
-        void moveLoadedConversation(message, inbox.id, after);
+        void moveLoadedConversation(
+          message,
+          inbox.id,
+          after,
+          reconcileMoveFailure,
+        );
         return;
       }
-      void moveLoadedConversation(message, "junk", after);
+      void moveLoadedConversation(message, "junk", after, reconcileMoveFailure);
       return;
     }
-    void moveListedMessage(message, toInbox ? "inbox" : "junk", after);
+    void moveListedMessage(
+      message,
+      toInbox ? "inbox" : "junk",
+      after,
+      reconcileMoveFailure,
+    );
   }
 
   async function replyFocused(

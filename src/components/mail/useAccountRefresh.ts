@@ -9,8 +9,8 @@ interface AccountRefreshOptions {
   submittedQueryRef: MutableRefObject<string>;
   loadAccountData: () => Promise<void>;
   loadAccountCounts: () => Promise<void>;
-  loadMessages: () => Promise<void>;
-  runSearch: () => Promise<void>;
+  loadMessages: () => Promise<boolean>;
+  refreshSubmittedSearch: () => Promise<boolean>;
   setError: (message: string) => void;
 }
 
@@ -21,7 +21,7 @@ export function useAccountRefresh({
   loadAccountData,
   loadAccountCounts,
   loadMessages,
-  runSearch,
+  refreshSubmittedSearch,
   setError,
 }: AccountRefreshOptions) {
   const [syncingAllAccounts, setSyncingAllAccounts] = useState(false);
@@ -40,7 +40,7 @@ export function useAccountRefresh({
         await api.syncAccount(accountId);
         if (useAppStore.getState().activeAccountId === accountId) {
           await loadAccountData();
-          if (submittedQueryRef.current) await runSearch();
+          if (submittedQueryRef.current) await refreshSubmittedSearch();
           else await loadMessages();
         }
       } catch (cause) {
@@ -52,7 +52,13 @@ export function useAccountRefresh({
         setSyncingAccountIds(new Set(syncingAccountIdsRef.current));
       }
     },
-    [loadAccountData, loadMessages, runSearch, setError, submittedQueryRef],
+    [
+      loadAccountData,
+      loadMessages,
+      refreshSubmittedSearch,
+      setError,
+      submittedQueryRef,
+    ],
   );
 
   const refresh = useCallback(async () => {
@@ -82,7 +88,7 @@ export function useAccountRefresh({
       await loadAccountCounts();
       if (useAppStore.getState().activeAccountId) {
         await loadAccountData();
-        if (submittedQueryRef.current) await runSearch();
+        if (submittedQueryRef.current) await refreshSubmittedSearch();
         else await loadMessages();
       }
     } catch (cause) {
@@ -98,14 +104,14 @@ export function useAccountRefresh({
     loadAccountData,
     loadMessages,
     refreshAccount,
-    runSearch,
+    refreshSubmittedSearch,
     setError,
     submittedQueryRef,
   ]);
 
-  async function refreshList() {
-    if (submittedQueryRef.current) await runSearch();
-    else await loadMessages();
+  async function refreshList(): Promise<boolean> {
+    if (submittedQueryRef.current) return refreshSubmittedSearch();
+    return loadMessages();
   }
 
   return {

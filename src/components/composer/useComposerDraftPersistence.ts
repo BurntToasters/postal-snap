@@ -94,11 +94,13 @@ export function useComposerDraftPersistence({
         !saveInFlightRef.current &&
         hasDraftContent(draft, currentBodyText())
       ) {
+        const draftToSave = { ...draft, id: draftIdRef.current ?? draft.id };
         const revision = draftRevisionRef.current;
+        let dirtyDuringSave = false;
         saveInFlightRef.current = true;
         setSaveState("saving");
         savePromiseRef.current = api
-          .saveDraft(draft)
+          .saveDraft(draftToSave)
           .then((outcome) => {
             draftIdRef.current = outcome.id;
             if (isDiscardingRef.current) return;
@@ -110,6 +112,7 @@ export function useComposerDraftPersistence({
               setDraftSyncState(outcome.syncState);
               setDraftSyncDetail(undefined);
             } else {
+              dirtyDuringSave = true;
               setSaveState("unsaved");
             }
             announceLocalMailChanged(accountId);
@@ -125,8 +128,9 @@ export function useComposerDraftPersistence({
               pendingCloseRef.current = false;
               void saveDraftRef.current(true);
             } else if (
+              dirtyDuringSave &&
               !isDiscardingRef.current &&
-              draftRevisionRef.current !== revision
+              !isSendingRef.current
             ) {
               void saveDraftRef.current(false);
             }
@@ -186,11 +190,12 @@ export function useComposerDraftPersistence({
         if (showStatus) close();
         return;
       }
+      const draftToSave = { ...draft, id: draftIdRef.current ?? draft.id };
       const revision = draftRevisionRef.current;
       saveInFlightRef.current = true;
       setSaveState("saving");
       try {
-        const savePromise = api.saveDraft(draft).then((outcome) => {
+        const savePromise = api.saveDraft(draftToSave).then((outcome) => {
           draftIdRef.current = outcome.id;
           return outcome;
         });
@@ -218,11 +223,6 @@ export function useComposerDraftPersistence({
         if (pendingCloseRef.current) {
           pendingCloseRef.current = false;
           void saveDraftRef.current(true);
-        } else if (
-          !isDiscardingRef.current &&
-          draftRevisionRef.current !== revision
-        ) {
-          void saveDraftRef.current(false);
         }
       }
     },

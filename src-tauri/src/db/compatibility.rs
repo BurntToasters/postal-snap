@@ -2,7 +2,7 @@ use super::{db_error, Database};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
-pub const ASSIGNABLE_ROLES: [&str; 5] = ["sent", "drafts", "archive", "junk", "trash"];
+pub const ASSIGNABLE_ROLES: [&str; 6] = ["inbox", "sent", "drafts", "archive", "junk", "trash"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,7 +146,20 @@ impl Database {
                 .map_err(db_error)?;
             tx.execute("UPDATE drafts SET remote_mailbox=NULL,remote_uid=NULL,remote_uid_validity=NULL,source_message_id=NULL,source_kind=NULL,draft_json=json_remove(draft_json,'$.sourceMessageId','$.sourceKind'),sync_state='localOnly',sync_detail='Incoming server changed. Review this saved draft before sending.' WHERE account_id=?1", [account_id]).map_err(db_error)?;
         }
-        let updated = tx.execute("UPDATE accounts SET imap_host=?2,imap_port=?3,imap_tls=?4,imap_username=?5,smtp_host=?6,smtp_port=?7,smtp_tls=?8,smtp_username=?9 WHERE id=?1", params![account_id,imap.host,imap.port,imap.tls_mode.as_str(),imap.username,smtp.host,smtp.port,smtp.tls_mode.as_str(),smtp.username]).map_err(db_error)?;
+        let provider_raw: Option<String> = tx
+            .query_row(
+                "SELECT provider FROM accounts WHERE id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(provider_raw) = provider_raw else {
+            return Err("Account not found.".into());
+        };
+        let provider = crate::db::parse_provider(&provider_raw);
+        let provider_id = crate::providers::infer_provider_id(&provider, &imap.host);
+        let updated = tx.execute("UPDATE accounts SET imap_host=?2,imap_port=?3,imap_tls=?4,imap_username=?5,smtp_host=?6,smtp_port=?7,smtp_tls=?8,smtp_username=?9,provider_id=?10 WHERE id=?1", params![account_id,imap.host,imap.port,imap.tls_mode.as_str(),imap.username,smtp.host,smtp.port,smtp.tls_mode.as_str(),smtp.username,provider_id]).map_err(db_error)?;
         if updated == 0 {
             return Err("Account not found.".into());
         }

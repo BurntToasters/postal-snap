@@ -7,7 +7,18 @@ import {
 } from "react";
 import { api } from "../../api";
 import { mergeAccountFields } from "../../accountMerge";
-import { ChevronDown, ChevronUp, Mail } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Mail,
+} from "lucide-react";
+import {
+  APPLE_APP_PASSWORD_GUIDE_URL,
+  inspectAndOpenExternalLink,
+} from "../externalLink";
 import { strings } from "../../i18n";
 import { useAppStore } from "../../store";
 import type { AccountSummary, FilterRule, MailboxSummary } from "../../types";
@@ -23,6 +34,44 @@ const SignatureEditor = lazy(() =>
     default: module.SignatureEditor,
   })),
 );
+
+const PROVIDER_LABELS: Record<string, string> = {
+  icloud: "iCloud Mail",
+  protonBridge: "Proton Bridge",
+  gmail: "Gmail",
+  fastmail: "Fastmail",
+  yahoo: "Yahoo Mail",
+  att: "AT&T Mail",
+  aol: "AOL Mail",
+  zoho: "Zoho Mail",
+  mailboxOrg: "mailbox.org",
+  gmx: "GMX Mail",
+  webde: "WEB.DE Mail",
+  mailcom: "mail.com",
+  posteo: "Posteo",
+  purelymail: "Purelymail",
+  startmail: "StartMail",
+  infomaniak: "Infomaniak",
+  mailfence: "Mailfence",
+  runbox: "Runbox",
+  migadu: "Migadu",
+  outlook: "Outlook",
+};
+
+function providerLabel(account: AccountSummary): string {
+  if (account.providerId && PROVIDER_LABELS[account.providerId]) {
+    return PROVIDER_LABELS[account.providerId];
+  }
+  return account.provider === "icloud"
+    ? strings.setup.icloud
+    : account.provider === "protonBridge"
+      ? strings.setup.bridge
+      : account.provider === "gmail"
+        ? strings.setup.gmail
+        : account.provider === "outlook"
+          ? strings.setup.outlook
+          : strings.setup.other;
+}
 
 // Identity saves run through IPC; a button repeats only a real edit.
 function nameChanged(
@@ -76,6 +125,10 @@ interface AccountsTabProps {
   passwordInputs: Record<string, string>;
   setPasswordInputs: Dispatch<SetStateAction<Record<string, string>>>;
   passwordStatus: Record<string, string>;
+  passwordErrors?: Record<
+    string,
+    { text: string; hint?: string; appPasswordUrl?: string }
+  >;
   updatingPasswordId?: string;
   handleUpdatePassword: (accountId: string) => Promise<void>;
   nameInputs: Record<string, string>;
@@ -107,6 +160,9 @@ interface AccountsTabProps {
   ) => void;
   ruleErrors: Record<string, string>;
   handleAddRule: (accountId: string) => Promise<void>;
+  editingRuleIds?: Record<string, string>;
+  handleEditRule?: (accountId: string, rule: FilterRule) => void;
+  handleCancelEditRule?: (accountId: string) => void;
   savingRuleAccounts: Record<string, boolean>;
   handlePreviewRule: (accountId: string) => Promise<void>;
   handleMoveRule: (
@@ -146,6 +202,7 @@ export function AccountsTab({
   passwordInputs,
   setPasswordInputs,
   passwordStatus,
+  passwordErrors,
   updatingPasswordId,
   handleUpdatePassword,
   nameInputs,
@@ -170,6 +227,9 @@ export function AccountsTab({
   updateRuleDraft,
   ruleErrors,
   handleAddRule,
+  editingRuleIds,
+  handleEditRule,
+  handleCancelEditRule,
   savingRuleAccounts,
   handlePreviewRule,
   handleMoveRule,
@@ -195,6 +255,12 @@ export function AccountsTab({
   const [page, setPage] = useState<
     "connection" | "folders" | "identity" | "rules"
   >(initialPage);
+  const [showPassword, setShowPassword] = useState(false);
+  const [lastShowAccountId, setLastShowAccountId] = useState(selectedAccountId);
+  if (lastShowAccountId !== selectedAccountId) {
+    setLastShowAccountId(selectedAccountId);
+    setShowPassword(false);
+  }
   async function navigate(next: typeof page) {
     if (next !== page && (await beforeNavigate())) setPage(next);
   }
@@ -361,15 +427,7 @@ export function AccountsTab({
                   <span className="account-card-info">
                     <strong>{account.displayName || account.email}</strong>
                     <small>
-                      {account.provider === "icloud"
-                        ? strings.setup.icloud
-                        : account.provider === "protonBridge"
-                          ? strings.setup.bridge
-                          : account.provider === "gmail"
-                            ? strings.setup.gmail
-                            : account.provider === "outlook"
-                              ? strings.setup.outlook
-                              : strings.setup.other}
+                      {providerLabel(account)}
                       {" · "}
                       {account.email}
                     </small>
@@ -439,25 +497,44 @@ export function AccountsTab({
                         void handleUpdatePassword(account.id);
                       }}
                     >
-                      <input
-                        id={`account-password-${account.id}`}
-                        type="password"
-                        autoComplete="new-password"
-                        spellCheck={false}
-                        placeholder={
-                          account.provider === "icloud"
-                            ? (strings.setup.appPasswordPlaceholder ??
-                              strings.settings.newPassword)
-                            : strings.settings.newPassword
-                        }
-                        value={passwordInputs[account.id] ?? ""}
-                        onChange={(event) =>
-                          setPasswordInputs((prev) => ({
-                            ...prev,
-                            [account.id]: event.target.value,
-                          }))
-                        }
-                      />
+                      <span className="password-field">
+                        <input
+                          id={`account-password-${account.id}`}
+                          type={showPassword ? "text" : "password"}
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          placeholder={
+                            account.passwordFormat === "appleHyphenated" ||
+                            account.provider === "icloud"
+                              ? strings.setup.appPasswordPlaceholder
+                              : account.passwordFormat === "groupedSpaces"
+                                ? strings.setup.gmailPlaceholder
+                                : strings.settings.newPassword
+                          }
+                          value={passwordInputs[account.id] ?? ""}
+                          onChange={(event) =>
+                            setPasswordInputs((prev) => ({
+                              ...prev,
+                              [account.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((value) => !value)}
+                          aria-label={
+                            showPassword
+                              ? strings.setup.hidePassword
+                              : strings.setup.showPassword
+                          }
+                        >
+                          {showPassword ? (
+                            <EyeOff aria-hidden="true" />
+                          ) : (
+                            <Eye aria-hidden="true" />
+                          )}
+                        </button>
+                      </span>
                       <button
                         type="submit"
                         className="secondary-button"
@@ -471,6 +548,31 @@ export function AccountsTab({
                           : strings.settings.updatePassword}
                       </button>
                     </form>
+                    {(account.provider === "icloud" ||
+                      account.appPasswordUrl) &&
+                    account.appPasswordPolicy !== "none" ? (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() =>
+                          void inspectAndOpenExternalLink(
+                            account.appPasswordUrl ??
+                              APPLE_APP_PASSWORD_GUIDE_URL,
+                          )
+                        }
+                      >
+                        {strings.setup.createAppPassword}{" "}
+                        <ExternalLink aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    {passwordErrors?.[account.id] ? (
+                      <div className="account-error" role="alert">
+                        <strong>{passwordErrors[account.id].text}</strong>
+                        {passwordErrors[account.id].hint ? (
+                          <span> {passwordErrors[account.id].hint}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {passwordStatus[account.id] ? (
                       <div
                         className="alias-status-message"
@@ -753,6 +855,9 @@ export function AccountsTab({
                     updateRuleDraft={updateRuleDraft}
                     ruleErrors={ruleErrors}
                     handleAddRule={handleAddRule}
+                    editingRuleIds={editingRuleIds}
+                    handleEditRule={handleEditRule}
+                    handleCancelEditRule={handleCancelEditRule}
                     savingRuleAccounts={savingRuleAccounts}
                     handlePreviewRule={handlePreviewRule}
                     handleMoveRule={handleMoveRule}

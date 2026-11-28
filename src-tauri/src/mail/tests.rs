@@ -10,7 +10,7 @@ use super::*;
 use crate::db::{CachedMessage, Database};
 use crate::models::{
     AccountRecord, AccountSetupRequest, AccountSummary, CachePolicy, ComposeAttachment,
-    ComposeDraft, FilterRule, MailboxRole, ProviderKind, SearchQuery, ServerConfig, TlsMode,
+    ComposeDraft, MailboxRole, ProviderKind, RuleAction, SearchQuery, ServerConfig, TlsMode,
 };
 use futures_util::TryStreamExt;
 use std::time::Duration;
@@ -49,6 +49,10 @@ async fn bridge_recovery_protocol_integration() {
             notify_new_mail: true,
             id: "bridge-recovery-fixture".into(),
             provider: ProviderKind::ProtonBridge,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -253,19 +257,23 @@ async fn bridge_recovery_protocol_integration() {
         )
         .unwrap();
     legacy_db
-        .create_filter_rule(&FilterRule {
-            match_mode: "all".into(),
-            conditions: Vec::new(),
-            actions: Vec::new(),
-            id: String::new(),
-            account_id: legacy_account.summary.id.clone(),
-            name: "Legacy folder target".into(),
-            field: "subject".into(),
-            contains: "fixture".into(),
-            action: "move_mailbox".into(),
-            target_mailbox: Some(legacy_japanese_wire.clone()),
-            enabled: true,
-        })
+        .conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO filter_rules(id,account_id,name,field,contains,action,target_mailbox,enabled,position)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![
+                "legacy-folder-target",
+                legacy_account.summary.id,
+                "Legacy folder target",
+                "subject",
+                "fixture",
+                "move_mailbox",
+                legacy_japanese_wire,
+                1,
+                0
+            ],
+        )
         .unwrap();
     drop(legacy_db);
     let old_connection = rusqlite::Connection::open(&legacy_path).unwrap();
@@ -345,7 +353,19 @@ async fn bridge_recovery_protocol_integration() {
             .list_filter_rules(&legacy_account.summary.id)
             .unwrap()
             .iter()
-            .any(|rule| rule.target_mailbox.as_deref() == Some("Projects/日本語")),
+            .find(|rule| rule.id == "legacy-folder-target")
+            .is_some_and(|rule| {
+                rule.field == "subject"
+                    && rule.contains == "fixture"
+                    && rule.action == "move_mailbox"
+                    && rule.target_mailbox.as_deref() == Some("Projects/日本語")
+                    && rule.actions
+                        == vec![RuleAction {
+                            kind: "move_mailbox".into(),
+                            target_mailbox: Some("Projects/日本語".into()),
+                            flag_color: None,
+                        }]
+            }),
     ));
     let startup_queued = legacy_db
         .queued_operations(&legacy_account.summary.id)
@@ -567,6 +587,7 @@ async fn bridge_recovery_protocol_integration() {
             mailbox_id: Some(renamed.id),
             text: "subject:Project".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 10,
         },
         &mut Uncontended,
@@ -574,7 +595,7 @@ async fn bridge_recovery_protocol_integration() {
     .await
     .unwrap();
     assert_eq!(
-        search.len(),
+        search.messages.len(),
         1,
         "search should select the renamed wire name"
     );
@@ -1014,6 +1035,10 @@ async fn bridge_rejected_keyword_store_is_not_silent_success() {
             notify_new_mail: true,
             id: "bridge-keyword-reject-fixture".into(),
             provider: ProviderKind::ProtonBridge,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -1161,6 +1186,10 @@ async fn parsed_drafts_keep_the_prepared_message_id() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -1262,6 +1291,10 @@ fn loopback_smtp_account() -> AccountRecord {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -1446,6 +1479,10 @@ async fn uid_operations_fail_closed_without_mailbox_identity() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -1518,6 +1555,10 @@ async fn builds_multipart_plain_and_html_mail() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -1582,6 +1623,10 @@ async fn outgoing_mime_hides_bcc_but_envelope_keeps_recipient() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "account-1".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "sam@example.com".into(),
             display_name: "Sam".into(),
             sync_state: "idle".into(),
@@ -1665,6 +1710,10 @@ async fn bridge_list_status_protocol_integration() {
             notify_new_mail: true,
             id: "bridge-list-status-fixture".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -1732,6 +1781,10 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
             notify_new_mail: true,
             id: id.into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -1749,7 +1802,8 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
     };
     let seed_cache = |db: &Database, account: &AccountRecord| {
         db.insert_account(account).unwrap();
-        let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        let received_at =
+            crate::date_time::format_rfc3339(crate::date_time::now_utc() - time::Duration::days(1));
         let mut message_ids = std::collections::HashMap::new();
         for (name, role) in [
             ("INBOX", MailboxRole::Inbox),
@@ -1894,6 +1948,11 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
     {
         let account = AccountRecord {
             summary: AccountSummary {
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+
                 notify_new_mail: true,
                 id: format!("bridge-list-refusal-{index}"),
                 ..list_account.summary.clone()
@@ -1968,6 +2027,11 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
     ] {
         let account = AccountRecord {
             summary: AccountSummary {
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+
                 notify_new_mail: true,
                 id: format!("bridge-status-{}", scenario.to_ascii_lowercase()),
                 ..status_account.summary.clone()
@@ -2011,6 +2075,11 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
 
     let refresh_account = AccountRecord {
         summary: AccountSummary {
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
+
             notify_new_mail: true,
             id: "bridge-status-refresh-fixture".into(),
             ..status_account.summary.clone()
@@ -2038,6 +2107,11 @@ async fn bridge_sync_refusals_preserve_cached_mail_integration() {
 
     let partial_account = AccountRecord {
         summary: AccountSummary {
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
+
             notify_new_mail: true,
             id: "bridge-status-partial-query-fixture".into(),
             ..status_account.summary.clone()
@@ -2146,6 +2220,10 @@ async fn bridge_server_search_refuses_missing_examine_uid_validity_integration()
             notify_new_mail: true,
             id: "bridge-search-examine-fixture".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -2176,7 +2254,8 @@ async fn bridge_server_search_refuses_missing_examine_uid_validity_integration()
         )
         .unwrap();
     db.set_mailbox_listing(mailbox_id, Some("/")).unwrap();
-    let received_at = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+    let received_at =
+        crate::date_time::format_rfc3339(crate::date_time::now_utc() - time::Duration::days(1));
     let message = CachedMessage {
         uid: 1,
         internal_at: None,
@@ -2228,6 +2307,7 @@ async fn bridge_server_search_refuses_missing_examine_uid_validity_integration()
             mailbox_id: Some(mailbox_id),
             text: "Synthetic".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 25,
         },
         &mut Uncontended,
@@ -2268,6 +2348,10 @@ async fn bridge_empty_folder_search_refusals_integration() {
             notify_new_mail: true,
             id: "bridge-empty-folder-search-fixture".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -2290,6 +2374,11 @@ async fn bridge_empty_folder_search_refusals_integration() {
     {
         let account = AccountRecord {
             summary: AccountSummary {
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+
                 notify_new_mail: true,
                 id: format!("bridge-empty-search-{index}"),
                 ..base.summary.clone()
@@ -2327,6 +2416,11 @@ async fn bridge_empty_folder_search_refusals_integration() {
     }
     let control = AccountRecord {
         summary: AccountSummary {
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
+
             notify_new_mail: true,
             id: "bridge-empty-search-ok".into(),
             ..base.summary.clone()
@@ -2390,6 +2484,10 @@ async fn bridge_tls_protocol_integration() {
             notify_new_mail: true,
             id: "bridge-protocol-fixture".into(),
             provider: ProviderKind::ProtonBridge,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -2664,6 +2762,10 @@ async fn greenmail_protocol_integration() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "11111111-1111-4111-8111-111111111111".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "user@example.test".into(),
             display_name: "Postal Snap Test".into(),
             sync_state: "idle".into(),
@@ -2693,6 +2795,7 @@ async fn greenmail_protocol_integration() {
     let setup = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Manual,
+        provider_id: None,
         email: account.summary.email.clone(),
         display_name: account.summary.display_name.clone(),
         password: password.into(),
@@ -2864,13 +2967,14 @@ async fn greenmail_protocol_integration() {
             mailbox_id: Some(summary.mailbox_id),
             text: "protocol check".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 25,
         },
         &mut Uncontended,
     )
     .await
     .unwrap();
-    assert!(!search.is_empty());
+    assert!(!search.messages.is_empty());
 
     let draft_message_id = "<draft-22222222-2222-4222-8222-222222222222-1@run.rosie.snap>";
     let draft_bytes = prepare_draft_message(&account, &draft, draft_message_id)
@@ -2929,7 +3033,7 @@ async fn greenmail_protocol_integration() {
     wake.notify_one();
     tokio::time::timeout(
         Duration::from_secs(5),
-        idle_inbox(&account, password, &wake, Duration::from_secs(120)),
+        idle_inbox(&db, &account, password, &wake, Duration::from_secs(120)),
     )
     .await
     .expect("IDLE interruption timed out")
@@ -3007,10 +3111,30 @@ impl SyncHooks for QuickPass {
 }
 
 fn imap_date(days_ago: i64, offset_minutes: i64) -> String {
-    (chrono::Utc::now() - chrono::Duration::days(days_ago)
-        + chrono::Duration::minutes(offset_minutes))
-    .format("\"%d-%b-%Y %H:%M:%S +0000\"")
-    .to_string()
+    let stamp = crate::date_time::now_utc() - time::Duration::days(days_ago)
+        + time::Duration::minutes(offset_minutes);
+    let month = match stamp.month() {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    };
+    format!(
+        "\"{:02}-{month}-{:04} {:02}:{:02}:{:02} +0000\"",
+        stamp.day(),
+        stamp.year(),
+        stamp.hour(),
+        stamp.minute(),
+        stamp.second()
+    )
 }
 
 async fn run_until_settled(
@@ -3052,6 +3176,10 @@ async fn greenmail_watcher_requests_inbox_wake_on_append() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "77777777-7777-4777-8777-777777777777".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "user@example.test".into(),
             display_name: "Watcher".into(),
             sync_state: "idle".into(),
@@ -3163,6 +3291,10 @@ async fn greenmail_protocol_integration_history() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "44444444-4444-4444-8444-444444444444".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "history@example.test".into(),
             display_name: "History".into(),
             sync_state: "idle".into(),
@@ -3406,6 +3538,7 @@ async fn icloud_live_sync_timing() {
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email: email.clone(),
         display_name: "Timing".into(),
         password: password.clone(),
@@ -3473,6 +3606,10 @@ async fn icloud_live_sync_timing() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "66666666-6666-4666-8666-666666666666".into(),
             provider: ProviderKind::Icloud,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email,
             display_name: "Timing".into(),
             sync_state: "idle".into(),
@@ -3510,13 +3647,13 @@ async fn icloud_live_sync_timing() {
     let wake = tokio::sync::Notify::new();
     for round in 1..=3 {
         let step = Instant::now();
-        let outcome = idle_inbox(&account, &password, &wake, Duration::from_secs(15)).await;
+        let outcome = idle_inbox(&db, &account, &password, &wake, Duration::from_secs(15)).await;
         eprintln!("idle {round}: {:?} -> {outcome:?}", step.elapsed());
     }
     // Get Mail interrupts IDLE; this is how long it waits for the lock.
     let step = Instant::now();
     let (outcome, ()) = tokio::join!(
-        idle_inbox(&account, &password, &wake, Duration::from_secs(60)),
+        idle_inbox(&db, &account, &password, &wake, Duration::from_secs(60)),
         async {
             tokio::time::sleep(Duration::from_secs(2)).await;
             wake.notify_one();
@@ -3535,6 +3672,7 @@ async fn icloud_live_connection_smoke() {
     let request = AccountSetupRequest {
         certificate_reference: None,
         provider: ProviderKind::Icloud,
+        provider_id: None,
         email,
         display_name: "Postal Snap Test".into(),
         password,
@@ -3614,6 +3752,10 @@ async fn greenmail_replay_rejects_incomplete_full_body_evidence() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "77777777-7777-4777-8777-777777777777".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "user@example.test".into(),
             display_name: "Postal Snap Test".into(),
             sync_state: "idle".into(),
@@ -3783,6 +3925,10 @@ async fn greenmail_archive_keeps_answered_set_before_move() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "88888888-8888-4888-8888-888888888888".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "user@example.test".into(),
             display_name: "Postal Snap Test".into(),
             sync_state: "idle".into(),
@@ -3893,6 +4039,10 @@ async fn greenmail_batch_move_lands_every_message_once() {
             default_body_format: crate::models::BodyFormat::Html,
             id: "99999999-9999-4999-8999-999999999999".into(),
             provider: ProviderKind::Manual,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "user@example.test".into(),
             display_name: "Postal Snap Test".into(),
             sync_state: "idle".into(),
@@ -4013,6 +4163,10 @@ fn loopback_bridge_account(id: &str, port: u16) -> AccountRecord {
             notify_new_mail: true,
             id: id.into(),
             provider: ProviderKind::ProtonBridge,
+            provider_id: None,
+            app_password_policy: None,
+            app_password_url: None,
+            password_format: None,
             email: "fixture@example.test".into(),
             display_name: "Fixture".into(),
             sync_state: "idle".into(),
@@ -4362,14 +4516,15 @@ async fn search_mailbox_reconciles_flag_colors() {
             mailbox_id: Some(inbox),
             text: "Flagged".into(),
             all_folders: false,
+            resume_after_mailbox_id: None,
             limit: 20,
         },
         &mut Uncontended,
     )
     .await
     .unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].flag_color, 2);
+    assert_eq!(hits.messages.len(), 1);
+    assert_eq!(hits.messages[0].flag_color, 2);
     pool::forget(&account_id);
     server.abort();
 }

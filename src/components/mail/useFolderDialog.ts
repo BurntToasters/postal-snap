@@ -69,7 +69,7 @@ export function useFolderDialog({
     setFolderDialog(null);
     setFolderName("");
     window.setTimeout(() => {
-      (newFolderButtonRef.current ?? lastFolderInvoker.current)?.focus();
+      (lastFolderInvoker.current ?? newFolderButtonRef.current)?.focus();
     }, 0);
   }
 
@@ -162,6 +162,9 @@ export function useFolderDialog({
     try {
       await api.deleteFolder(activeAccountId, id);
       const latest = useAppStore.getState();
+      if (latest.selectedMessage?.mailboxId === id) {
+        latest.selectMessage(undefined);
+      }
       if (
         mailboxIsPinned(latest.settings.pinnedMailboxes, activeAccountId, id)
       ) {
@@ -213,6 +216,13 @@ export function useFolderDialog({
     if (!confirmed) return;
     try {
       await api.emptyTrash(activeAccountId);
+      const latest = useAppStore.getState();
+      const selectedBox = latest.mailboxes.find(
+        (box) => box.id === latest.selectedMessage?.mailboxId,
+      );
+      if (selectedBox?.role === "trash") {
+        latest.selectMessage(undefined);
+      }
       await loadAccountData();
     } catch (cause) {
       setError(errorText(cause));
@@ -228,6 +238,13 @@ export function useFolderDialog({
     if (!confirmed) return;
     try {
       await api.emptyJunk(activeAccountId);
+      const latest = useAppStore.getState();
+      const selectedBox = latest.mailboxes.find(
+        (box) => box.id === latest.selectedMessage?.mailboxId,
+      );
+      if (selectedBox?.role === "junk") {
+        latest.selectMessage(undefined);
+      }
       await loadAccountData();
     } catch (cause) {
       setError(errorText(cause));

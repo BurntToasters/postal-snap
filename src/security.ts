@@ -168,6 +168,7 @@ export function sanitizeReceivedHtml(
     ADD_ATTR: [
       "data-remote-src",
       "data-inline-cid",
+      ...(options.composer ? ["data-inline-content-id"] : []),
       "data-external-href",
       "class",
       "alt",

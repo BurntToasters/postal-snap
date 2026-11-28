@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { Download, Eye, Image, X } from "lucide-react";
 import { api } from "../api";
@@ -43,6 +50,7 @@ export function EmlViewer({
   const isDark = useIsDark();
   const [notice, setNotice] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
+  const [previewingId, setPreviewingId] = useState<string>();
   const previewRequest = useRef(0);
   const [preview, setPreview] = useState<{
     attachmentId: string;
@@ -89,7 +97,7 @@ export function EmlViewer({
   }, []);
 
   // Native frame clicks (WebKit) arrive through the app router while this viewer is open.
-  useEffect(
+  useLayoutEffect(
     () =>
       registerFrameLinkSink("viewer", {
         frame: frameRef,
@@ -106,8 +114,9 @@ export function EmlViewer({
     if (!doc?.body) return;
     const onLink = (event: Event) => {
       const target = event.target;
+      const FrameElement = doc.defaultView?.Element;
       const link =
-        target instanceof Element
+        FrameElement && target instanceof FrameElement
           ? target.closest<HTMLAnchorElement>("a[href], a[data-external-href]")
           : null;
       if (!link) return;
@@ -150,6 +159,7 @@ export function EmlViewer({
 
   async function openPreview(attachment: Attachment) {
     const requestId = ++previewRequest.current;
+    setPreviewingId(attachment.id);
     setNotice(undefined);
     try {
       const value = await api.previewOpenedAttachment(token, attachment.id);
@@ -158,6 +168,8 @@ export function EmlViewer({
     } catch (cause) {
       if (previewRequest.current !== requestId) return;
       setNotice(errorText(cause));
+    } finally {
+      if (previewRequest.current === requestId) setPreviewingId(undefined);
     }
   }
 
@@ -201,6 +213,12 @@ export function EmlViewer({
             </dd>
             <dt>{strings.reader.to}</dt>
             <dd>{message.to.join(", ") || strings.reader.noRecipients}</dd>
+            {message.cc.length > 0 ? (
+              <>
+                <dt>{strings.reader.cc}</dt>
+                <dd>{message.cc.join(", ")}</dd>
+              </>
+            ) : null}
             <dt>{strings.reader.date}</dt>
             <dd>{formatFullMessageDate(message.receivedAt)}</dd>
             <dt>{strings.reader.subject}</dt>
@@ -223,7 +241,7 @@ export function EmlViewer({
             className="message-body eml-message-body"
             data-follows-theme={followsTheme ? "true" : undefined}
           >
-            {sanitized ? (
+            {sanitized && sanitized.html.trim() ? (
               <iframe
                 ref={frameRef}
                 title={strings.reader.messageContent}
@@ -265,10 +283,14 @@ export function EmlViewer({
                         type="button"
                         className="secondary-button"
                         disabled={busyId !== undefined}
+                        aria-busy={previewingId === attachment.id || undefined}
                         onClick={() => void openPreview(attachment)}
                         aria-label={`${strings.reader.preview}: ${attachment.filename}`}
                       >
-                        <Eye aria-hidden="true" /> {strings.reader.preview}
+                        <Eye aria-hidden="true" />{" "}
+                        {previewingId === attachment.id
+                          ? strings.common.loading
+                          : strings.reader.preview}
                       </button>
                     ) : null}
                     <button

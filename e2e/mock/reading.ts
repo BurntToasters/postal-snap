@@ -173,14 +173,15 @@ export async function registerMockReading(page: Page): Promise<void> {
       string,
       { token: string; message: unknown }
     >();
-    function emlMessage() {
+    const pendingOpenedTokens: string[] = [];
+    function emlMessage(subject = "Lease renewal") {
       return {
         id: 0,
         accountId: mock.account.id,
         mailboxId: 0,
         uid: 0,
         messageId: "<lease@example.test>",
-        subject: "Lease renewal",
+        subject,
         senderName: "Riley Ng",
         senderAddress: "riley@example.test",
         recipients: "sam@icloud.com",
@@ -194,7 +195,7 @@ export async function registerMockReading(page: Page): Promise<void> {
         size: 4096,
         threadRoot: null,
         to: ["sam@icloud.com"],
-        cc: [],
+        cc: params.has("emlCc") ? ["alex@example.test"] : [],
         textBody: "Here is the signed lease. Thanks, Riley.",
         // ?emlHtml adds a script and a remote image to the HTML body.
         htmlBody: params.has("emlHtml")
@@ -221,12 +222,23 @@ export async function registerMockReading(page: Page): Promise<void> {
         ],
       };
     }
+    function seedOpened(token: string, subject: string) {
+      const opened = { token, message: emlMessage(subject) };
+      openedMessages.set(token, opened);
+      pendingOpenedTokens.push(token);
+    }
     // ?emlSeeded starts the page with an opened message already in place.
     if (params.has("emlSeeded"))
       openedMessages.set("opened-eml-1", {
         token: "opened-eml-1",
         message: emlMessage(),
       });
+    if (params.has("emlColdOpen"))
+      seedOpened("opened-eml-cold", "Cold launch message");
+    if (params.has("emlHandoffOrder")) {
+      seedOpened("opened-eml-slow", "First open");
+      seedOpened("opened-eml-fast", "Second open");
+    }
     function openedFor(args: Record<string, unknown>) {
       const opened = openedMessages.get(String(args.token));
       if (!opened)
@@ -406,7 +418,32 @@ export async function registerMockReading(page: Page): Promise<void> {
         openedMessages.set(opened.token, opened);
         return opened;
       },
+      drain_opened_message_tokens() {
+        if (params.has("emlHandoffOrder"))
+          emit("eml-opened", { token: "opened-eml-slow" });
+        const pending = [...pendingOpenedTokens];
+        if (params.has("emlSlowDrain"))
+          return new Promise((resolve) =>
+            setTimeout(() => resolve(pending), 150),
+          );
+        return pending;
+      },
+      acknowledge_opened_message_token(args: Record<string, unknown>) {
+        const index = pendingOpenedTokens.indexOf(String(args.token));
+        if (index >= 0) pendingOpenedTokens.splice(index, 1);
+        return undefined;
+      },
       get_opened_message(args: Record<string, unknown>) {
+        if (params.has("emlHandoffOrder") && args.token === "opened-eml-slow")
+          return new Promise((resolve, reject) =>
+            setTimeout(() => {
+              try {
+                resolve(openedFor(args));
+              } catch (error) {
+                reject(error);
+              }
+            }, 100),
+          );
         return openedFor(args);
       },
       close_opened_message(args: Record<string, unknown>) {

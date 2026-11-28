@@ -114,7 +114,7 @@ function manifest(arch, version) {
  <Resources><Resource Language="en-US" /></Resources>
  <Applications><Application Id="PostalSnap" Executable="PostalSnap.exe" EntryPoint="Windows.FullTrustApplication">
   <uap:VisualElements DisplayName="Postal Snap" Description="Easy, secure email without clutter" BackgroundColor="#176caa" Square44x44Logo="Assets\\Square44x44Logo.png" Square150x150Logo="Assets\\Square150x150Logo.png" />
-  <Extensions><uap:Extension Category="windows.protocol"><uap:Protocol Name="mailto"><uap:DisplayName>Postal Snap</uap:DisplayName></uap:Protocol></uap:Extension></Extensions>
+  <Extensions><uap:Extension Category="windows.protocol"><uap:Protocol Name="mailto"><uap:DisplayName>Postal Snap</uap:DisplayName></uap:Protocol></uap:Extension><uap:Extension Category="windows.fileTypeAssociation"><uap:FileTypeAssociation Name="eml"><uap:DisplayName>Email Message</uap:DisplayName><uap:SupportedFileTypes><uap:FileType>.eml</uap:FileType></uap:SupportedFileTypes></uap:FileTypeAssociation></uap:Extension></Extensions>
  </Application></Applications>
  <Capabilities><Capability Name="internetClient" /><rescap:Capability Name="runFullTrust" /></Capabilities>
 </Package>\n`;

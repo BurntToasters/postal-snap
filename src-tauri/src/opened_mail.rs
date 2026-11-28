@@ -3,12 +3,14 @@
 //! Opened messages live in a bounded in-memory store behind opaque tokens.
 
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use mail_parser::MessageParser;
 use tauri::{AppHandle, Emitter, Runtime};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -53,6 +55,7 @@ struct Entry {
 pub(crate) struct OpenedStore {
     entries: Vec<Entry>,
     bytes: usize,
+    pending_os_open_tokens: VecDeque<String>,
 }
 
 impl OpenedStore {
@@ -60,6 +63,7 @@ impl OpenedStore {
         Self {
             entries: Vec::new(),
             bytes: 0,
+            pending_os_open_tokens: VecDeque::new(),
         }
     }
 
@@ -95,6 +99,8 @@ impl OpenedStore {
         {
             let evicted = self.entries.remove(0);
             self.bytes -= evicted.raw.len();
+            self.pending_os_open_tokens
+                .retain(|token| token != &evicted.token);
         }
         Ok(token)
     }
@@ -113,10 +119,37 @@ impl OpenedStore {
     }
 
     pub(crate) fn remove(&mut self, token: &str) {
+        self.pending_os_open_tokens
+            .retain(|pending| pending != token);
         if let Some(index) = self.entries.iter().position(|entry| entry.token == token) {
             let entry = self.entries.remove(index);
             self.bytes -= entry.raw.len();
         }
+    }
+
+    pub(crate) fn enqueue_os_open(&mut self, token: &str) -> bool {
+        if !self.entries.iter().any(|entry| entry.token == token)
+            || self
+                .pending_os_open_tokens
+                .iter()
+                .any(|pending| pending == token)
+        {
+            return false;
+        }
+        if self.pending_os_open_tokens.len() >= MAX_OPEN_TOKENS {
+            return false;
+        }
+        self.pending_os_open_tokens.push_back(token.to_string());
+        true
+    }
+
+    pub(crate) fn pending_os_open_tokens(&self) -> Vec<String> {
+        self.pending_os_open_tokens.iter().cloned().collect()
+    }
+
+    pub(crate) fn acknowledge_os_open(&mut self, token: &str) {
+        self.pending_os_open_tokens
+            .retain(|pending| pending != token);
     }
 
     pub(crate) fn lookup(&mut self, token: &str, attachment_id: &str) -> Result<Lookup, String> {
@@ -148,25 +181,183 @@ fn with_store<T>(action: impl FnOnce(&mut OpenedStore) -> T) -> T {
     action(&mut guard)
 }
 
+struct OsOpenPaths {
+    paths: VecDeque<PathBuf>,
+    running: bool,
+}
+
+static OS_OPEN_PATHS: Mutex<OsOpenPaths> = Mutex::new(OsOpenPaths {
+    paths: VecDeque::new(),
+    running: false,
+});
+
 /// Extra launch paths would be read and then evicted, so they are ignored.
 fn limit_launch_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.truncate(MAX_OPEN_TOKENS);
     paths
 }
 
-pub fn open_paths<R: Runtime>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
-    for path in limit_launch_paths(paths) {
+pub fn open_paths<R: Runtime + 'static>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
+    let paths = limit_launch_paths(
+        paths
+            .into_iter()
+            .filter_map(|path| local_os_open_path(&path))
+            .collect(),
+    );
+    if paths.is_empty() {
+        return;
+    }
+
+    let should_start = {
+        let mut queue = OS_OPEN_PATHS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for path in paths {
+            if queue.paths.len() + usize::from(queue.running) >= MAX_OPEN_TOKENS {
+                break;
+            }
+            queue.paths.push_back(path);
+        }
+        if queue.running {
+            false
+        } else {
+            queue.running = true;
+            true
+        }
+    };
+
+    if should_start {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let Ok(raw) = read_eml_file(&path).await else {
-                return;
-            };
-            let opened = tauri::async_runtime::spawn_blocking(move || open_bytes(raw)).await;
-            if let Ok(Ok(opened)) = opened {
-                let _ = app.emit(EML_OPENED_EVENT, eml_opened_payload(&opened.token));
+            loop {
+                let path = {
+                    let mut queue = OS_OPEN_PATHS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    match queue.paths.pop_front() {
+                        Some(path) => Some(path),
+                        None => {
+                            queue.running = false;
+                            None
+                        }
+                    }
+                };
+                let Some(path) = path else {
+                    break;
+                };
+                let Ok(raw) = read_eml_file(&path).await else {
+                    continue;
+                };
+                let opened = tauri::async_runtime::spawn_blocking(move || open_bytes(raw)).await;
+                if let Ok(Ok(opened)) = opened {
+                    let queued = with_store(|store| store.enqueue_os_open(&opened.token));
+                    if queued {
+                        let _ = app.emit(EML_OPENED_EVENT, eml_opened_payload(&opened.token));
+                    }
+                }
             }
         });
     }
+}
+
+pub(crate) fn local_os_open_path(path: &Path) -> Option<PathBuf> {
+    let Some(value) = path.to_str() else {
+        #[cfg(unix)]
+        {
+            return Some(path.to_path_buf());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let mut wide = path.as_os_str().encode_wide();
+            let first = wide.next();
+            let second = wide.next();
+            let is_separator = |unit: Option<u16>| {
+                unit.is_some_and(|unit| unit == b'/' as u16 || unit == b'\\' as u16)
+            };
+            if is_separator(first) && is_separator(second) {
+                return None;
+            }
+            return Some(path.to_path_buf());
+        }
+        #[cfg(not(any(unix, windows)))]
+        return None;
+    };
+    if has_windows_unc_prefix(value.as_bytes()) {
+        return None;
+    }
+    if is_windows_drive_path(value) {
+        return Some(path.to_path_buf());
+    }
+    let Some(colon) = uri_scheme_end(value.as_bytes()) else {
+        return Some(path.to_path_buf());
+    };
+    let scheme = &value[..colon];
+    if !scheme.eq_ignore_ascii_case("file") {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    if url.scheme() != "file"
+        || url
+            .host_str()
+            .is_some_and(|host| !host.eq_ignore_ascii_case("localhost"))
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let local = url.to_file_path().ok()?;
+    #[cfg(windows)]
+    if local
+        .to_str()
+        .is_some_and(|value| has_windows_unc_prefix(value.as_bytes()))
+    {
+        return None;
+    }
+    Some(local)
+}
+
+fn uri_scheme_end(value: &[u8]) -> Option<usize> {
+    let colon = value.iter().position(|byte| *byte == b':')?;
+    let separator = value
+        .iter()
+        .position(|byte| matches!(byte, b'/' | b'\\'))
+        .unwrap_or(value.len());
+    if colon >= separator {
+        return None;
+    }
+    let scheme = &value[..colon];
+    if !scheme.first().is_some_and(u8::is_ascii_alphabetic)
+        || !scheme
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'+' | b'.' | b'-'))
+    {
+        return None;
+    }
+    Some(colon)
+}
+
+fn has_windows_unc_prefix(value: &[u8]) -> bool {
+    #[cfg(windows)]
+    {
+        value.len() >= 2 && matches!(value[0], b'/' | b'\\') && matches!(value[1], b'/' | b'\\')
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = value;
+        false
+    }
+}
+
+fn is_windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 /// Read a `.eml` file under the path rules. Errors never name the path.
@@ -214,6 +405,14 @@ pub(crate) fn get_message(token: &str) -> Result<OpenedMessage, String> {
 
 pub(crate) fn close_message(token: &str) {
     with_store(|store| store.remove(token));
+}
+
+pub(crate) fn pending_os_open_tokens() -> Vec<String> {
+    with_store(|store| store.pending_os_open_tokens())
+}
+
+pub(crate) fn acknowledge_os_open(token: &str) {
+    with_store(|store| store.acknowledge_os_open(token));
 }
 
 pub(crate) fn lookup_attachment(token: &str, attachment_id: &str) -> Result<Lookup, String> {
@@ -448,6 +647,69 @@ Content-Transfer-Encoding: 7bit\r\n\r\n{body}\r\n--B--\r\n"
     }
 
     #[test]
+    fn os_open_handoff_is_ordered_deduplicated_acknowledged_and_closed() {
+        let mut store = OpenedStore::new();
+        let first = put(&mut store, SIMPLE_EML.to_vec());
+        let second = put(&mut store, SIMPLE_EML.to_vec());
+        assert!(store.pending_os_open_tokens().is_empty());
+        assert!(store.enqueue_os_open(&first));
+        assert!(!store.enqueue_os_open(&first));
+        assert!(store.enqueue_os_open(&second));
+        assert_eq!(
+            store.pending_os_open_tokens(),
+            vec![first.clone(), second.clone()]
+        );
+
+        store.acknowledge_os_open(&first);
+        assert_eq!(store.pending_os_open_tokens(), vec![second.clone()]);
+        store.remove(&second);
+        assert!(store.pending_os_open_tokens().is_empty());
+    }
+
+    #[test]
+    fn os_open_handoff_drops_tokens_evicted_from_the_message_store() {
+        let mut store = OpenedStore::new();
+        let tokens: Vec<String> = (0..MAX_OPEN_TOKENS + 2)
+            .map(|_| {
+                let token = put(&mut store, SIMPLE_EML.to_vec());
+                assert!(store.enqueue_os_open(&token));
+                token
+            })
+            .collect();
+        assert_eq!(store.len(), MAX_OPEN_TOKENS);
+        assert_eq!(
+            store.pending_os_open_tokens(),
+            tokens[2..].to_vec(),
+            "evicted messages must not leave stale handoff entries"
+        );
+    }
+
+    #[test]
+    fn os_open_uri_accepts_only_local_file_uris_and_plain_paths() {
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                local_os_open_path(Path::new("file:///tmp/lease%20renewal.eml")),
+                Some(PathBuf::from("/tmp/lease renewal.eml"))
+            );
+            assert_eq!(
+                local_os_open_path(Path::new("/tmp/plain-message.eml")),
+                Some(PathBuf::from("/tmp/plain-message.eml"))
+            );
+        }
+        assert_eq!(
+            local_os_open_path(Path::new("file://mailhost/share/message.eml")),
+            None,
+            "UNC authorities must not turn into local reads"
+        );
+        assert_eq!(
+            local_os_open_path(Path::new("https://example.test/message.eml")),
+            None
+        );
+        assert_eq!(local_os_open_path(Path::new("mailto:a@example.test")), None);
+    }
+
+    #[test]
     fn lru_get_refreshes_recency_before_eviction() {
         let mut store = OpenedStore::new();
         let first = put(&mut store, SIMPLE_EML.to_vec());
@@ -469,16 +731,24 @@ Content-Transfer-Encoding: 7bit\r\n\r\n{body}\r\n--B--\r\n"
         let first = store
             .insert(message.clone(), vec![0; big], parts_clone(&parts))
             .expect("first");
+        assert!(store.enqueue_os_open(&first));
         let second = store
             .insert(message.clone(), vec![0; big], parts_clone(&parts))
             .expect("second");
+        assert!(store.enqueue_os_open(&second));
         let third = store
             .insert(message.clone(), vec![0; big], parts_clone(&parts))
             .expect("third");
+        assert!(store.enqueue_os_open(&third));
         assert!(store.total_bytes() <= MAX_OPEN_BYTES);
         assert!(store.get(&first).is_none());
         assert!(store.get(&second).is_some());
         assert!(store.get(&third).is_some());
+        assert_eq!(
+            store.pending_os_open_tokens(),
+            vec![second, third],
+            "byte-based eviction must also prune the handoff queue"
+        );
     }
 
     fn parts_clone(parts: &[PartRef]) -> Vec<PartRef> {

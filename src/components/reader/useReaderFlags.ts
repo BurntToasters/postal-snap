@@ -47,8 +47,9 @@ export function useReaderFlags({
       if (
         operation !== starredOperation.current ||
         current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
+        (current.activeLocalView
+          ? current.activeLocalView !== "snoozed"
+          : current.activeMailboxId !== viewMailboxId)
       )
         return;
       setMessages(
@@ -112,8 +113,9 @@ export function useReaderFlags({
       if (
         operation !== readOperation.current ||
         current.activeAccountId !== message.accountId ||
-        current.activeMailboxId !== viewMailboxId ||
-        current.activeLocalView
+        (current.activeLocalView
+          ? current.activeLocalView !== "snoozed"
+          : current.activeMailboxId !== viewMailboxId)
       )
         return;
       setMessages(

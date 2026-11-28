@@ -41,15 +41,20 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<AccountSummary>, String> {
         let conn = self.read_conn()?;
         let mut statement = conn.prepare(
-            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, signature_html, color, default_body_format, reply_to, notify_new_mail FROM accounts ORDER BY sort_order, created_at",
+            "SELECT id, provider, email, display_name, sync_state, error, aliases_json, auth_method, signature, signature_html, color, default_body_format, reply_to, notify_new_mail, provider_id, imap_host FROM accounts ORDER BY sort_order, created_at",
         ).map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
                 let aliases_json: String = row.get(6).unwrap_or_else(|_| "[]".into());
                 let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+                let imap_host: String = row.get(15)?;
                 Ok(AccountSummary {
                     id: row.get(0)?,
                     provider: parse_provider(&row.get::<_, String>(1)?),
+                    provider_id: row.get(14)?,
+                    app_password_policy: None,
+                    app_password_url: None,
+                    password_format: None,
                     email: row.get(2)?,
                     display_name: row.get(3)?,
                     sync_state: row.get(4)?,
@@ -64,7 +69,8 @@ impl Database {
                     color: row.get(10)?,
                     default_body_format: BodyFormat::from_db(&row.get::<_, String>(11)?),
                     notify_new_mail: row.get::<_, i64>(13)? != 0,
-                })
+                }
+                .with_provider_meta(&imap_host))
             })
             .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
@@ -76,16 +82,21 @@ impl Database {
             "SELECT id, provider, email, display_name, sync_state, error,
                     imap_host, imap_port, imap_tls, imap_username,
                     smtp_host, smtp_port, smtp_tls, smtp_username,
-                    aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, reply_to, notify_new_mail
+                    aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, reply_to, notify_new_mail, provider_id
              FROM accounts WHERE id = ?1",
             [id],
             |row| {
                 let aliases_json: String = row.get(14).unwrap_or_else(|_| "[]".into());
                 let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+                let imap_host: String = row.get(6)?;
                 Ok(AccountRecord {
                     summary: AccountSummary {
                         id: row.get(0)?,
                         provider: parse_provider(&row.get::<_, String>(1)?),
+                        provider_id: row.get(23)?,
+                        app_password_policy: None,
+                        app_password_url: None,
+                        password_format: None,
                         email: row.get(2)?,
                         display_name: row.get(3)?,
                         sync_state: row.get(4)?,
@@ -100,10 +111,11 @@ impl Database {
                         color: row.get(18)?,
                         default_body_format: BodyFormat::from_db(&row.get::<_, String>(19)?),
                         notify_new_mail: row.get::<_, i64>(22)? != 0,
-                    },
+                    }
+                    .with_provider_meta(&imap_host),
                     imap: ServerConfig {
                         trusted_certificate: row.get(20)?,
-                        host: row.get(6)?,
+                        host: imap_host,
                         port: row.get::<_, u16>(7)?,
                         tls_mode: parse_tls(&row.get::<_, String>(8)?),
                         username: row.get(9)?,
@@ -127,13 +139,16 @@ impl Database {
         let conn = self.conn()?;
         let aliases_json =
             serde_json::to_string(&account.summary.aliases).unwrap_or_else(|_| "[]".into());
+        let provider_id = account.summary.provider_id.clone().or_else(|| {
+            crate::providers::infer_provider_id(&account.summary.provider, &account.imap.host)
+        });
         conn.execute(
             "INSERT INTO accounts (
                 id, provider, email, display_name, sync_state,
                 imap_host, imap_port, imap_tls, imap_username,
                 smtp_host, smtp_port, smtp_tls, smtp_username,
-                aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, sort_order
-             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                aliases_json, auth_method, signature, signature_html, color, default_body_format, bridge_certificate, provider_id, sort_order
+             ) VALUES (?1, ?2, ?3, ?4, 'idle', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts))",
             params![
                 account.summary.id,
@@ -155,6 +170,7 @@ impl Database {
                 account.summary.color,
                 account.summary.default_body_format.as_str(),
                 account.imap.trusted_certificate,
+                provider_id,
             ],
         )
         .map_err(|error| {

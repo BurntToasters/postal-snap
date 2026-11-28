@@ -1,4 +1,3 @@
-use chrono::Utc;
 use futures_util::TryStreamExt;
 use mail_parser::{MessageParser, MimeHeaders};
 
@@ -12,6 +11,7 @@ use super::{
     RemoteDraftSnapshot, IMAP_COMMAND_TIMEOUT, MAX_ATTACHMENTS, MAX_MESSAGE_BYTES, MAX_MIME_PARTS,
 };
 use crate::{
+    date_time::{format_rfc3339, now_utc},
     models::AccountRecord,
     security::{redact_error, safe_filename},
 };
@@ -51,7 +51,7 @@ pub async fn upsert_remote_draft(
     let mut matching = search_message_id(&mut session, message_id, "Draft synchronization").await?;
     if matching.is_empty() {
         tokio::time::timeout(
-            IMAP_COMMAND_TIMEOUT,
+            super::send::append_timeout(bytes.len()),
             session.append(&wire_mailbox, Some("(\\Draft)"), None, bytes),
         )
         .await
@@ -242,9 +242,17 @@ pub async fn fetch_remote_drafts(
             }
             let updated_at = row
                 .internal_date()
-                .map(|date| date.with_timezone(&Utc).to_rfc3339())
-                .unwrap_or_else(|| Utc::now().to_rfc3339());
-            if let Ok(draft) = parse_remote_draft(uid, raw, updated_at) {
+                .and_then(|date| date.checked_to_offset(time::UtcOffset::UTC))
+                .map(format_rfc3339)
+                .unwrap_or_else(|| format_rfc3339(now_utc()));
+            let raw_owned = raw.to_vec();
+            let parsed = tokio::task::spawn_blocking(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    parse_remote_draft(uid, &raw_owned, updated_at)
+                }))
+            })
+            .await;
+            if let Ok(Ok(Ok(draft))) = parsed {
                 drafts.push(draft);
             }
         }
@@ -295,6 +303,17 @@ pub(crate) fn parse_remote_draft(
             }
         })
         .collect();
+    let has_html = message.html_body.iter().any(|&id| {
+        matches!(
+            message.part(id).map(|part| &part.body),
+            Some(mail_parser::PartType::Html(_))
+        )
+    });
+    let raw_html = if has_html {
+        message.body_html(0).map(|body| body.into_owned())
+    } else {
+        None
+    };
     Ok(RemoteDraftData {
         uid,
         message_id: message.message_id().and_then(normalize_rfc_message_id),
@@ -309,12 +328,10 @@ pub(crate) fn parse_remote_draft(
         cc: parsed_addresses(message.cc()),
         bcc: parsed_addresses(message.bcc()),
         subject: message.subject().unwrap_or_default().to_string(),
-        html_body: crate::html_sanitize::sanitize_compose_html(
-            &message
-                .body_html(0)
-                .map(|body| body.into_owned())
-                .unwrap_or_default(),
-        ),
+        has_html,
+        html_body: raw_html
+            .map(|html| crate::html_sanitize::sanitize_compose_html(&html))
+            .unwrap_or_default(),
         text_body: message
             .body_text(0)
             .map(|body| body.into_owned())
@@ -379,4 +396,20 @@ pub fn extract_attachment(raw: &[u8], requested_id: &str) -> Result<(String, Vec
         }
     }
     Err("Attachment not found.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_draft;
+
+    // Failure modes:
+    // 1. Plain-text remote draft claims has_html=true so Composer forces HTML mode.
+    #[test]
+    fn plain_text_remote_draft_keeps_has_html_false() {
+        let raw = b"From: sam@example.com\r\nTo: jane@example.com\r\nSubject: Plain draft\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello plain world.\r\n";
+        let parsed = parse_remote_draft(1, raw, "2026-10-01T00:00:00Z".into()).unwrap();
+        assert!(!parsed.has_html);
+        assert!(parsed.html_body.is_empty());
+        assert_eq!(parsed.text_body.trim(), "Hello plain world.");
+    }
 }

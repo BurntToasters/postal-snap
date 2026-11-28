@@ -122,6 +122,42 @@ test("replaceMetainfoReleaseVersion updates only the newest AppStream release", 
   );
 });
 
+test("version sync keeps authored release details attached to their version", () => {
+  const xml = `<releases>
+    <release version="0.5.0" date="2026-10-21">
+      <description><p>Postal Snap 0.5.0 release notes.</p></description>
+    </release>
+    <release version="0.4.1" date="2026-10-14" />
+  </releases>`;
+  const updated = replaceMetainfoReleaseVersion(
+    xml,
+    "0.5.4-beta.1",
+    "2026-11-25",
+  );
+  assert.equal(
+    updated,
+    `<releases>
+    <release version="0.5.4-beta.1" date="2026-11-25" />
+    <release version="0.5.0" date="2026-10-21">
+      <description><p>Postal Snap 0.5.0 release notes.</p></description>
+    </release>
+    <release version="0.4.1" date="2026-10-14" />
+  </releases>`,
+  );
+  assert.equal(
+    replaceMetainfoReleaseVersion(updated, "0.5.4-beta.1", "2099-01-01"),
+    updated,
+    "rerunning version sync must preserve the placeholder and authored notes",
+  );
+
+  const compact = `<releases><release version="0.5.0" date="2026-10-16"><description><p>Postal Snap 0.5.0 release notes.</p></description></release></releases>`;
+  assert.equal(
+    replaceMetainfoReleaseVersion(compact, "0.5.4-beta.2", "2026-11-25"),
+    `<releases><release version="0.5.4-beta.2" date="2026-11-25" /><release version="0.5.0" date="2026-10-16"><description><p>Postal Snap 0.5.0 release notes.</p></description></release></releases>`,
+    "compact release markup must still receive a sibling placeholder",
+  );
+});
+
 test("replaceChangelogDownloadVersions rewrites only the download table", () => {
   const changelog = `# Downloads
 [exe](https://github.com/BurntToasters/postal-snap/releases/download/v0.1.8/Postal-Snap-Windows-x64.exe)

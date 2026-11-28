@@ -7,8 +7,10 @@ use std::fmt;
 pub enum FailureKind {
     /// The server answered the sign-in with NO or BAD.
     SignInRejected,
-    /// Timeout, refused or dropped connection, or failed TLS.
+    /// Timeout or refused/dropped connection.
     Connection,
+    /// TLS certificate verification or trust failed.
+    Certificate,
     /// Over a safety size limit.
     TooLarge,
     /// The message cannot be parsed safely and stays quarantined.
@@ -34,6 +36,10 @@ impl MailError {
 
     pub fn connection(message: impl Into<String>) -> Self {
         Self::new(FailureKind::Connection, message)
+    }
+
+    pub fn certificate(message: impl Into<String>) -> Self {
+        Self::new(FailureKind::Certificate, message)
     }
 
     pub fn local_storage(message: impl Into<String>) -> Self {
@@ -71,6 +77,11 @@ impl From<MailError> for crate::models::IpcError {
             FailureKind::Connection => (
                 "connectionFailed",
                 "Could not reach the mail server. Check your connection.",
+                true,
+            ),
+            FailureKind::Certificate => (
+                "certificateFailed",
+                "Certificate verification failed. Check the trusted server certificate.",
                 true,
             ),
             FailureKind::TooLarge => (
@@ -113,7 +124,9 @@ pub fn login_failure_kind(error: &async_imap::error::Error) -> FailureKind {
 /// failure is unexpected and is reported as an error.
 pub fn body_status(error: &MailError) -> Option<&'static str> {
     match error.kind {
-        FailureKind::Connection | FailureKind::LocalStorage => Some("offline"),
+        FailureKind::Connection | FailureKind::Certificate | FailureKind::LocalStorage => {
+            Some("offline")
+        }
         FailureKind::SignInRejected => Some("signInNeeded"),
         FailureKind::TooLarge => Some("tooLarge"),
         FailureKind::Unreadable => Some("unreadable"),
@@ -188,5 +201,15 @@ mod tests {
         assert_eq!(text, "Exact words.");
         let other: MailError = String::from("From a helper.").into();
         assert_eq!(other.kind, FailureKind::Other);
+    }
+
+    // Failure modes:
+    // 1. A TLS certificate failure collapses into connectionFailed instead of certificateFailed.
+    #[test]
+    fn certificate_failure_maps_to_certificate_failed_ipc_code() {
+        let error: crate::models::IpcError =
+            MailError::new(FailureKind::Certificate, "Certificate verification failed.").into();
+        assert_eq!(error.code, "certificateFailed");
+        assert!(error.retryable);
     }
 }

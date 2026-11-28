@@ -111,14 +111,19 @@ export function AttachmentPreviewDialog({
             event.preventDefault();
             stepFile(onNext);
           }
+          const zoomable = Boolean(
+            preview.imageDataUrl || (preview.pages && preview.pages.length > 0),
+          );
+          const unchorded = !event.metaKey && !event.ctrlKey && !event.altKey;
           if (
-            preview.imageDataUrl &&
+            zoomable &&
+            unchorded &&
             (event.key === "+" || event.key === "=")
           ) {
             event.preventDefault();
             setZoom(nextPreviewZoom(zoom, 1));
           }
-          if (preview.imageDataUrl && event.key === "-") {
+          if (zoomable && unchorded && event.key === "-") {
             event.preventDefault();
             setZoom(nextPreviewZoom(zoom, -1));
           }
@@ -129,6 +134,9 @@ export function AttachmentPreviewDialog({
             <h2 title={preview.filename}>{preview.filename}</h2>
             <small>
               {fileKind(preview.contentType)} · {formatBytes(preview.size)}
+              {preview.pages && preview.pages.length > 0
+                ? ` · ${strings.reader.pdfPages(preview.pageCount ?? preview.pages.length)}`
+                : ""}
             </small>
           </div>
           <button
@@ -154,12 +162,17 @@ export function AttachmentPreviewDialog({
               }
             />
           ) : preview.pages && preview.pages.length > 0 ? (
-            <div className="pdf-pages">
+            <div className="pdf-pages" data-zoom={zoom}>
               {preview.pages.map((url, index) =>
                 isPageImage(url) ? (
                   <img
                     key={index}
                     src={url}
+                    style={
+                      zoom > 1
+                        ? { width: `${zoom * 100}%`, maxWidth: "none" }
+                        : undefined
+                    }
                     alt={strings.reader.pdfPageAlt(
                       index + 1,
                       preview.pageCount ?? preview.pages?.length ?? 0,
@@ -176,7 +189,8 @@ export function AttachmentPreviewDialog({
           )}
         </div>
         <footer>
-          {preview.imageDataUrl ? (
+          {preview.imageDataUrl ||
+          (preview.pages && preview.pages.length > 0) ? (
             <>
               <button
                 type="button"
@@ -194,6 +208,15 @@ export function AttachmentPreviewDialog({
               >
                 <ZoomIn aria-hidden="true" /> {strings.reader.zoomIn}
               </button>
+              {zoom !== 1 ? (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setZoom(1)}
+                >
+                  {strings.reader.zoomReset}
+                </button>
+              ) : null}
             </>
           ) : null}
           {onPrevious ? (

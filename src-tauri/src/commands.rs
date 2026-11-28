@@ -38,11 +38,12 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedMutexGuard};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
+    date_time::{now_utc, parse_rfc3339},
     db::Database,
     mail,
     models::{
-        normalize_setup_password, validate_compose_draft, validate_compose_sender, AccountRecord,
-        CachePolicy, ComposeDraft, IpcError, SyncState,
+        validate_compose_draft, validate_compose_sender, AccountRecord, CachePolicy, ComposeDraft,
+        IpcError, SyncState,
     },
     oauth,
     settings::SettingsStore,
@@ -67,9 +68,14 @@ fn refresh_mail_menu(app: &AppHandle, state: &AppState) {
 
 fn take_normalized_account_password(
     provider: &crate::models::ProviderKind,
+    provider_id: Option<&str>,
     mut password: Zeroizing<String>,
 ) -> Result<Zeroizing<String>, IpcError> {
-    let normalized = Zeroizing::new(normalize_setup_password(provider, &password));
+    let normalized = Zeroizing::new(crate::models::normalize_setup_password_for(
+        provider,
+        provider_id,
+        &password,
+    ));
     password.zeroize();
     if normalized.is_empty() || normalized.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
@@ -553,6 +559,20 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
     // Created first so the `else return` below still retires the
     // registration; the watcher handle is registered right after the spawn.
     let mut cleanup = WorkerCleanup::for_account(app, account_id);
+    let initial_attention = app
+        .state::<AppState>()
+        .db
+        .offline_operations_needing_attention(account_id)
+        .unwrap_or(0);
+    if initial_attention > 0 {
+        let _ = app.emit(
+            "offline-operations-dropped",
+            OfflineOperationsDropped {
+                account_id: account_id.into(),
+                count: initial_attention,
+            },
+        );
+    }
     let mut backoff = 2u64;
     let mut attempt = 0u32;
     let mut first_pass = true;
@@ -609,7 +629,6 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             // quick and leaves backfill to the next full pass.
             let quick = scope != mail::sync::SyncScope::All;
             let full_scope = !quick;
-            let previous_message_id = state.db.inbox_high_water(account_id).ok().flatten();
             match sync::run_sync_pass(
                 account_id,
                 app,
@@ -629,15 +648,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                     attempt = 0;
                     pending_full = false;
                     more_work = outcome.more_work;
-                    if !first_pass {
-                        crate::notify::notify_new_mail(
-                            app,
-                            &state.db,
-                            account_id,
-                            previous_message_id,
-                            &outcome.rule_notify_suppressed_ids,
-                        );
-                    }
+                    crate::notify::notify_new_mail(app, &state.db, account_id, !first_pass);
                     first_pass = false;
                 }
                 Err(sync::PassError::AuthenticationFailed(_)) => {
@@ -681,6 +692,17 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             Ok(password) => password,
             Err(error) => {
                 drop(guard);
+                if account.summary.auth_method == "password" && error.contains("is missing") {
+                    let detail =
+                        "Sign-in failed. Update the account password in Settings > Accounts.";
+                    let _ = state
+                        .db
+                        .set_account_state(account_id, "authFailed", Some(detail));
+                    emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                    parked = true;
+                    more_work = false;
+                    continue;
+                }
                 let detail = if account.summary.auth_method == "oauth" {
                     error
                 } else {
@@ -707,12 +729,16 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             .next_scheduled_send_at(account_id)
             .ok()
             .flatten()
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
-            .map(|when| {
-                (when.with_timezone(&chrono::Utc) - chrono::Utc::now())
-                    .to_std()
-                    .unwrap_or(Duration::ZERO)
-            });
+            .and_then(|value| parse_rfc3339(&value).ok())
+            .map(|when| std::time::Duration::try_from(when - now_utc()).unwrap_or(Duration::ZERO));
+        let next_retry = state
+            .db
+            .next_retry_after(account_id)
+            .ok()
+            .flatten()
+            .and_then(|value| parse_rfc3339(&value).ok())
+            .map(|when| std::time::Duration::try_from(when - now_utc()).unwrap_or(Duration::ZERO));
+        let next_outbox = [next_send, next_retry].into_iter().flatten().min();
         // Autosave does not wake the worker; push pending drafts after a
         // short quiet period instead of on every keystroke-driven save.
         let drafts_pending = state
@@ -722,7 +748,7 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
         let deferred_due = state.db.next_deferred_due(account_id).ok().flatten();
         let folder_due = state.visible_folder_due(account_id);
         let next_job = [
-            next_send,
+            next_outbox,
             drafts_pending.then_some(DRAFT_PUSH_DELAY),
             deferred_due,
             folder_due,
@@ -755,13 +781,13 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
                 _ = tokio::time::sleep(limit) => Ok(mail::IdleOutcome::Timeout),
             }
         } else {
-            mail::idle_inbox(&account, &password, &actor.wake, limit).await
+            mail::idle_inbox(&state.db, &account, &password, &actor.wake, limit).await
         };
         match outcome {
             Ok(mail::IdleOutcome::Changed) => pending_full = true,
             Ok(mail::IdleOutcome::Timeout) if job_due_first => {
                 let mut jobs = 0;
-                if next_send.is_some_and(|due| due <= limit) {
+                if next_outbox.is_some_and(|due| due <= limit) {
                     jobs |= wake::OUTBOX;
                 }
                 if drafts_pending {
@@ -777,8 +803,20 @@ async fn run_account_worker(account_id: &str, app: &AppHandle) {
             }
             Ok(mail::IdleOutcome::Timeout) => pending_full = true,
             Ok(mail::IdleOutcome::Interrupted) => {}
-            Err(_) => {
+            Err(error) => {
                 held.take();
+                if error.kind == mail::failure::FailureKind::SignInRejected {
+                    mail::pool::forget(account_id);
+                    let detail =
+                        "Sign-in failed. Update the account password in Settings > Accounts.";
+                    let _ = state
+                        .db
+                        .set_account_state(account_id, "authFailed", Some(detail));
+                    emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                    parked = true;
+                    more_work = false;
+                    continue;
+                }
                 let _ = state.db.set_account_state(
                     account_id,
                     "offline",
@@ -973,6 +1011,50 @@ fn move_replay_flag_dependencies(
     dependencies
 }
 
+fn move_replay_blocking_dependencies(
+    operations: &[(i64, String, String)],
+    movement: &MoveOperation,
+    move_operation_id: i64,
+) -> Vec<i64> {
+    let Some(uid_validity) = movement.uid_validity else {
+        return Vec::new();
+    };
+    operations
+        .iter()
+        .filter(|(id, _, _)| *id < move_operation_id)
+        .filter_map(|(id, kind, payload)| {
+            let same_identity = match kind.as_str() {
+                "flags" => serde_json::from_str::<FlagOperation>(payload)
+                    .ok()
+                    .is_some_and(|operation| {
+                        operation.message_id == movement.message_id
+                            && operation.mailbox == movement.source
+                            && operation.uid == movement.uid
+                            && operation.uid_validity == Some(uid_validity)
+                    }),
+                "copy" => serde_json::from_str::<MoveOperation>(payload)
+                    .ok()
+                    .is_some_and(|operation| {
+                        operation.message_id == movement.message_id
+                            && operation.source == movement.source
+                            && operation.uid == movement.uid
+                            && operation.uid_validity == Some(uid_validity)
+                    }),
+                "keyword" => serde_json::from_str::<replied::KeywordOperation>(payload)
+                    .ok()
+                    .is_some_and(|operation| {
+                        operation.message_id == movement.message_id
+                            && operation.mailbox == movement.source
+                            && operation.uid == movement.uid
+                            && operation.uid_validity == Some(uid_validity)
+                    }),
+                _ => false,
+            };
+            same_identity.then_some(*id)
+        })
+        .collect()
+}
+
 /// Validate a queued operation against current local ownership and mailbox
 /// identity before any network call. Stale operations are removed; the
 /// decisions are DB-level and covered by tests without a mail server.
@@ -1091,6 +1173,8 @@ enum ReplayPlanKind {
         attempts: i64,
         /// A queued flag change for the same message replays first.
         has_flag_dependencies: bool,
+        /// Earlier copy or keyword intent must settle before this move.
+        has_blocking_dependencies: bool,
     },
     Other,
 }
@@ -1116,6 +1200,18 @@ fn replay_candidates(operations: &[(i64, String, String, i64)]) -> Vec<ReplayCan
         .filter_map(|(_, _, payload, _)| serde_json::from_str::<FlagOperation>(payload).ok())
         .map(|operation| operation.message_id)
         .collect();
+    let blocking_messages: HashSet<i64> = operations
+        .iter()
+        .filter_map(|(_, kind, payload, _)| match kind.as_str() {
+            "copy" => serde_json::from_str::<MoveOperation>(payload)
+                .ok()
+                .map(|operation| operation.message_id),
+            "keyword" => serde_json::from_str::<replied::KeywordOperation>(payload)
+                .ok()
+                .map(|operation| operation.message_id),
+            _ => None,
+        })
+        .collect();
     operations
         .iter()
         .map(|(id, kind, payload, attempts)| {
@@ -1137,6 +1233,8 @@ fn replay_candidates(operations: &[(i64, String, String, i64)]) -> Vec<ReplayCan
                         operation.message_id,
                         ReplayPlanKind::Move {
                             has_flag_dependencies: flagged_messages.contains(&operation.message_id),
+                            has_blocking_dependencies: blocking_messages
+                                .contains(&operation.message_id),
                             source: operation.source,
                             destination: operation.destination,
                             uid_validity: operation.uid_validity,
@@ -1167,12 +1265,14 @@ fn replay_batchable(candidate: &ReplayCandidate, caps: ReplayBatchCaps) -> bool 
             uid_validity,
             attempts,
             has_flag_dependencies,
+            has_blocking_dependencies,
         } => {
             caps.move_supported
                 && uid_validity.is_some()
                 && source != destination
                 && *attempts == 0
                 && !has_flag_dependencies
+                && !has_blocking_dependencies
         }
         ReplayPlanKind::Other => false,
     }
@@ -1316,6 +1416,7 @@ async fn replay_move_batch(
 ) -> Result<bool, String> {
     let account_id = &account.summary.id;
     let queued = db.queued_operations(account_id)?;
+    let barriers = db.replay_source_barrier_operations(account_id)?;
     let mut operations = Vec::with_capacity(group.len());
     for (id, kind, payload) in group {
         let ValidatedReplay::Move(operation) =
@@ -1328,6 +1429,7 @@ async fn replay_move_batch(
             || !move_replay_flag_dependencies(&queued, &operation)
                 .operation_ids
                 .is_empty()
+            || !move_replay_blocking_dependencies(&barriers, &operation, *id).is_empty()
         {
             return Ok(false);
         }
@@ -1395,24 +1497,24 @@ fn land_pending_snoozes(db: &Database, account_id: &str, destination: &str) {
     }
 }
 
-/// Transient replay failures before an offline op is retired.
+/// Transient replay failures before an offline op requires attention.
 const MAX_OFFLINE_OP_ATTEMPTS: i64 = 10;
 
 /// `attempts` counts failures before this one, so this failure records
-/// attempt `attempts + 1`. Reaching the cap retires the op.
-fn should_drop_after_transient(attempts: i64) -> bool {
+/// attempt `attempts + 1`. The cap preserves the row outside automatic replay.
+fn should_need_attention_after_transient(attempts: i64) -> bool {
     attempts.saturating_add(1) >= MAX_OFFLINE_OP_ATTEMPTS
 }
 
-/// Records a transient failure, or retires the op at the cap. True when retired.
+/// Records a transient failure, or moves it to attention. True at the cap.
 fn record_transient_failure(
     db: &Database,
     account_id: &str,
     id: i64,
     attempts: i64,
 ) -> Result<bool, String> {
-    if should_drop_after_transient(attempts) {
-        db.remove_operation(account_id, id)?;
+    if should_need_attention_after_transient(attempts) {
+        db.mark_operation_needs_attention(account_id, id)?;
         return Ok(true);
     }
     let _ = db.record_operation_attempt(account_id, id);
@@ -1558,6 +1660,10 @@ async fn replay_offline_operations_with_notification(
                     dropped = dropped.saturating_add(1);
                     continue;
                 }
+                let barriers = db.replay_source_barrier_operations(account_id)?;
+                if !move_replay_blocking_dependencies(&barriers, &operation, id).is_empty() {
+                    continue;
+                }
                 let dependencies =
                     move_replay_flag_dependencies(&db.queued_operations(account_id)?, &operation);
                 let keywords_permitted = db
@@ -1685,7 +1791,11 @@ async fn replay_offline_operations_with_notification(
                         land_pending_snoozes(db, account_id, &operation.destination);
                     }
                     Err(error) => {
-                        if error.terminal {
+                        if error.needs_attention {
+                            db.mark_operation_needs_attention(account_id, id)?;
+                            let _ = db.clear_pending_move(operation.message_id);
+                            dropped = dropped.saturating_add(1);
+                        } else if error.terminal {
                             for flag_id in dependencies.operation_ids {
                                 db.remove_operation(account_id, flag_id)?;
                                 flag_state.handled.insert(flag_id);
@@ -1699,8 +1809,8 @@ async fn replay_offline_operations_with_notification(
                             }
                             // Transient failure: keep the queued op and the
                             // pending-move hiding so a later sync retries it.
-                            // At the cap the move is retired, and its hiding
-                            // is cleared with it.
+                            // At the cap the move waits for attention, and its
+                            // temporary hiding is cleared.
                             let attempts = attempts_by_id.get(&id).copied().unwrap_or(0);
                             if record_transient_failure(db, account_id, id, attempts)? {
                                 let _ = db.clear_pending_move(operation.message_id);
@@ -1727,7 +1837,10 @@ async fn replay_offline_operations_with_notification(
                 )
                 .await;
                 if let Err(error) = result {
-                    if error.terminal {
+                    if error.needs_attention {
+                        db.mark_operation_needs_attention(account_id, id)?;
+                        dropped = dropped.saturating_add(1);
+                    } else if error.terminal {
                         db.remove_operation(account_id, id)?;
                         dropped = dropped.saturating_add(1);
                     } else {
@@ -1759,7 +1872,8 @@ async fn replay_offline_operations_with_notification(
             },
         );
     }
-    Ok(!db.queued_operations(account_id)?.is_empty())
+    Ok(!db.queued_operations(account_id)?.is_empty()
+        || db.offline_operations_needing_attention(account_id)? > 0)
 }
 
 fn resolve_draft_files(db: &Database, draft: &ComposeDraft) -> Result<ComposeDraft, String> {
@@ -1950,6 +2064,7 @@ async fn release_attachment_tokens<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::date_time::{format_rfc3339, now_utc};
     // Get Mail stall failure modes:
     // - a Get Mail pass yields to the worker only because the worker waits
     //   for the lock, and the worker then IDLEs holding it (up to 300s);
@@ -2221,6 +2336,10 @@ mod tests {
                 default_body_format: crate::models::BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -2327,12 +2446,14 @@ mod tests {
         let pending = |db: &Database| db.pending_move_uids(inbox).unwrap();
 
         let first = begin_rule_window(&db, &account_id);
-        bill(&db, &account_id, inbox, 1);
+        let one = bill(&db, &account_id, inbox, 1);
+        db.record_new_mail_arrival(&account_id, one).unwrap();
         finish_rule_window(&db, &account, first, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
         let second = begin_rule_window(&db, &account_id);
-        bill(&db, &account_id, inbox, 2);
+        let two = bill(&db, &account_id, inbox, 2);
+        db.record_new_mail_arrival(&account_id, two).unwrap();
         finish_rule_window(&db, &account, second, false, &mut |_| {});
         assert!(pending(&db).is_empty());
 
@@ -2360,7 +2481,8 @@ mod tests {
             .unwrap();
         let first = begin_rule_window(&db, account_id);
         assert_eq!(db.rules_pending_from(account_id).unwrap(), first);
-        bill(&db, account_id, inbox, 1);
+        let id = bill(&db, account_id, inbox, 1);
+        db.record_new_mail_arrival(account_id, id).unwrap();
         let restarted = begin_rule_window(&db, account_id);
         assert_eq!(restarted, first);
         finish_rule_window(&db, &account, restarted, true, &mut |_| {});
@@ -2381,12 +2503,36 @@ mod tests {
             .unwrap();
         let first = begin_rule_window(&db, account_id);
         for uid in 1..=101 {
-            bill(&db, account_id, inbox, uid);
+            let id = bill(&db, account_id, inbox, uid);
+            db.record_new_mail_arrival(account_id, id).unwrap();
         }
         finish_rule_window(&db, &account, first, true, &mut |_| {});
         let second = begin_rule_window(&db, account_id);
         finish_rule_window(&db, &account, second, true, &mut |_| {});
         assert_eq!(db.pending_move_uids(inbox).unwrap().len(), 101);
+        assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
+    }
+
+    #[test]
+    fn retained_rule_window_does_not_repeat_a_notify_action() {
+        use super::sync::{begin_rule_window, finish_rule_window};
+        let db = Database::memory();
+        let account = rule_account();
+        let account_id = &account.summary.id;
+        db.insert_account(&account).unwrap();
+        let inbox = rule_mailbox(&db, account_id, "INBOX", &MailboxRole::Inbox);
+        db.create_filter_rule(&enabled_rule(account_id, "notify"))
+            .unwrap();
+        let window = begin_rule_window(&db, account_id);
+        for uid in 1..=100 {
+            let id = bill(&db, account_id, inbox, uid);
+            db.record_new_mail_arrival(account_id, id).unwrap();
+        }
+        let mut notices = Vec::new();
+        finish_rule_window(&db, &account, window, true, &mut |id| notices.push(id));
+        let retained = begin_rule_window(&db, account_id);
+        finish_rule_window(&db, &account, retained, true, &mut |id| notices.push(id));
+        assert_eq!(notices.len(), 1);
         assert_eq!(db.rules_pending_from(account_id).unwrap(), None);
     }
 
@@ -2511,6 +2657,7 @@ mod tests {
     fn update_password_keeps_the_normalized_secret() {
         let secret = take_normalized_account_password(
             &ProviderKind::Icloud,
+            None,
             zeroize::Zeroizing::new("  family-secret  ".into()),
         )
         .expect("normalized password");
@@ -2796,9 +2943,9 @@ mod tests {
         assert_eq!(resolve_requested_send_at(Some("   ")).unwrap(), None);
         assert!(resolve_requested_send_at(Some("tomorrow-ish")).is_err());
         assert!(resolve_requested_send_at(Some("2000-01-01T00:00:00Z")).is_err());
-        let far = (chrono::Utc::now() + chrono::Duration::days(366)).to_rfc3339();
+        let far = format_rfc3339(now_utc() + time::Duration::days(366));
         assert!(resolve_requested_send_at(Some(&far)).is_err());
-        let soon = (chrono::Utc::now() + chrono::Duration::hours(3)).to_rfc3339();
+        let soon = format_rfc3339(now_utc() + time::Duration::hours(3));
         let resolved = resolve_requested_send_at(Some(&soon)).unwrap().unwrap();
         assert!(resolved.contains("T"));
     }
@@ -3579,6 +3726,7 @@ mod tests {
                 uid_validity: Some(7),
                 attempts,
                 has_flag_dependencies: false,
+                has_blocking_dependencies: false,
             },
         }
     }
@@ -3746,6 +3894,7 @@ mod tests {
             candidates[2].kind,
             ReplayPlanKind::Move {
                 has_flag_dependencies: false,
+                has_blocking_dependencies: false,
                 attempts: 0,
                 ..
             }
@@ -3757,32 +3906,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn replay_moves_wait_for_copy_and_keyword_intents_on_the_same_message() {
+        let movement =
+            r#"{"messageId":10,"uid":1,"source":"INBOX","destination":"Archive","uidValidity":7}"#;
+        let keyword =
+            r#"{"messageId":10,"uid":1,"mailbox":"INBOX","uidValidity":7,"keyword":"answered"}"#;
+        let operations = vec![
+            (1, "copy".to_string(), movement.to_string(), 0),
+            (2, "keyword".to_string(), keyword.to_string(), 0),
+            (3, "move".to_string(), movement.to_string(), 0),
+        ];
+        let candidates = replay_candidates(&operations);
+        assert!(matches!(
+            candidates[2].kind,
+            ReplayPlanKind::Move {
+                has_blocking_dependencies: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            plan_replay_batches(&candidates, MOVE_CAPABLE),
+            vec![vec![0], vec![1], vec![2]]
+        );
+    }
+
     // Attempt cap failure modes for offline replay:
     // 1. The first transient failures keep the op queued.
-    // 2. The failure that would record the cap retires the op, not just counts it.
-    // 3. A huge attempt count overflows instead of retiring.
-    // 4. The DB helper leaves the row queued below the cap, and removes it at the cap.
+    // 2. The failure at the cap preserves the intent as needs_attention.
+    // 3. A huge attempt count cannot overflow.
+    // 4. The durable row leaves the automatic replay set until the user retries it.
     #[test]
     fn attempt_cap_keeps_the_op_below_the_cap() {
-        use super::should_drop_after_transient;
+        use super::should_need_attention_after_transient;
         for attempts in 0..(super::MAX_OFFLINE_OP_ATTEMPTS - 1) {
             assert!(
-                !should_drop_after_transient(attempts),
+                !should_need_attention_after_transient(attempts),
                 "attempts {attempts}"
             );
         }
     }
 
     #[test]
-    fn attempt_cap_retires_the_failure_that_reaches_it() {
-        use super::{should_drop_after_transient, MAX_OFFLINE_OP_ATTEMPTS};
-        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS - 1));
-        assert!(should_drop_after_transient(MAX_OFFLINE_OP_ATTEMPTS));
-        assert!(should_drop_after_transient(i64::MAX));
+    fn attempt_cap_blocks_the_failure_that_reaches_it() {
+        use super::{should_need_attention_after_transient, MAX_OFFLINE_OP_ATTEMPTS};
+        assert!(should_need_attention_after_transient(
+            MAX_OFFLINE_OP_ATTEMPTS - 1
+        ));
+        assert!(should_need_attention_after_transient(
+            MAX_OFFLINE_OP_ATTEMPTS
+        ));
+        assert!(should_need_attention_after_transient(i64::MAX));
     }
 
     #[test]
-    fn transient_failure_counts_until_the_cap_then_drops_the_op() {
+    fn transient_failure_counts_until_the_cap_then_preserves_attention() {
         use super::{record_transient_failure, MAX_OFFLINE_OP_ATTEMPTS};
         let db = Database::memory();
         let account = rule_account();
@@ -3809,6 +3987,10 @@ mod tests {
             .remove(0);
         assert!(record_transient_failure(&db, account_id, id, attempts).unwrap());
         assert!(db.queued_operations(account_id).unwrap().is_empty());
+        assert_eq!(
+            db.offline_operations_needing_attention(account_id).unwrap(),
+            1
+        );
     }
 
     // Rule notify gating and flag-batch fallback failure modes:
@@ -3846,6 +4028,7 @@ mod tests {
 
         let startup_watermark = begin_rule_window(&db, account_id);
         let first_id = bill(&db, account_id, inbox, 1);
+        db.record_new_mail_arrival(account_id, first_id).unwrap();
         let mut notices = Vec::new();
         let suppressed =
             finish_sync_rule_window(&db, &account, startup_watermark, true, false, &mut |id| {
@@ -3865,6 +4048,8 @@ mod tests {
         let later_watermark = begin_rule_window(&db, account_id);
         let second_id = bill(&db, account_id, inbox, 2);
         let third_id = bill(&db, account_id, inbox, 3);
+        db.record_new_mail_arrival(account_id, second_id).unwrap();
+        db.record_new_mail_arrival(account_id, third_id).unwrap();
         let suppressed =
             finish_sync_rule_window(&db, &account, later_watermark, true, true, &mut |id| {
                 notices.push(id);

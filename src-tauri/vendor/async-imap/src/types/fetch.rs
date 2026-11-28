@@ -1,17 +1,54 @@
 use std::borrow::Cow;
 
-use chrono::{DateTime, FixedOffset};
 use imap_proto::types::{
     AttributeValue, BodyStructure, Envelope, MessageSection, Response, SectionPath,
 };
+use time::OffsetDateTime;
+
+const INTERNAL_DATE_SPACE_PADDED: time::format_description::StaticFormatDescription =
+    time::macros::format_description!("[day padding:space]-[month repr:short]-[year] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]");
+const INTERNAL_DATE_ZERO_PADDED: time::format_description::StaticFormatDescription =
+    time::macros::format_description!("[day padding:zero]-[month repr:short]-[year] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]");
 
 use super::{Flag, Seq, Uid};
 use crate::types::ResponseData;
 
-/// Format of Date and Time as defined RFC3501.
-/// See `date-time` element in [Formal Syntax](https://tools.ietf.org/html/rfc3501#section-9)
-/// chapter of this RFC.
-const DATE_TIME_FORMAT: &str = "%d-%b-%Y %H:%M:%S %z";
+fn parse_internal_date(value: &str) -> Option<OffsetDateTime> {
+    let normalized = normalize_internal_date(value)?;
+    if let Ok(parsed) = OffsetDateTime::parse(&normalized, &INTERNAL_DATE_SPACE_PADDED) {
+        return Some(parsed);
+    }
+    OffsetDateTime::parse(&normalized, &INTERNAL_DATE_ZERO_PADDED).ok()
+}
+
+fn normalize_internal_date(value: &str) -> Option<String> {
+    let value = value.trim_start_matches(' ');
+    let date_end = value.find(' ')?;
+    let (date, rest) = value.split_at(date_end);
+    let mut parts = date.split('-');
+    let day = parts.next()?.parse::<u8>().ok()?;
+    let month = parts.next()?;
+    let year = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let month = match month.to_ascii_lowercase().as_str() {
+        "jan" => "Jan",
+        "feb" => "Feb",
+        "mar" => "Mar",
+        "apr" => "Apr",
+        "may" => "May",
+        "jun" => "Jun",
+        "jul" => "Jul",
+        "aug" => "Aug",
+        "sep" => "Sep",
+        "oct" => "Oct",
+        "nov" => "Nov",
+        "dec" => "Dec",
+        _ => return None,
+    };
+    Some(format!("{day:>2}-{month}-{year}{rest}"))
+}
 
 /// An IMAP [`FETCH` response](https://tools.ietf.org/html/rfc3501#section-7.4.2) that contains
 /// data about a particular message.
@@ -198,7 +235,7 @@ impl Fetch {
     ///
     /// See [section 2.3.3 of RFC 3501](https://tools.ietf.org/html/rfc3501#section-2.3.3) for
     /// details.
-    pub fn internal_date(&self) -> Option<DateTime<FixedOffset>> {
+    pub fn internal_date(&self) -> Option<OffsetDateTime> {
         if let Response::Fetch(_, attrs) = self.response.parsed() {
             attrs
                 .iter()
@@ -207,7 +244,7 @@ impl Fetch {
                     _ => None,
                 })
                 .next()
-                .and_then(|date_time| DateTime::parse_from_str(date_time, DATE_TIME_FORMAT).ok())
+                .and_then(|date_time| parse_internal_date(date_time))
         } else {
             unreachable!()
         }
@@ -264,6 +301,49 @@ impl Fetch {
                 .next()
         } else {
             unreachable!()
+        }
+    }
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::{Fetch, ResponseData};
+    use bytes::BytesMut;
+    use time::format_description::well_known::Rfc3339;
+
+    fn fetch_with_internal_date(value: &str) -> Fetch {
+        let block = BytesMut::from(format!("* 1 FETCH (INTERNALDATE \"{value}\")\r\n").as_bytes());
+        let response = ResponseData::try_new(block, |bytes| -> std::io::Result<_> {
+            let (remaining, response) = imap_proto::parser::parse_response(bytes).unwrap();
+            assert!(remaining.is_empty());
+            Ok(response)
+        })
+        .unwrap();
+        Fetch::new(response)
+    }
+
+    #[test]
+    fn internal_date_accepts_space_and_zero_padded_days_with_offsets() {
+        for value in [" 7-Mar-2026 01:02:03 +0545", "07-Mar-2026 01:02:03 +0545"] {
+            assert_eq!(
+                fetch_with_internal_date(value)
+                    .internal_date()
+                    .unwrap()
+                    .format(&Rfc3339)
+                    .unwrap(),
+                "2026-03-07T01:02:03+05:45"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_date_rejects_impossible_or_malformed_dates() {
+        for value in [
+            "31-Feb-2026 01:02:03 +0000",
+            "7-Xyz-2026 01:02:03 +0000",
+            "7-Mar-2026 25:02:03 +0000",
+        ] {
+            assert!(fetch_with_internal_date(value).internal_date().is_none());
         }
     }
 }

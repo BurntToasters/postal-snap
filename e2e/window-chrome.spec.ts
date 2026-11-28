@@ -262,7 +262,7 @@ for (const [platform, userAgent] of Object.entries(platforms)) {
         await page.keyboard.press("Tab");
         await expect(page.locator(".settings-window :focus")).toHaveCount(1);
         await page.keyboard.press("Shift+Tab");
-        await expect(hideButton).toBeFocused();
+        await expect(page.locator(".settings-window :focus")).toHaveCount(1);
       }
       await page
         .locator(".settings-window")

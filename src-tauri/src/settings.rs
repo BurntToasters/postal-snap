@@ -741,7 +741,7 @@ fn read_bounded(path: &Path) -> Result<Option<String>, String> {
 fn backup_invalid(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+            let stamp = crate::date_time::format_compact_utc_seconds(crate::date_time::now_utc());
             let unique = format!("settings.json.corrupt-{stamp}-{}", uuid::Uuid::new_v4());
             let backup = path.with_file_name(unique);
             fs::rename(path, backup)

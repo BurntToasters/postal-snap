@@ -473,6 +473,16 @@ impl Database {
             .map_err(db_error)
     }
 
+    pub fn next_retry_after(&self, account_id: &str) -> Result<Option<String>, String> {
+        self.read_conn()?
+            .query_row(
+                "SELECT MIN(retry_after) FROM outbox WHERE account_id=?1 AND state='queued' AND retry_after IS NOT NULL",
+                [account_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)
+    }
+
     /// Move one row from `from_state` to `sending`. `from_state` must be the
     /// state the caller checked under the account lock: accepting any
     /// sendable state would let a stale caller resend a message another
@@ -717,6 +727,10 @@ mod tests {
                 default_body_format: BodyFormat::Html,
                 id: "account-1".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.com".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -1349,8 +1363,8 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        let due = chrono::DateTime::parse_from_rfc3339(&retry_after).unwrap();
-        (due.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds()
+        let due = crate::date_time::parse_rfc3339(&retry_after).unwrap();
+        (due - crate::date_time::now_utc()).whole_seconds()
     }
 
     #[test]
@@ -1382,5 +1396,36 @@ mod tests {
         assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
         assert!(db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
         assert!(!db.defer_outbox_retry(&fresh, &account_id, 3).unwrap());
+    }
+
+    // Failure modes:
+    // 1. next_retry_after misses queued retry_after or includes needs_attention rows.
+    #[test]
+    fn next_retry_after_returns_earliest_queued_retry_timestamp() {
+        let (db, account_id) = with_account();
+        let queued = db
+            .queue_outbox(&draft(), "queued", None, "<r1@e>", b"mail", None)
+            .unwrap();
+        let parked = db
+            .queue_outbox(&draft(), "needs_attention", None, "<r2@e>", b"mail", None)
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE outbox SET retry_after='2099-01-01T00:05:00+00:00' WHERE id=?1",
+                [&queued],
+            )
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE outbox SET retry_after='2098-01-01T00:00:00+00:00' WHERE id=?1",
+                [&parked],
+            )
+            .unwrap();
+        assert_eq!(
+            db.next_retry_after(&account_id).unwrap().as_deref(),
+            Some("2099-01-01T00:05:00+00:00")
+        );
     }
 }

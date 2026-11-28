@@ -24,6 +24,23 @@ export const RemoteImage = Image.extend({
               }
             : {},
       },
+      inlineContentId: {
+        default: null,
+        parseHTML: (element) => {
+          const marker = element.getAttribute("data-inline-content-id");
+          if (marker) return marker;
+          const source = element.getAttribute("src") ?? "";
+          return /^cid:/i.test(source)
+            ? source.slice(4).replace(/^<|>$/g, "")
+            : null;
+        },
+        renderHTML: (attributes) =>
+          attributes.inlineContentId
+            ? {
+                "data-inline-content-id": String(attributes.inlineContentId),
+              }
+            : {},
+      },
     };
   },
   addNodeView() {

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./coverage-fixture";
 import { attachArtifactsAfterEach, emitTauriEvent, ipcCalls } from "./ipc";
 import { installMockIpc } from "./mock-ipc";
 import { revealMenuItem } from "./menu-reveal";
@@ -455,65 +455,83 @@ test("C9 Expanded conversation header and ArrowLeft collapse even when newest me
   await expect(header).toHaveAttribute("aria-expanded", "false");
 });
 
-test("C10 All-day calendar invite formats accurately across DST transitions", async ({
-  browser,
-}) => {
-  const context = await browser.newContext({
-    timezoneId: "America/Los_Angeles",
-  });
-  const page = await context.newPage();
-  await installMockIpc(page);
-  await page.addInitScript(() => {
-    const mock = window.__POSTAL_SNAP_MOCK__ as {
-      handlers: Record<string, (args: Record<string, unknown>) => unknown>;
-    };
-    const baseGet = mock.handlers.get_message;
-    mock.handlers.get_message = (args) => {
-      const base = baseGet(args) as Record<string, unknown>;
-      if (args.messageId === 10) {
+test.describe("C10 DST invite timezone", () => {
+  test.use({ timezoneId: "America/Los_Angeles" });
+
+  test("C10 All-day calendar invite formats accurately across DST transitions", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const mock = window.__POSTAL_SNAP_MOCK__ as {
+        handlers: Record<string, (args: Record<string, unknown>) => unknown>;
+      };
+      const baseGet = mock.handlers.get_message;
+      mock.handlers.get_message = (args) => {
+        const base = baseGet(args) as Record<string, unknown>;
+        if (args.messageId === 10) {
+          return {
+            ...base,
+            invite: {
+              method: "REQUEST",
+              status: "CONFIRMED",
+              summary: "DST Fall Back Day",
+              start: {
+                iso: "2026-11-01",
+                allDay: true,
+                utc: false,
+                tzid: null,
+              },
+              end: {
+                iso: "2026-11-02",
+                allDay: true,
+                utc: false,
+                tzid: null,
+              },
+              location: null,
+              organizerName: "Sam",
+              organizerEmail: "sam@example.com",
+            },
+          };
+        }
         return {
           ...base,
           invite: {
             method: "REQUEST",
             status: "CONFIRMED",
-            summary: "DST Fall Back Day",
-            start: { iso: "2026-11-01", allDay: true, utc: false, tzid: null },
-            end: { iso: "2026-11-02", allDay: true, utc: false, tzid: null },
+            summary: "DST Spring Forward Range",
+            start: {
+              iso: "2026-03-07",
+              allDay: true,
+              utc: false,
+              tzid: null,
+            },
+            end: {
+              iso: "2026-03-09",
+              allDay: true,
+              utc: false,
+              tzid: null,
+            },
             location: null,
             organizerName: "Sam",
             organizerEmail: "sam@example.com",
           },
         };
-      }
-      return {
-        ...base,
-        invite: {
-          method: "REQUEST",
-          status: "CONFIRMED",
-          summary: "DST Spring Forward Range",
-          start: { iso: "2026-03-07", allDay: true, utc: false, tzid: null },
-          end: { iso: "2026-03-09", allDay: true, utc: false, tzid: null },
-          location: null,
-          organizerName: "Sam",
-          organizerEmail: "sam@example.com",
-        },
       };
-    };
+    });
+
+    await page.goto("/?threadGap=1");
+    await page
+      .getByRole("treeitem", { name: /Weekend plans/i })
+      .first()
+      .click();
+    const card = page.locator(".invite-card");
+    await expect(card).toContainText("November 1, 2026 (All day)");
+    await expect(card).not.toContainText("November 1, 2026 –");
+
+    await page.getByRole("treeitem", { name: /Library hours/i }).click();
+    await expect(card).toContainText("March 7, 2026");
+    await expect(card).toContainText("March 8, 2026");
   });
-
-  await page.goto("/?threadGap=1");
-  await page
-    .getByRole("treeitem", { name: /Weekend plans/i })
-    .first()
-    .click();
-  const card = page.locator(".invite-card");
-  await expect(card).toContainText("November 1, 2026 (All day)");
-  await expect(card).not.toContainText("November 1, 2026 –");
-
-  await page.getByRole("treeitem", { name: /Library hours/i }).click();
-  await expect(card).toContainText("March 7, 2026");
-  await expect(card).toContainText("March 8, 2026");
-  await context.close();
 });
 
 test("C11 blockSender aborts moving a newly selected message if selection changes during confirm", async ({

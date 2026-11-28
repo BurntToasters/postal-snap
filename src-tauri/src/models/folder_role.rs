@@ -46,24 +46,71 @@ fn mailbox_role_from_attributes(attributes: &[String]) -> MailboxRole {
     MailboxRole::Other
 }
 
+pub fn is_all_mail_folder(name: &str, attributes: &[String]) -> bool {
+    let has_all = attributes.iter().any(|attribute| {
+        attribute
+            .trim()
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("all")
+    });
+    if has_all {
+        return true;
+    }
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "all mail"
+            | "alle e-mails"
+            | "tous les messages"
+            | "[gmail]/all mail"
+            | "[google mail]/all mail"
+    )
+}
+
+fn role_lookup_segment(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if let Some((prefix, leaf)) = trimmed.rsplit_once(['/', '.']) {
+        let ns = prefix.to_ascii_lowercase();
+        let allowed_ns = matches!(
+            ns.as_str(),
+            "inbox" | "[gmail]" | "[google mail]" | "folders" | "labels"
+        );
+        if !allowed_ns {
+            return None;
+        }
+        Some(leaf.to_ascii_lowercase())
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
 fn mailbox_role_from_name(name: &str) -> MailboxRole {
-    let leaf = name
-        .rsplit(['/', '.'])
-        .next()
-        .unwrap_or(name)
-        .to_ascii_lowercase();
+    let Some(leaf) = role_lookup_segment(name) else {
+        return MailboxRole::Other;
+    };
+    let in_gmail = name.to_ascii_lowercase().starts_with("[gmail]/")
+        || name.to_ascii_lowercase().starts_with("[google mail]/");
     match leaf.as_str() {
         "inbox" | "posteingang" | "boîte de réception" => MailboxRole::Inbox,
         "sent" | "sent messages" | "sent mail" | "sent items" | "gesendet" | "gesendete"
         | "gesendete objekte" | "messages envoyés" | "enviados" => MailboxRole::Sent,
-        "drafts" | "entwürfe" | "entwurfe" | "brouillons" | "borradores" => MailboxRole::Drafts,
-        "archive" | "all mail" | "archiv" | "alle e-mails" | "tous les messages" | "archivados" => {
-            MailboxRole::Archive
+        "draft" | "drafts" | "entwürfe" | "entwurfe" | "brouillons" | "borradores" => {
+            MailboxRole::Drafts
         }
-        "trash" | "deleted messages" | "deleted items" | "bin" | "papierkorb"
-        | "gelöschte objekte" | "corbeille" | "papelera" => MailboxRole::Trash,
-        "junk" | "spam" | "junk email" | "junk e-mail" | "spamverdacht" | "indésirables"
-        | "correo no deseado" => MailboxRole::Junk,
+        "archive" | "archiv" | "archivados" => MailboxRole::Archive,
+        "all mail" | "alle e-mails" | "tous les messages" => {
+            if !name.contains(['/', '.']) || in_gmail {
+                MailboxRole::Archive
+            } else {
+                MailboxRole::Other
+            }
+        }
+        "trash" | "deleted" | "deleted messages" | "deleted items" | "bin" | "papierkorb"
+        | "gelöscht" | "geloscht" | "gelöschte objekte" | "corbeille" | "papelera" => {
+            MailboxRole::Trash
+        }
+        "junk" | "spam" | "bulk" | "bulk mail" | "junk email" | "junk e-mail" | "spamverdacht"
+        | "indésirables" | "correo no deseado" => MailboxRole::Junk,
         _ => MailboxRole::Other,
     }
 }

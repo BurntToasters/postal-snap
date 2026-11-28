@@ -1,5 +1,10 @@
-import { useRef, type Dispatch, type SetStateAction } from "react";
-import type { Editor } from "@tiptap/core";
+import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import {
+  isProseMirrorCellSelection,
+  isProseMirrorNodeSelection,
+  type Editor,
+} from "@tiptap/core";
+import { useEditorState } from "@tiptap/react";
 import {
   TextAlignCenter,
   TextAlignStart,
@@ -26,6 +31,89 @@ import { strings } from "../../i18n";
 import { moveToolbarFocus, useRovingToolbar } from "../toolbarNav";
 import { highlightColor } from "./composerSeed";
 
+function syncToolbarSelectionFromDom(editor: Editor | null) {
+  if (!editor || editor.isDestroyed) return;
+  const view = editor.view;
+  const state = editor.state;
+  if (!view?.dom || !state) return;
+
+  const currentSelection = state.selection;
+  if (
+    isProseMirrorNodeSelection(currentSelection) ||
+    isProseMirrorCellSelection(currentSelection)
+  ) {
+    return;
+  }
+
+  const domSelection = view.dom.ownerDocument.getSelection();
+  const { anchorNode, anchorOffset, focusNode, focusOffset } =
+    domSelection ?? {};
+  if (
+    !domSelection ||
+    !anchorNode ||
+    anchorOffset === undefined ||
+    !focusNode ||
+    focusOffset === undefined ||
+    !view.dom.contains(anchorNode) ||
+    !view.dom.contains(focusNode)
+  ) {
+    return;
+  }
+
+  const wholeEditorSelection =
+    !domSelection.isCollapsed &&
+    currentSelection.from === 0 &&
+    currentSelection.to === state.doc.content.size &&
+    domSelection.rangeCount > 0 &&
+    (() => {
+      const range = domSelection.getRangeAt(0);
+      const editorRange = view.dom.ownerDocument.createRange();
+      const RangeConstructor = view.dom.ownerDocument.defaultView?.Range;
+      if (!RangeConstructor) return false;
+      editorRange.selectNodeContents(view.dom);
+      return (
+        range.compareBoundaryPoints(
+          RangeConstructor.START_TO_START,
+          editorRange,
+        ) === 0 &&
+        range.compareBoundaryPoints(
+          RangeConstructor.END_TO_END,
+          editorRange,
+        ) === 0
+      );
+    })();
+  if (wholeEditorSelection) return;
+
+  let anchorPosition: number;
+  let focusPosition: number;
+  try {
+    anchorPosition = view.posAtDOM(anchorNode, anchorOffset);
+    focusPosition = view.posAtDOM(focusNode, focusOffset);
+  } catch {
+    return;
+  }
+  if (
+    anchorPosition < 0 ||
+    anchorPosition > state.doc.content.size ||
+    focusPosition < 0 ||
+    focusPosition > state.doc.content.size
+  ) {
+    return;
+  }
+  if (
+    currentSelection.anchor === anchorPosition &&
+    currentSelection.head === focusPosition
+  ) {
+    return;
+  }
+
+  // Keep DOM anchor/head order so backward selections stay backward.
+  editor.commands.setTextSelection({
+    from: anchorPosition,
+    to: focusPosition,
+  });
+}
+
 export interface FormatToolbarProps {
   editor: Editor | null;
   formattingOpen: boolean;
@@ -44,6 +132,98 @@ export function FormatToolbar({
   addLink,
 }: FormatToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const pointerFocusPending = useRef(false);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const editorDom = editor.view.dom;
+    const onPointerDown = () => {
+      pointerFocusPending.current = true;
+    };
+    const onPointerEnd = () => {
+      pointerFocusPending.current = false;
+    };
+    const onEditorFocus = (event: FocusEvent) => {
+      if (pointerFocusPending.current) {
+        pointerFocusPending.current = false;
+        return;
+      }
+      const previousTarget = event.relatedTarget;
+      if (
+        previousTarget instanceof Node &&
+        toolbarRef.current?.contains(previousTarget)
+      ) {
+        editor.view.focus();
+      }
+    };
+    editorDom.addEventListener("pointerdown", onPointerDown, true);
+    editorDom.addEventListener("focus", onEditorFocus, true);
+    editorDom.ownerDocument.defaultView?.addEventListener(
+      "pointerup",
+      onPointerEnd,
+      true,
+    );
+    editorDom.ownerDocument.defaultView?.addEventListener(
+      "pointercancel",
+      onPointerEnd,
+      true,
+    );
+    return () => {
+      editorDom.removeEventListener("pointerdown", onPointerDown, true);
+      editorDom.removeEventListener("focus", onEditorFocus, true);
+      editorDom.ownerDocument.defaultView?.removeEventListener(
+        "pointerup",
+        onPointerEnd,
+        true,
+      );
+      editorDom.ownerDocument.defaultView?.removeEventListener(
+        "pointercancel",
+        onPointerEnd,
+        true,
+      );
+    };
+  }, [editor]);
+  const textStyle = useEditorState({
+    editor,
+    selector: ({ editor: current }) => ({
+      fontFamily: current?.getAttributes("textStyle").fontFamily as
+        string | undefined,
+      fontSize: current?.getAttributes("textStyle").fontSize as
+        string | undefined,
+      bold: current?.isActive("bold") ?? false,
+      italic: current?.isActive("italic") ?? false,
+      underline: current?.isActive("underline") ?? false,
+      strike: current?.isActive("strike") ?? false,
+      highlight: current?.isActive("highlight") ?? false,
+      alignLeft: current?.isActive({ textAlign: "left" }) ?? false,
+      alignCenter: current?.isActive({ textAlign: "center" }) ?? false,
+      alignRight: current?.isActive({ textAlign: "right" }) ?? false,
+      bulletList: current?.isActive("bulletList") ?? false,
+      orderedList: current?.isActive("orderedList") ?? false,
+      blockquote: current?.isActive("blockquote") ?? false,
+      link: current?.isActive("link") ?? false,
+    }),
+  });
+  const selectChangeStartedByPointer = useRef(false);
+  const selectPointerDown = () => {
+    selectChangeStartedByPointer.current = true;
+  };
+  const selectKeyDown = () => {
+    selectChangeStartedByPointer.current = false;
+  };
+  const selectBlur = () => {
+    selectChangeStartedByPointer.current = false;
+  };
+  const selectCommandChain = () => {
+    const chain = editor?.chain();
+    const formatting = selectChangeStartedByPointer.current
+      ? chain?.focus()
+      : chain;
+    selectChangeStartedByPointer.current = false;
+    return formatting;
+  };
+  const syncBeforeToolbarAction = () => {
+    if (editor?.view?.hasFocus()) syncToolbarSelectionFromDom(editor);
+  };
   useRovingToolbar(toolbarRef, [
     formattingOpen,
     moreFormattingOpen,
@@ -58,6 +238,17 @@ export function FormatToolbar({
         role="toolbar"
         aria-label={strings.composer.formatting}
         onKeyDown={moveToolbarFocus}
+        onFocusCapture={(event) => {
+          const previousTarget = event.relatedTarget;
+          if (
+            previousTarget instanceof Node &&
+            editor?.view?.dom.contains(previousTarget)
+          ) {
+            syncToolbarSelectionFromDom(editor);
+          }
+        }}
+        onPointerDownCapture={syncBeforeToolbarAction}
+        onClickCapture={syncBeforeToolbarAction}
         hidden={!formattingOpen}
       >
         <div className="toolbar-group">
@@ -83,19 +274,18 @@ export function FormatToolbar({
           <select
             aria-label={strings.composer.font}
             title={strings.composer.font}
-            value={
-              (editor?.getAttributes("textStyle").fontFamily as
-                string | undefined) ?? ""
-            }
-            onChange={(event) =>
-              event.target.value
-                ? editor
-                    ?.chain()
-                    .focus()
-                    .setFontFamily(event.target.value)
-                    .run()
-                : editor?.chain().focus().unsetFontFamily().run()
-            }
+            value={textStyle?.fontFamily ?? ""}
+            onPointerDown={selectPointerDown}
+            onKeyDown={selectKeyDown}
+            onBlur={selectBlur}
+            onChange={(event) => {
+              const formatting = selectCommandChain();
+              if (event.target.value) {
+                formatting?.setFontFamily(event.target.value).run();
+              } else {
+                formatting?.unsetFontFamily().run();
+              }
+            }}
           >
             <option value="">{strings.composer.defaultFont}</option>
             <option value="Arial">Arial</option>
@@ -106,13 +296,14 @@ export function FormatToolbar({
           <select
             aria-label={strings.composer.fontSize}
             title={strings.composer.fontSize}
-            value={
-              (editor?.getAttributes("textStyle").fontSize as
-                string | undefined) ?? "16px"
-            }
-            onChange={(event) =>
-              editor?.chain().focus().setFontSize(event.target.value).run()
-            }
+            value={textStyle?.fontSize ?? "16px"}
+            onPointerDown={selectPointerDown}
+            onKeyDown={selectKeyDown}
+            onBlur={selectBlur}
+            onChange={(event) => {
+              const formatting = selectCommandChain();
+              formatting?.setFontSize(event.target.value).run();
+            }}
           >
             <option value="12px">{strings.composer.small}</option>
             <option value="16px">{strings.composer.normal}</option>
@@ -123,41 +314,41 @@ export function FormatToolbar({
 
         <div className="toolbar-group">
           <button
-            className={editor?.isActive("bold") ? "active" : ""}
+            className={textStyle?.bold ? "active" : ""}
             type="button"
             onClick={() => editor?.chain().focus().toggleBold().run()}
             aria-label={strings.composer.bold}
-            aria-pressed={Boolean(editor?.isActive("bold"))}
+            aria-pressed={textStyle?.bold ?? false}
             title={strings.composer.bold}
           >
             <Bold aria-hidden="true" />
           </button>
           <button
-            className={editor?.isActive("italic") ? "active" : ""}
+            className={textStyle?.italic ? "active" : ""}
             type="button"
             onClick={() => editor?.chain().focus().toggleItalic().run()}
             aria-label={strings.composer.italic}
-            aria-pressed={Boolean(editor?.isActive("italic"))}
+            aria-pressed={textStyle?.italic ?? false}
             title={strings.composer.italic}
           >
             <Italic aria-hidden="true" />
           </button>
           <button
-            className={editor?.isActive("underline") ? "active" : ""}
+            className={textStyle?.underline ? "active" : ""}
             type="button"
             onClick={() => editor?.chain().focus().toggleUnderline().run()}
             aria-label={strings.composer.underline}
-            aria-pressed={Boolean(editor?.isActive("underline"))}
+            aria-pressed={textStyle?.underline ?? false}
             title={strings.composer.underline}
           >
             <UnderlineIcon aria-hidden="true" />
           </button>
           <button
-            className={editor?.isActive("strike") ? "active" : ""}
+            className={textStyle?.strike ? "active" : ""}
             type="button"
             onClick={() => editor?.chain().focus().toggleStrike().run()}
             aria-label={strings.composer.strike}
-            aria-pressed={Boolean(editor?.isActive("strike"))}
+            aria-pressed={textStyle?.strike ?? false}
             title={strings.composer.strike}
           >
             <Strikethrough aria-hidden="true" />
@@ -183,7 +374,7 @@ export function FormatToolbar({
           </label>
           <button
             type="button"
-            className={editor?.isActive("highlight") ? "active" : ""}
+            className={textStyle?.highlight ? "active" : ""}
             onClick={() =>
               editor
                 ?.chain()
@@ -192,7 +383,7 @@ export function FormatToolbar({
                 .run()
             }
             aria-label={strings.composer.highlight}
-            aria-pressed={Boolean(editor?.isActive("highlight"))}
+            aria-pressed={textStyle?.highlight ?? false}
             title={strings.composer.highlight}
           >
             <Highlighter aria-hidden="true" />
@@ -221,40 +412,34 @@ export function FormatToolbar({
           <div className="toolbar-group">
             <button
               type="button"
-              className={
-                editor?.isActive({ textAlign: "left" }) ? "active" : ""
-              }
+              className={textStyle?.alignLeft ? "active" : ""}
               onClick={() => editor?.chain().focus().setTextAlign("left").run()}
               aria-label={strings.composer.alignLeft}
-              aria-pressed={Boolean(editor?.isActive({ textAlign: "left" }))}
+              aria-pressed={textStyle?.alignLeft ?? false}
               title={strings.composer.alignLeft}
             >
               <TextAlignStart aria-hidden="true" />
             </button>
             <button
               type="button"
-              className={
-                editor?.isActive({ textAlign: "center" }) ? "active" : ""
-              }
+              className={textStyle?.alignCenter ? "active" : ""}
               onClick={() =>
                 editor?.chain().focus().setTextAlign("center").run()
               }
               aria-label={strings.composer.alignCenter}
-              aria-pressed={Boolean(editor?.isActive({ textAlign: "center" }))}
+              aria-pressed={textStyle?.alignCenter ?? false}
               title={strings.composer.alignCenter}
             >
               <TextAlignCenter aria-hidden="true" />
             </button>
             <button
               type="button"
-              className={
-                editor?.isActive({ textAlign: "right" }) ? "active" : ""
-              }
+              className={textStyle?.alignRight ? "active" : ""}
               onClick={() =>
                 editor?.chain().focus().setTextAlign("right").run()
               }
               aria-label={strings.composer.alignRight}
-              aria-pressed={Boolean(editor?.isActive({ textAlign: "right" }))}
+              aria-pressed={textStyle?.alignRight ?? false}
               title={strings.composer.alignRight}
             >
               <TextAlignEnd aria-hidden="true" />
@@ -264,30 +449,30 @@ export function FormatToolbar({
           <div className="toolbar-group">
             <button
               type="button"
-              className={editor?.isActive("bulletList") ? "active" : ""}
+              className={textStyle?.bulletList ? "active" : ""}
               onClick={() => editor?.chain().focus().toggleBulletList().run()}
               aria-label={strings.composer.bullets}
-              aria-pressed={Boolean(editor?.isActive("bulletList"))}
+              aria-pressed={textStyle?.bulletList ?? false}
               title={strings.composer.bullets}
             >
               <List aria-hidden="true" />
             </button>
             <button
               type="button"
-              className={editor?.isActive("orderedList") ? "active" : ""}
+              className={textStyle?.orderedList ? "active" : ""}
               onClick={() => editor?.chain().focus().toggleOrderedList().run()}
               aria-label={strings.composer.numbers}
-              aria-pressed={Boolean(editor?.isActive("orderedList"))}
+              aria-pressed={textStyle?.orderedList ?? false}
               title={strings.composer.numbers}
             >
               <ListOrdered aria-hidden="true" />
             </button>
             <button
               type="button"
-              className={editor?.isActive("blockquote") ? "active" : ""}
+              className={textStyle?.blockquote ? "active" : ""}
               onClick={() => editor?.chain().focus().toggleBlockquote().run()}
               aria-label={strings.composer.quote}
-              aria-pressed={Boolean(editor?.isActive("blockquote"))}
+              aria-pressed={textStyle?.blockquote ?? false}
               title={strings.composer.quote}
             >
               <Quote aria-hidden="true" />
@@ -313,10 +498,10 @@ export function FormatToolbar({
           <div className="toolbar-group">
             <button
               type="button"
-              className={editor?.isActive("link") ? "active" : ""}
+              className={textStyle?.link ? "active" : ""}
               onClick={addLink}
               aria-label={strings.composer.insertLink}
-              aria-pressed={Boolean(editor?.isActive("link"))}
+              aria-pressed={textStyle?.link ?? false}
               title={strings.composer.insertLink}
             >
               <LinkIcon aria-hidden="true" />

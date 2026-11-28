@@ -91,9 +91,10 @@ pub fn describe_certificate(pem: &str) -> Result<CertificateMetadata, String> {
     let certificate = decoded
         .parse_x509()
         .map_err(|_| "The selected certificate is invalid.".to_string())?;
-    let expires = chrono::DateTime::from_timestamp(certificate.validity().not_after.timestamp(), 0)
-        .ok_or("The certificate expiry is invalid.")?
-        .to_rfc3339();
+    let expires =
+        time::OffsetDateTime::from_unix_timestamp(certificate.validity().not_after.timestamp())
+            .map(crate::date_time::format_rfc3339)
+            .map_err(|_| "The certificate expiry is invalid.")?;
     let fingerprint = Sha256::digest(&decoded.contents)
         .iter()
         .map(|byte| format!("{byte:02X}"))
@@ -211,14 +212,31 @@ pub fn apply_setup_trust(
     Ok(())
 }
 
-pub fn tls_error(error: &impl std::fmt::Display, action: &str) -> String {
+pub fn is_certificate_tls_error(error: &impl std::fmt::Display) -> bool {
     let detail = error.to_string().to_ascii_lowercase();
-    if detail.contains("certificate")
+    detail.contains("certificate")
         || detail.contains("unknown issuer")
         || detail.contains("not trusted")
-    {
-        "Certificate verification failed. Import the correct public Bridge certificate or repair server trust.".into()
+        || detail.contains("self-signed")
+        || detail.contains("self signed")
+}
+
+pub fn tls_error_for_server(
+    error: &impl std::fmt::Display,
+    action: &str,
+    is_bridge: bool,
+) -> String {
+    if is_certificate_tls_error(error) {
+        if is_bridge {
+            "Certificate verification failed. Import the correct public Bridge certificate or repair server trust.".into()
+        } else {
+            "Certificate verification failed. Check the server address or certificate trust.".into()
+        }
     } else {
         crate::security::redact_error(error, action)
     }
+}
+
+pub fn tls_error(error: &impl std::fmt::Display, action: &str) -> String {
+    tls_error_for_server(error, action, true)
 }

@@ -16,6 +16,7 @@ import {
 } from "../blockedSenders";
 
 import { beginMessageOpen } from "../messageOpen";
+import type { MoveFailureReconciler } from "../moveConversation";
 import { forgetOpenMessage } from "../recentMessage";
 import { rememberedLetterScroll } from "../letterScroll";
 import { snoozeLoadedConversation } from "../snoozeConversation";
@@ -69,6 +70,7 @@ import { MEDIA_QUERIES } from "../breakpoints";
 import { errorText } from "../errors";
 
 export function MessageReader({
+  reconcileMoveFailure,
   onSnoozed,
   onConversationSnoozed,
   onShowInFolder,
@@ -83,6 +85,7 @@ export function MessageReader({
   onContinueDraft,
   searchQuery,
 }: {
+  reconcileMoveFailure?: MoveFailureReconciler;
   onSnoozed?: (accountId: string, messageId: number) => void | Promise<void>;
   onConversationSnoozed?: (
     accountId: string,
@@ -141,18 +144,20 @@ export function MessageReader({
   const [moreOpen, setMoreOpen] = useState(false);
   const [blockRevision, setBlockRevision] = useState(0);
 
+  const readerAccountId = message?.accountId;
+  const readerSenderAddress = message?.senderAddress;
+
   useEffect(() => {
-    const current = message;
-    const contains = current
-      ? senderRuleNeedle(current.senderAddress)
+    const contains = readerSenderAddress
+      ? senderRuleNeedle(readerSenderAddress)
       : undefined;
-    if (!current || !contains) return;
+    if (!readerAccountId || !contains) return;
     let cancelled = false;
     void api
-      .listFilterRules(current.accountId)
+      .listFilterRules(readerAccountId)
       .then((rules) => {
         if (cancelled) return;
-        rememberBlockedSenders(current.accountId, rules);
+        rememberBlockedSenders(readerAccountId, rules);
         setBlockRevision((revision) => revision + 1);
       })
       .catch(() => {
@@ -161,7 +166,7 @@ export function MessageReader({
     return () => {
       cancelled = true;
     };
-  }, [message]);
+  }, [readerAccountId, readerSenderAddress]);
   const senderBlocked = Boolean(
     message &&
     blockRevision >= 0 &&
@@ -295,6 +300,10 @@ export function MessageReader({
     }
     if (snoozeOpen) {
       closeSnoozePanel();
+      return;
+    }
+    if (findOpen) {
+      setFindOpen(false);
       return;
     }
     if (moreOpen) {
@@ -522,6 +531,7 @@ export function MessageReader({
     setMailboxes,
     setError,
     moveOperations,
+    reconcileMoveFailure,
   });
 
   const { blockSender, blockDomain, unblockDomain, unblockSender } =

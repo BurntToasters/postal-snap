@@ -992,16 +992,16 @@ try {
       name: "greenmail-live-bulk-move-keeps-snoozes",
       status: "passed",
     });
-    stage = "greenmail-undo-session-restart-recovery";
+    stage = "greenmail-undo-session-finite-hold-recovery";
     await undoSessionTest(
-      "greenmail_undo_session_holds_expired_move_then_recovers_once_on_restart",
+      "greenmail_undo_session_finite_hold_replays_expired_and_recovers_after_restart",
       {
         ...environment,
         POSTAL_SNAP_MAIL_INTEGRATION: "1",
       },
     );
     report.results.push({
-      name: "greenmail-undo-session-restart-recovery",
+      name: "greenmail-undo-session-finite-hold-recovery",
       status: "passed",
     });
     stage = "no-idle-watcher-cap";

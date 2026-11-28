@@ -10,7 +10,7 @@ pub(super) const PREFETCH_CANDIDATES_SQL: &str = "SELECT uid, received_at, size 
      WHERE mailbox_id=?1 AND body_bytes=0 AND LENGTH(raw_message)=0 AND body_partial=0 AND size<=?2
      AND prefetch_failures<5 AND parse_pending<2
      AND (prefetch_retry_at IS NULL OR prefetch_retry_at<=strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))
-     AND (?3 IS NULL OR julianday(COALESCE(internal_at,received_at)) >= julianday(?3))
+     AND (?3 IS NULL OR COALESCE(internal_at,received_at) >= ?3)
      ORDER BY COALESCE(internal_at,received_at) DESC, uid DESC
      LIMIT ?4";
 

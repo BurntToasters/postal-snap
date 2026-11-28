@@ -9,6 +9,7 @@ mod bridge;
 mod commands;
 mod content_blocking;
 mod credentials;
+mod date_time;
 mod db;
 mod download_mark;
 mod html_sanitize;
@@ -268,7 +269,12 @@ fn main() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 .traffic_light_position(MAC_TRAFFIC_LIGHTS);
-            #[cfg(all(target_os = "macos", feature = "macos-vibrancy"))]
+            // Native glass needs a transparent surface; the base config stays
+            // opaque for macOS Store and Linux builds.
+            #[cfg(any(
+                target_os = "windows",
+                all(target_os = "macos", feature = "macos-vibrancy")
+            ))]
             let window_builder = window_builder.transparent(true);
             // Frameless custom caption (IYERIS/Zinnia). Do not attach a Win32
             // menubar onto this HWND — muda paints it through glass on activate.
@@ -387,12 +393,16 @@ fn main() {
             commands::opened::open_eml_file,
             commands::opened::get_opened_message,
             commands::opened::close_opened_message,
+            commands::opened::drain_opened_message_tokens,
+            commands::opened::acknowledge_opened_message_token,
             commands::opened::save_opened_attachment,
             commands::opened::preview_opened_attachment,
             commands::attachments::view_attachment_message,
             commands::drag::start_attachment_drag,
             commands::drag::start_message_drag,
             commands::compatibility::get_account_connection,
+            commands::compatibility::get_failed_offline_operations,
+            commands::compatibility::dismiss_failed_offline_operations,
             commands::compatibility::update_account_connection,
             commands::compatibility::import_bridge_certificate,
             commands::compatibility::approve_bridge_certificate,

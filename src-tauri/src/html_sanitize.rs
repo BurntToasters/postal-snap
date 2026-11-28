@@ -1,5 +1,7 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SanitizedHtml {
@@ -64,121 +66,124 @@ fn sanitize_html(input: &str, mode: Mode) -> SanitizedHtml {
     }
 }
 
-fn mail_builder() -> ammonia::Builder<'static> {
-    let mut builder = ammonia::Builder::new();
-    builder.tags(HashSet::from([
-        "a",
-        "abbr",
-        "address",
-        "b",
-        "blockquote",
-        "br",
-        "caption",
-        "center",
-        "cite",
-        "code",
-        "col",
-        "colgroup",
-        "dd",
-        "div",
-        "dl",
-        "dt",
-        "em",
-        "figcaption",
-        "figure",
-        "font",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "hr",
-        "i",
-        "img",
-        "li",
-        "mark",
-        "ol",
-        "p",
-        "pre",
-        "q",
-        "s",
-        "small",
-        "span",
-        "strike",
-        "strong",
-        "sub",
-        "sup",
-        "table",
-        "tbody",
-        "td",
-        "tfoot",
-        "th",
-        "thead",
-        "tr",
-        "u",
-        "ul",
-    ]));
-    builder.clean_content_tags(HashSet::from([
-        "script", "style", "iframe", "frame", "object", "embed", "form", "svg", "math", "audio",
-        "video", "picture", "noscript",
-    ]));
-    builder.generic_attributes(HashSet::from(["class", "dir", "lang", "title", "style"]));
-    builder.tag_attributes(HashMap::from([
-        ("a", HashSet::from(["href", "data-external-href"])),
-        (
+fn mail_builder() -> &'static ammonia::Builder<'static> {
+    static BUILDER: OnceLock<ammonia::Builder<'static>> = OnceLock::new();
+    BUILDER.get_or_init(|| {
+        let mut builder = ammonia::Builder::new();
+        builder.tags(HashSet::from([
+            "a",
+            "abbr",
+            "address",
+            "b",
+            "blockquote",
+            "br",
+            "caption",
+            "center",
+            "cite",
+            "code",
+            "col",
+            "colgroup",
+            "dd",
+            "div",
+            "dl",
+            "dt",
+            "em",
+            "figcaption",
+            "figure",
+            "font",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "hr",
+            "i",
             "img",
-            HashSet::from([
-                "src",
-                "alt",
-                "width",
-                "height",
-                "class",
-                "data-remote-src",
-                "data-inline-cid",
-            ]),
-        ),
-        ("td", HashSet::from(["colspan", "rowspan"])),
-        ("th", HashSet::from(["colspan", "rowspan"])),
-        ("col", HashSet::from(["span"])),
-        ("font", HashSet::from(["color", "face", "size"])),
-    ]));
-    builder.url_schemes(HashSet::from(["http", "https", "mailto", "cid", "data"]));
-    builder.url_relative(ammonia::UrlRelative::Deny);
-    builder.link_rel(Some("noopener noreferrer"));
-    builder.strip_comments(true);
-    builder.attribute_filter(|element, attribute, value| match (element, attribute) {
-        ("a", "href") => {
-            if is_safe_href(value) {
-                Some(Cow::Borrowed(value))
-            } else {
-                None
+            "li",
+            "mark",
+            "ol",
+            "p",
+            "pre",
+            "q",
+            "s",
+            "small",
+            "span",
+            "strike",
+            "strong",
+            "sub",
+            "sup",
+            "table",
+            "tbody",
+            "td",
+            "tfoot",
+            "th",
+            "thead",
+            "tr",
+            "u",
+            "ul",
+        ]));
+        builder.clean_content_tags(HashSet::from([
+            "script", "style", "iframe", "frame", "object", "embed", "form", "svg", "math",
+            "audio", "video", "picture", "noscript",
+        ]));
+        builder.generic_attributes(HashSet::from(["class", "dir", "lang", "title", "style"]));
+        builder.tag_attributes(HashMap::from([
+            ("a", HashSet::from(["href", "data-external-href"])),
+            (
+                "img",
+                HashSet::from([
+                    "src",
+                    "alt",
+                    "width",
+                    "height",
+                    "class",
+                    "data-remote-src",
+                    "data-inline-cid",
+                ]),
+            ),
+            ("td", HashSet::from(["colspan", "rowspan"])),
+            ("th", HashSet::from(["colspan", "rowspan"])),
+            ("col", HashSet::from(["span"])),
+            ("font", HashSet::from(["color", "face", "size"])),
+        ]));
+        builder.url_schemes(HashSet::from(["http", "https", "mailto", "cid", "data"]));
+        builder.url_relative(ammonia::UrlRelative::Deny);
+        builder.link_rel(Some("noopener noreferrer"));
+        builder.strip_comments(true);
+        builder.attribute_filter(|element, attribute, value| match (element, attribute) {
+            ("a", "href") => {
+                if is_safe_href(value) {
+                    Some(Cow::Borrowed(value))
+                } else {
+                    None
+                }
             }
-        }
-        ("a", "data-external-href") => {
-            if is_http_url(value) && value.len() <= 16 * 1024 {
-                Some(Cow::Borrowed(value))
-            } else {
-                None
+            ("a", "data-external-href") => {
+                if is_http_url(value) && value.len() <= 16 * 1024 {
+                    Some(Cow::Borrowed(value))
+                } else {
+                    None
+                }
             }
-        }
-        ("img", "src") => {
-            if is_kept_image_src(value) {
-                Some(Cow::Borrowed(value))
-            } else {
-                None
+            ("img", "src") => {
+                if is_kept_image_src(value) {
+                    Some(Cow::Borrowed(value))
+                } else {
+                    None
+                }
             }
-        }
-        (_, "style") => {
-            if is_safe_style(value) {
-                Some(Cow::Borrowed(value))
-            } else {
-                None
+            (_, "style") => {
+                if is_safe_style(value) {
+                    Some(Cow::Borrowed(value))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(Cow::Borrowed(value)),
-    });
-    builder
+            _ => Some(Cow::Borrowed(value)),
+        });
+        builder
+    })
 }
 
 fn find_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -304,14 +309,40 @@ const SAFE_DATA_IMAGE_PREFIXES: [&str; 4] = [
     "data:image/webp;base64,",
 ];
 
+const MAX_DATA_IMAGE_URL_LEN: usize = 14 * 1024 * 1024;
+const DATA_IMAGE_HEADER_PREFIX_CHARS: usize = 8192;
+
 fn is_safe_data_image(value: &str) -> bool {
     let value = value.trim();
-    SAFE_DATA_IMAGE_PREFIXES.iter().any(|prefix| {
+    if value.len() > MAX_DATA_IMAGE_URL_LEN {
+        return false;
+    }
+    let Some(prefix) = SAFE_DATA_IMAGE_PREFIXES.iter().find(|prefix| {
         value
             .as_bytes()
             .get(..prefix.len())
             .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
-    })
+    }) else {
+        return false;
+    };
+    let expected_mime = &prefix["data:".len()..prefix.len() - ";base64,".len()];
+    let encoded: String = value[prefix.len()..]
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .take(DATA_IMAGE_HEADER_PREFIX_CHARS)
+        .collect();
+    // Truncate at a multiple of 4 base64 chars so partial tails still decode cleanly.
+    let usable = encoded.len() - (encoded.len() % 4);
+    if usable < 8 {
+        return false;
+    }
+    let Ok(bytes) = STANDARD.decode(&encoded[..usable]) else {
+        return false;
+    };
+    let Some(sniffed) = crate::security::detect_image_mime(&bytes) else {
+        return false;
+    };
+    sniffed == expected_mime && crate::security::image_within_pixel_limit(&bytes, sniffed)
 }
 
 fn is_safe_style(value: &str) -> bool {
@@ -601,9 +632,10 @@ fn take_attr(attrs: &mut Vec<(String, Option<String>)>, name: &str) -> Option<St
 fn cid_value(src: &str) -> Option<String> {
     let value = src.trim();
     value
-        .strip_prefix("cid:")
-        .or_else(|| value.strip_prefix("CID:"))
-        .and_then(cid_reference)
+        .as_bytes()
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case(b"cid:"))
+        .and_then(|_| cid_reference(&value[4..]))
 }
 
 fn cid_reference(value: &str) -> Option<String> {
@@ -951,10 +983,38 @@ mod tests {
 
     #[test]
     fn keeps_safe_data_images() {
-        let html =
-            sanitize_received_html(r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="dot">"#);
-        assert!(html.html.contains("data:image/png;base64,iVBORw0KGgo="));
+        use base64::Engine as _;
+        let mut valid_png = b"\x89PNG\r\n\x1a\n".to_vec();
+        valid_png.extend_from_slice(&13u32.to_be_bytes());
+        valid_png.extend_from_slice(b"IHDR");
+        valid_png.extend_from_slice(&1u32.to_be_bytes());
+        valid_png.extend_from_slice(&1u32.to_be_bytes());
+        valid_png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let valid_b64 = base64::engine::general_purpose::STANDARD.encode(&valid_png);
+        let html = sanitize_received_html(&format!(
+            r#"<img src="data:image/png;base64,{valid_b64}" alt="dot">"#
+        ));
+        assert!(html
+            .html
+            .contains(&format!("data:image/png;base64,{valid_b64}")));
         assert_eq!(html.blocked_images, 0);
+
+        // Pixel bomb or HTML masquerading as PNG data URL must be stripped.
+        let mut bomb_png = b"\x89PNG\r\n\x1a\n".to_vec();
+        bomb_png.extend_from_slice(&13u32.to_be_bytes());
+        bomb_png.extend_from_slice(b"IHDR");
+        bomb_png.extend_from_slice(&100_000u32.to_be_bytes());
+        bomb_png.extend_from_slice(&100_000u32.to_be_bytes());
+        bomb_png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let bomb_b64 = base64::engine::general_purpose::STANDARD.encode(&bomb_png);
+        let stripped = sanitize_received_html(&format!(
+            r#"<img src="data:image/png;base64,{bomb_b64}" alt="bomb"><img src="data:image/png;base64,PGh0bWw+" alt="html">"#
+        ));
+        assert!(!stripped.html.contains("data:image/png"));
+
+        // Mixed-case Cid: inline images keep their CID marker.
+        let cid = sanitize_received_html(r#"<img src="Cid:Logo@Example.COM" alt="logo">"#);
+        assert!(cid.html.contains("data-inline-cid=\"Logo@Example.COM\""));
     }
 
     #[test]

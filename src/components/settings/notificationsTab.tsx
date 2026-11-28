@@ -96,12 +96,17 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
           <input
             type="checkbox"
             checked={settings.newMailSound}
+            disabled={!settings.notifyNewMail}
             onChange={(event) =>
               void update({ newMailSound: event.target.checked })
             }
           />
         </label>
-        <div className="switch-row">
+        <div
+          className="switch-row"
+          aria-disabled={!settings.notifyNewMail || undefined}
+          style={!settings.notifyNewMail ? { opacity: 0.6 } : undefined}
+        >
           <span>
             <strong>{strings.settings.quietHours}</strong>
             <small>{strings.settings.quietHoursHelp}</small>
@@ -111,6 +116,7 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
               {strings.settings.quietHoursFrom}
               <input
                 type="time"
+                disabled={!settings.notifyNewMail}
                 value={settings.quietHoursStart}
                 onChange={(event) =>
                   changeQuietHours("start", event.target.value)
@@ -121,12 +127,25 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
               {strings.settings.quietHoursUntil}
               <input
                 type="time"
+                disabled={!settings.notifyNewMail}
                 value={settings.quietHoursEnd}
                 onChange={(event) =>
                   changeQuietHours("end", event.target.value)
                 }
               />
             </label>
+            {settings.quietHoursStart || settings.quietHoursEnd ? (
+              <button
+                type="button"
+                className="text-button"
+                disabled={!settings.notifyNewMail}
+                onClick={() =>
+                  void update({ quietHoursStart: "", quietHoursEnd: "" })
+                }
+              >
+                {strings.settings.clearSearch}
+              </button>
+            ) : null}
           </span>
         </div>
         {sameTimes ? (
@@ -142,6 +161,7 @@ export function NotificationsTab({ update }: NotificationsTabProps) {
           <input
             type="checkbox"
             checked={settings.privateNotifications}
+            disabled={!settings.notifyNewMail}
             onChange={(event) =>
               void update({
                 privateNotifications: event.target.checked,

@@ -39,6 +39,26 @@ export function mergeSearchResults(
   return merged;
 }
 
+/** Adds a continued server search page, newest first, skipping known rows. */
+export function appendServerSearchResults(
+  current: MessageSummary[],
+  more: MessageSummary[],
+): MessageSummary[] {
+  const seen = new Set(current.map((item) => `${item.mailboxId}:${item.uid}`));
+  const added: MessageSummary[] = [];
+  for (const item of more) {
+    const key = `${item.mailboxId}:${item.uid}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    added.push(item);
+  }
+  added.sort(
+    (a, b) =>
+      new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
+  );
+  return [...current, ...added];
+}
+
 export function matchesLocalQuery(value: string, query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;

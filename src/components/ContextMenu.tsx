@@ -570,10 +570,14 @@ export function ContextMenuHost() {
     const onIframe = (event: Event) => {
       const detail = (event as CustomEvent<IframeContextMenuDetail>).detail;
       if (!detail) return;
-      // Return focus to the message body once the menu closes.
-      openerRef.current = document.querySelector<HTMLElement>(
-        ".message-body iframe",
-      );
+      // Return focus to the active (non-inert) message body once the menu closes.
+      openerRef.current =
+        document.querySelector<HTMLElement>(
+          ".eml-viewer .message-body iframe",
+        ) ??
+        document.querySelector<HTMLElement>(
+          ".message-body iframe:not([inert])",
+        );
       openAt(detail.x, detail.y, iframeTargetFromDetail(detail), null);
     };
     const onKeyOpen = (event: KeyboardEvent) => {

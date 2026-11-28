@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { describeSetupError, normalizeIpcError } from "../../errors";
 import { api } from "../../api";
 import { roleLabels } from "../../i18n/mail";
@@ -6,12 +6,16 @@ import { strings } from "../../i18n";
 import type {
   AccountConnection,
   AccountSummary,
+  ConnectionBlockers,
+  FailedOfflineOperation,
   FolderAssignment,
   MailboxSummary,
 } from "../../types";
+import { defaultPort, isStandardPort, trimServer } from "../setup/request";
 import { ServerFields } from "../setup/serverFields";
 import { BridgeCertificateControl } from "./bridgeCertificate";
 import { SettingsGroup } from "./primitives";
+import { ConfirmDialog } from "../composer/confirmDialog";
 
 export function ConnectionPanel({
   account,
@@ -67,11 +71,11 @@ export function ConnectionPanel({
     setBusy(true);
     setStatus("");
     try {
+      const nextImap = trimServer(draft.imap);
+      const nextSmtp = trimServer(draft.smtp);
       const changed =
-        draft.imap.host !== saved.imap.host ||
-        draft.imap.port !== saved.imap.port ||
-        draft.imap.tlsMode !== saved.imap.tlsMode ||
-        draft.imap.username !== saved.imap.username;
+        nextImap.host.toLowerCase() !== saved.imap.host.trim().toLowerCase() ||
+        nextImap.username !== saved.imap.username.trim();
       if (
         changed &&
         !(await api.showNativeConfirm(
@@ -82,9 +86,8 @@ export function ConnectionPanel({
         return;
       // The saved password is sent to the new outgoing server too.
       const outgoingChanged =
-        draft.smtp.host.trim().toLowerCase() !==
-          saved.smtp.host.trim().toLowerCase() ||
-        draft.smtp.username.trim() !== saved.smtp.username.trim();
+        nextSmtp.host.toLowerCase() !== saved.smtp.host.trim().toLowerCase() ||
+        nextSmtp.username !== saved.smtp.username.trim();
       if (
         outgoingChanged &&
         !(await api.showNativeConfirm(
@@ -95,8 +98,8 @@ export function ConnectionPanel({
         return;
       const value = await api.updateAccountConnection(
         account.id,
-        draft.imap,
-        draft.smtp,
+        nextImap,
+        nextSmtp,
         changed || outgoingChanged,
       );
       setSaved(value);
@@ -104,7 +107,11 @@ export function ConnectionPanel({
       setStatus(strings.settings.connectionSaved);
     } catch (cause) {
       const error = normalizeIpcError(cause);
-      const detail = describeSetupError(cause, account.provider);
+      const detail = describeSetupError(cause, account.provider, {
+        providerId: account.providerId,
+        appPasswordPolicy: account.appPasswordPolicy,
+        appPasswordUrl: account.appPasswordUrl,
+      });
       setBlockerError(error.code === "pendingOperations");
       setStatus(
         `${strings.settings.connectionFailed} ${detail.text} ${detail.hint ?? ""}`,
@@ -182,16 +189,36 @@ export function ConnectionPanel({
             <ServerFields
               title={strings.setup.incoming}
               value={draft.imap}
-              onChange={(patch) =>
-                setDraft({ ...draft, imap: { ...draft.imap, ...patch } })
-              }
+              onChange={(patch) => {
+                const nextTls = patch.tlsMode;
+                const nextPort =
+                  nextTls &&
+                  patch.port === undefined &&
+                  isStandardPort("imap", draft.imap.port)
+                    ? defaultPort("imap", nextTls)
+                    : (patch.port ?? draft.imap.port);
+                setDraft({
+                  ...draft,
+                  imap: { ...draft.imap, ...patch, port: nextPort },
+                });
+              }}
             />
             <ServerFields
               title={strings.setup.outgoing}
               value={draft.smtp}
-              onChange={(patch) =>
-                setDraft({ ...draft, smtp: { ...draft.smtp, ...patch } })
-              }
+              onChange={(patch) => {
+                const nextTls = patch.tlsMode;
+                const nextPort =
+                  nextTls &&
+                  patch.port === undefined &&
+                  isStandardPort("smtp", draft.smtp.port)
+                    ? defaultPort("smtp", nextTls)
+                    : (patch.port ?? draft.smtp.port);
+                setDraft({
+                  ...draft,
+                  smtp: { ...draft.smtp, ...patch, port: nextPort },
+                });
+              }}
             />
           </fieldset>
           <button className="primary-button" disabled={busy} type="submit">
@@ -236,7 +263,249 @@ export function ConnectionPanel({
           ) : null}
         </div>
       ) : null}
+      {loadState === "ready" ? (
+        <ConnectionRecovery
+          key={account.id}
+          accountId={account.id}
+          onBlockersChange={(blockers) => {
+            setSaved((current) =>
+              current ? { ...current, blockers } : current,
+            );
+            setDraft((current) =>
+              current ? { ...current, blockers } : current,
+            );
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ConnectionRecovery({
+  accountId,
+  onBlockersChange,
+}: {
+  accountId: string;
+  onBlockersChange: (blockers: ConnectionBlockers) => void;
+}) {
+  const [items, setItems] = useState<FailedOfflineOperation[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [reloadCount, setReloadCount] = useState(0);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [confirmingOperations, setConfirmingOperations] = useState<
+    FailedOfflineOperation[] | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+  const [dismissError, setDismissError] = useState(false);
+  const [status, setStatus] = useState("");
+  const id = useId();
+  const reviewButtonRef = useRef<HTMLButtonElement>(null);
+  const recoveryHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void api
+      .getFailedOfflineOperations(accountId)
+      .then((result) => {
+        if (!disposed) {
+          setItems(result.items);
+          setTotalCount(result.totalCount);
+          setSelectedIds(new Set());
+          setLoadState("ready");
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setLoadState("error");
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [accountId, reloadCount]);
+
+  function recoveryKind(item: FailedOfflineOperation): string {
+    return strings.settings.connectionRecoveryKinds[item.kind];
+  }
+
+  function toggleSelected(itemId: number, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(itemId);
+      else next.delete(itemId);
+      return next;
+    });
+  }
+
+  function refresh() {
+    setLoadState("loading");
+    setReloadCount((count) => count + 1);
+  }
+
+  async function dismissConfirmed() {
+    if (!confirmingOperations?.length || busy) return;
+    setBusy(true);
+    setDismissError(false);
+    let dismissed: Awaited<
+      ReturnType<typeof api.dismissFailedOfflineOperations>
+    >;
+    try {
+      dismissed = await api.dismissFailedOfflineOperations(
+        accountId,
+        confirmingOperations.map(({ id, reviewToken }) => ({
+          id,
+          reviewToken,
+        })),
+      );
+    } catch {
+      setConfirmingOperations(null);
+      setDismissError(true);
+      setLoadState("loading");
+      setReloadCount((count) => count + 1);
+      setBusy(false);
+      reviewButtonRef.current?.focus();
+      return;
+    }
+    onBlockersChange(dismissed.blockers);
+    setSelectedIds(new Set());
+    setConfirmingOperations(null);
+    setStatus(
+      strings.settings.connectionRecoveryDismissed(dismissed.dismissedCount),
+    );
+    try {
+      const updated = await api.getFailedOfflineOperations(accountId);
+      setItems(updated.items);
+      setTotalCount(updated.totalCount);
+      setLoadState("ready");
+    } catch {
+      setLoadState("error");
+    } finally {
+      setBusy(false);
+      recoveryHeadingRef.current?.focus();
+    }
+  }
+
+  function cancelConfirmation() {
+    setConfirmingOperations(null);
+    reviewButtonRef.current?.focus();
+  }
+
+  const chosenIds = [...selectedIds].sort((left, right) => left - right);
+  const confirmedIds = (confirmingOperations ?? []).map((item) => item.id);
+  const showLoading = loadState === "loading" && reloadCount > 0;
+  const showRecovery =
+    showLoading ||
+    loadState === "error" ||
+    (loadState === "ready" && totalCount > 0) ||
+    dismissError ||
+    Boolean(status);
+  if (!showRecovery) return null;
+
+  return (
+    <section
+      className="connection-recovery settings-section"
+      role="region"
+      aria-labelledby={`${id}-title`}
+    >
+      <h3 ref={recoveryHeadingRef} id={`${id}-title`} tabIndex={-1}>
+        {strings.settings.connectionRecovery}
+      </h3>
+      {showLoading ? (
+        <p role="status">{strings.settings.connectionRecoveryLoading}</p>
+      ) : null}
+      {loadState === "error" ? (
+        <div role="alert" className="settings-load-error">
+          <span>{strings.settings.connectionRecoveryLoadFailed}</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void refresh()}
+          >
+            {strings.settings.connectionRecoveryRetry}
+          </button>
+        </div>
+      ) : null}
+      {loadState === "ready" ? (
+        <>
+          {totalCount > 0 ? (
+            <>
+              <p className="settings-note">
+                {strings.settings.connectionRecoveryHelp}
+              </p>
+              <p role="status">
+                {strings.settings.connectionRecoveryCount(totalCount)}
+              </p>
+              <fieldset
+                className="connection-recovery-list"
+                disabled={busy || confirmingOperations !== null}
+              >
+                <legend className="visually-hidden">
+                  {strings.settings.connectionRecovery}
+                </legend>
+                <SettingsGroup>
+                  {items.map((item) => (
+                    <label className="settings-row" key={item.id}>
+                      <span>
+                        <strong>
+                          {recoveryKind(item)} ·{" "}
+                          {strings.settings.connectionRecoveryChange(item.id)}
+                        </strong>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={(event) =>
+                          toggleSelected(item.id, event.currentTarget.checked)
+                        }
+                      />
+                    </label>
+                  ))}
+                </SettingsGroup>
+              </fieldset>
+              {totalCount > items.length ? (
+                <p className="settings-note">
+                  {strings.settings.connectionRecoveryMore}
+                </p>
+              ) : null}
+              <button
+                ref={reviewButtonRef}
+                type="button"
+                className="secondary-button"
+                disabled={busy || chosenIds.length === 0}
+                onClick={() => {
+                  setDismissError(false);
+                  setConfirmingOperations(
+                    items.filter((item) => selectedIds.has(item.id)),
+                  );
+                }}
+              >
+                {strings.settings.reviewFailedChanges}
+              </button>
+            </>
+          ) : null}
+        </>
+      ) : null}
+      {dismissError ? (
+        <p role="alert">{strings.settings.connectionRecoveryDismissFailed}</p>
+      ) : null}
+      {status ? <p role="status">{status}</p> : null}
+      {confirmingOperations ? (
+        <ConfirmDialog
+          title={strings.settings.connectionRecoveryConfirmTitle}
+          detail={strings.settings.connectionRecoveryConfirmHelp(
+            confirmedIds.join(", "),
+          )}
+          primaryLabel={strings.settings.connectionRecoveryCancel}
+          secondaryLabel={strings.settings.connectionRecoveryDismiss}
+          onPrimary={cancelConfirmation}
+          onSecondary={() => void dismissConfirmed()}
+          onCancel={cancelConfirmation}
+        />
+      ) : null}
+    </section>
   );
 }
 

@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
+import { expect, test } from "./coverage-fixture";
 import { installMockIpc } from "./mock-ipc";
 import { attachArtifactsAfterEach, ipcCalls } from "./ipc";
 import { revealMenuItem } from "./menu-reveal";
@@ -14,7 +15,7 @@ test.afterEach(attachArtifactsAfterEach);
 //      multi-condition rule is wrongly treated as one.
 // FM6. An 11th condition, a second move action, or an empty match value gets through.
 // FM7. A flag action saves without its color.
-// FM8. Check matches does not send the conditions to the preview command.
+// FM8. An initial rerender loses the first input, so Check matches omits it.
 
 test.beforeEach(async ({ page }) => installMockIpc(page));
 
@@ -244,8 +245,64 @@ test("FM7: flag action sends its color", async ({ page }) => {
 });
 
 test("FM8: check matches sends the conditions", async ({ page }) => {
-  await openRules(page);
-  await page.getByLabel("Text to match", { exact: true }).fill("power");
+  await page.goto("/");
+  await page.evaluate(() => {
+    const mock = window.__POSTAL_SNAP_MOCK__;
+    const state = window.__POSTAL_SNAP_TEST__ as
+      | (NonNullable<typeof window.__POSTAL_SNAP_TEST__> & {
+          filterRulesWaiting?: boolean;
+          releaseFilterRules?: () => void;
+        })
+      | undefined;
+    if (!mock || !state) throw new Error("Rules test IPC is unavailable");
+    const original = mock.handlers.list_filter_rules;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    state.filterRulesWaiting = false;
+    state.releaseFilterRules = release;
+    mock.handlers.list_filter_rules = async (args) => {
+      state.filterRulesWaiting = true;
+      await pending;
+      return original(args);
+    };
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const sectionSelect = page.locator(".settings-section-select select");
+  if (await sectionSelect.isVisible()) {
+    await sectionSelect.selectOption("accounts");
+  } else {
+    await page.getByRole("tab", { name: "Accounts", exact: true }).click();
+  }
+  await page.getByRole("button", { name: /^Manage Sam\b/ }).click();
+  await page.getByRole("button", { name: "Rules", exact: true }).click();
+  const firstCondition = page.getByLabel("Text to match", { exact: true });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const state = window.__POSTAL_SNAP_TEST__ as
+          | (NonNullable<typeof window.__POSTAL_SNAP_TEST__> & {
+              filterRulesWaiting?: boolean;
+            })
+          | undefined;
+        return state?.filterRulesWaiting ?? false;
+      }),
+    )
+    .toBe(true);
+  await firstCondition.focus();
+  await page.evaluate(() => {
+    const state = window.__POSTAL_SNAP_TEST__ as
+      | (NonNullable<typeof window.__POSTAL_SNAP_TEST__> & {
+          releaseFilterRules?: () => void;
+        })
+      | undefined;
+    state?.releaseFilterRules?.();
+  });
+  await expect(firstCondition).toBeFocused();
+  await firstCondition.fill("power");
+  await expect(firstCondition).toHaveValue("power");
+  await expect(firstCondition).toBeFocused();
   await page
     .getByRole("button", { name: "Add condition", exact: true })
     .click();

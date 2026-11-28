@@ -196,25 +196,42 @@ pub fn validated_setup(
     Ok((imap, smtp))
 }
 
-pub fn normalize_setup_password(provider: &ProviderKind, password: &str) -> String {
-    match provider {
-        ProviderKind::Icloud => password.chars().filter(|ch| !ch.is_whitespace()).collect(),
-        ProviderKind::Manual
-        | ProviderKind::ProtonBridge
-        | ProviderKind::Gmail
-        | ProviderKind::Outlook => password.trim().to_string(),
+fn strip_invisible_chars(password: &str) -> String {
+    password
+        .chars()
+        .filter(|ch| {
+            !matches!(
+                ch,
+                '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00AD}'
+            )
+        })
+        .collect()
+}
+
+pub fn normalize_setup_password_for(
+    provider: &ProviderKind,
+    provider_id: Option<&str>,
+    password: &str,
+) -> String {
+    let cleaned = strip_invisible_chars(password);
+    if crate::providers::strips_password_spaces(provider, provider_id) {
+        cleaned.chars().filter(|ch| !ch.is_whitespace()).collect()
+    } else {
+        cleaned.trim().to_string()
     }
 }
 
 pub fn take_validated_setup(
     request: &mut AccountSetupRequest,
 ) -> Result<(ServerConfig, ServerConfig, Zeroizing<String>), String> {
-    let (imap, smtp) = validated_setup(request)?;
-    let password = Zeroizing::new(normalize_setup_password(
+    let validated = validated_setup(request);
+    let password = Zeroizing::new(normalize_setup_password_for(
         &request.provider,
+        request.provider_id.as_deref(),
         &request.password,
     ));
     request.password.zeroize();
+    let (imap, smtp) = validated?;
     if password.is_empty() || password.len() > 4096 {
         return Err("Enter the app-specific or email password.".into());
     }

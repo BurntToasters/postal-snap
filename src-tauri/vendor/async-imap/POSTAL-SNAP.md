@@ -39,6 +39,10 @@ Dependency change: `pin-utils` is removed (RUSTSEC-2026-0441). Its
 `unsafe_pinned!` macro is a local copy in `src/lib.rs` with the same projection;
 its `#[allow(unsafe_code)]` covers only that macro.
 
+IMAP `INTERNALDATE` now uses the maintained `time` crate and returns
+`time::OffsetDateTime`. The parser accepts the RFC 3501 space-padded and
+zero-padded single-digit day forms while retaining the server's UTC offset.
+
 Keep the local changes limited to these confirmed response-handling issues.
 Remove each patch when an upstream release provides equivalent behavior, then
 rerun the canonical mail integration suite.

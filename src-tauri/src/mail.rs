@@ -85,6 +85,7 @@ pub struct RemoteDraftData {
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
+    pub has_html: bool,
     pub html_body: String,
     pub text_body: String,
     pub in_reply_to: Option<String>,

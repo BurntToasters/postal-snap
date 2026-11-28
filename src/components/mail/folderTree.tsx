@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronRight, Inbox, Search, X } from "lucide-react";
 import { folderLabel, folderPathLabel } from "../../i18n/mail";
 import { strings } from "../../i18n";
+import { useAppStore } from "../../store";
 import type { MailboxRole, MailboxSummary } from "../../types";
 import { FolderButton } from "./folderButton";
 import {
@@ -58,7 +59,13 @@ export function FolderTree({
   collapsedMailboxIds = [],
   onToggleCollapsed,
 }: FolderTreeProps) {
+  const activeAccountId = useAppStore((state) => state.activeAccountId);
   const [query, setQuery] = useState("");
+  const [lastQueryAccountId, setLastQueryAccountId] = useState(activeAccountId);
+  if (lastQueryAccountId !== activeAccountId) {
+    setLastQueryAccountId(activeAccountId);
+    setQuery("");
+  }
   const filtering = query.trim().length > 0;
   const visible = mailboxesMatchingQuery(mailboxes, query);
   const tree = buildTree(visible);

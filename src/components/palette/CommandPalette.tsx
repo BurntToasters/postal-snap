@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { bestFuzzyScore } from "../../actions/fuzzy";
 import { controlLabel, listActions } from "../../actions/registry";
+import { strings } from "../../i18n";
 import { palette } from "../../i18n/palette";
 import { folderPathLabel } from "../../i18n/mail";
 import { useAppStore } from "../../store";
@@ -87,15 +88,45 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     ];
   });
 
-  // Folders come from the active account only, so no other account leaks in.
-  const folderOptions: Option[] = state.mailboxes
-    .filter((box) => box.accountId === state.activeAccountId)
-    .map((box) => ({
-      key: `folder:${box.id}`,
-      label: folderPathLabel(box),
-      keywords: [box.name],
-      run: () => state.selectMailbox(box.id),
-    }));
+  // Folders and local views come from the active account only.
+  const jumpMailbox = (detail: {
+    mailboxId?: number;
+    localView?: "drafts" | "outbox" | "snoozed";
+  }) => {
+    window.dispatchEvent(new CustomEvent("postal:jump-mailbox", { detail }));
+  };
+  const folderOptions: Option[] = [
+    ...(state.activeAccountId
+      ? [
+          {
+            key: "view:drafts",
+            label: strings.mail.drafts,
+            keywords: ["drafts", "compose"],
+            run: () => jumpMailbox({ localView: "drafts" }),
+          },
+          {
+            key: "view:outbox",
+            label: strings.mail.outbox,
+            keywords: ["outbox", "queued", "scheduled", "sending"],
+            run: () => jumpMailbox({ localView: "outbox" }),
+          },
+          {
+            key: "view:snoozed",
+            label: strings.mail.snoozed,
+            keywords: ["snoozed", "later", "remind"],
+            run: () => jumpMailbox({ localView: "snoozed" }),
+          },
+        ]
+      : []),
+    ...state.mailboxes
+      .filter((box) => box.accountId === state.activeAccountId)
+      .map((box) => ({
+        key: `folder:${box.id}`,
+        label: folderPathLabel(box),
+        keywords: [box.name],
+        run: () => jumpMailbox({ mailboxId: box.id }),
+      })),
+  ];
 
   const accountOptions: Option[] = state.accounts.flatMap((account, index) => {
     if (account.id === state.activeAccountId) return [];

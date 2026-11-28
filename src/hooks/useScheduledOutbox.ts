@@ -148,6 +148,11 @@ export function useScheduledOutbox(
         const request = beginScheduledSend(id, account);
         if (request)
           void request
+            .then((outcome) => {
+              if (outcome && outcome.state !== "sent" && outcome.detail) {
+                setError(outcome.detail);
+              }
+            })
             .catch((cause) => setError(errorText(cause)))
             .finally(() => void loadAccountData());
       }
@@ -180,6 +185,11 @@ export function useScheduledOutbox(
           const request = beginScheduledSend(ready.id, current.activeAccountId);
           if (request)
             void request
+              .then((outcome) => {
+                if (outcome && outcome.state !== "sent" && outcome.detail) {
+                  setError(outcome.detail);
+                }
+              })
               .catch((cause) => setError(errorText(cause)))
               .finally(() => void loadAccountData());
         } else {

@@ -1,6 +1,6 @@
 # Mail compatibility
 
-Postal Snap connects through verified IMAP and SMTP using implicit TLS or required STARTTLS. Accounts remain isolated. The setup screen still declines Gmail and Outlook passwords. User-facing OAuth is deferred to 0.6.0. Registration steps are in `docs/OAUTH.md`. POP and plaintext connections are unsupported.
+Postal Snap connects through verified IMAP and SMTP using implicit TLS or required STARTTLS. Accounts remain isolated. Gmail accepts a Google App Password through manual IMAP and SMTP setup. The setup screen still declines Outlook passwords. User-facing OAuth is deferred to 0.6.0. Registration steps are in `docs/OAUTH.md`. POP and plaintext connections are unsupported.
 
 ## Proton Bridge — experimental
 

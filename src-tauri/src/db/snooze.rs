@@ -3,6 +3,7 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::models::SnoozedSummary;
 
+database_operations! {
 impl Database {
     pub fn snooze_message(
         &self,
@@ -92,22 +93,17 @@ impl Database {
         Ok(())
     }
 
-    pub fn prune_expired_snoozes(&self, account_id: &str, now: &str) -> Result<(), String> {
-        self.conn()?
-            .execute(
+    pub fn list_snoozed(&self, account_id: &str, now: &str) -> Result<Vec<SnoozedSummary>, String> {
+        if let Some(conn) = self.try_conn() {
+            let _ = conn.execute(
                 "DELETE FROM snoozed_messages WHERE account_id=?1 AND snoozed_until<=?2",
                 params![account_id, now],
-            )
-            .map_err(db_error)?;
-        Ok(())
-    }
-
-    pub fn list_snoozed(&self, account_id: &str, now: &str) -> Result<Vec<SnoozedSummary>, String> {
-        self.prune_expired_snoozes(account_id, now)?;
+            );
+        }
         let conn = self.read_conn()?;
         let mut statement = conn
             .prepare(&format!(
-                "{} JOIN snoozed_messages s ON s.message_id=m.id AND s.account_id=m.account_id WHERE m.account_id=?1 ORDER BY s.snoozed_until ASC",
+                "{} JOIN snoozed_messages s ON s.message_id=m.id AND s.account_id=m.account_id WHERE m.account_id=?1 AND s.snoozed_until>?2 ORDER BY s.snoozed_until ASC",
                 MESSAGE_SUMMARY_SELECT.replace(
                     "FROM messages m",
                     ",s.snoozed_until FROM messages m"
@@ -115,7 +111,7 @@ impl Database {
             ))
             .map_err(db_error)?;
         let rows = statement
-            .query_map([account_id], |row| {
+            .query_map(params![account_id, now], |row| {
                 Ok(SnoozedSummary {
                     message: map_message_summary(row)?,
                     snoozed_until: row.get("snoozed_until")?,
@@ -126,4 +122,5 @@ impl Database {
             .map_err(db_error)?;
         Ok(rows)
     }
+}
 }

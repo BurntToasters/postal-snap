@@ -6,6 +6,9 @@ import type { MessageListFilter } from "./listFilter";
 import type { MessageListSort } from "./listSort";
 import type {
   AccountConnection,
+  FailedOfflineOperations,
+  FailedOfflineDismissal,
+  FailedOfflineOperationRef,
   BridgeCertificate,
   FolderAssignment,
   ServerConfig,
@@ -48,6 +51,7 @@ import type {
   FilterMatchPreview,
   FilterRule,
   SearchQuery,
+  ServerSearchResult,
   SyncState,
   SyncProgress,
   SendOutcome,
@@ -90,6 +94,8 @@ function inTauri(): boolean {
 
 export type NativeCommand =
   | "get_account_connection"
+  | "get_failed_offline_operations"
+  | "dismiss_failed_offline_operations"
   | "update_account_connection"
   | "import_bridge_certificate"
   | "approve_bridge_certificate"
@@ -247,6 +253,8 @@ export type NativeCommand =
   | "open_eml_file"
   | "get_opened_message"
   | "close_opened_message"
+  | "drain_opened_message_tokens"
+  | "acknowledge_opened_message_token"
   | "save_opened_attachment"
   | "preview_opened_attachment"
   | "view_attachment_message"
@@ -275,6 +283,18 @@ export const api = {
   beginUndoSession: () => call<string>("begin_undo_session", {}),
   getAccountConnection: (accountId: string) =>
     call<AccountConnection>("get_account_connection", { accountId }),
+  getFailedOfflineOperations: (accountId: string) =>
+    call<FailedOfflineOperations>("get_failed_offline_operations", {
+      accountId,
+    }),
+  dismissFailedOfflineOperations: (
+    accountId: string,
+    operations: FailedOfflineOperationRef[],
+  ) =>
+    call<FailedOfflineDismissal>("dismiss_failed_offline_operations", {
+      accountId,
+      operations,
+    }),
   updateAccountConnection: (
     accountId: string,
     imap: ServerConfig,
@@ -542,7 +562,7 @@ export const api = {
   searchCached: (query: SearchQuery) =>
     call<MessageSummary[]>("search_cached_messages", { query }),
   searchServer: (query: SearchQuery) =>
-    call<MessageSummary[]>("search_server_messages", { query }),
+    call<ServerSearchResult>("search_server_messages", { query }),
   listRecentSearches: (accountId: string) =>
     call<string[]>("list_recent_searches", { accountId }),
   rememberSearch: (accountId: string, query: string) =>
@@ -845,6 +865,9 @@ export const api = {
     call<OpenedMessage>("get_opened_message", { token }),
   closeOpenedMessage: (token: string) =>
     call<void>("close_opened_message", { token }),
+  drainOpenedMessageTokens: () => call<string[]>("drain_opened_message_tokens"),
+  acknowledgeOpenedMessageToken: (token: string) =>
+    call<void>("acknowledge_opened_message_token", { token }),
   saveOpenedAttachment: (token: string, attachmentId: string) =>
     call<void>("save_opened_attachment", { token, attachmentId }),
   previewOpenedAttachment: (token: string, attachmentId: string) =>

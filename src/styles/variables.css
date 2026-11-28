@@ -150,9 +150,8 @@
   --sidebar-section-gap: 6px 8px 2px;
   --search-box-min-width: 9rem;
   --search-box-flex-basis: 15rem;
-  /* Max-width is the one token not ordered px-wise: Normal is wider than
-     comfortable's 18.125rem so the search field fills a 1280 px window. */
-  --search-box-max-width: 20rem;
+  /* Keep Normal slightly wider than Comfortable. */
+  --search-box-max-width: 18.5rem;
   --pane-heading-height: 2.75rem;
   --pane-heading-pad-block: 4px;
   --message-row-height: 4rem;
@@ -518,7 +517,7 @@
   --toolbar-pad-inline: 12px;
   --toolbar-button-size: 2rem;
   --target-size: min(2rem, 44px);
-  --target-size-inset: min(1.75rem, 44px);
+  --target-size-inset: min(2rem, 44px);
   --control-pad-block: 4px;
   --row-pad-block: 4px;
   --bar-height-sm: min(2.5rem, 48px);

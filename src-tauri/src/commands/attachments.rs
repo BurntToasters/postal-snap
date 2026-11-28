@@ -48,9 +48,20 @@ pub async fn save_attachment(
         .map_err(|_| "Choose a valid save location.".to_string())?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
-        .ok_or_else(|| "Attachment not found.".to_string())?;
+    let raw_clone = raw.clone();
+    let requested_id = attachment_id.clone();
+    let cached_attachments = cached.attachments.clone();
+    let (attachment, bytes) = tokio::task::spawn_blocking(move || {
+        let (aliases, current) = mail::parse::attachment_id_variants(&raw_clone)?;
+        let attachment =
+            resolve_attachment_id(&cached_attachments, &aliases, &current, &requested_id)
+                .ok_or_else(|| "Attachment not found.".to_string())?
+                .clone();
+        let (_, bytes) = mail::extract_attachment(&raw_clone, &attachment.id)?;
+        Ok::<_, String>((attachment, bytes))
+    })
+    .await
+    .map_err(|_| "Could not read the attachment.".to_string())??;
     let stored = attachment.filename.clone();
     // Judge the name the message gives and the name the user typed; the
     // frontend's suggestion is never trusted for this.
@@ -63,7 +74,6 @@ pub async fn save_attachment(
     if !confirm_risky_files(&app, risky).await? {
         return Ok(());
     }
-    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
     write_user_chosen_file(&destination, &bytes).await?;
     crate::download_mark::mark_downloaded(&destination);
     Ok(())
@@ -294,8 +304,12 @@ pub async fn save_chosen_attachments(
     let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let chosen = chosen_message_files(&cached.attachments, &aliases, &current, &attachment_ids)?;
+    let chosen = tokio::task::spawn_blocking(move || {
+        let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+        chosen_message_files(&cached.attachments, &aliases, &current, &attachment_ids)
+    })
+    .await
+    .map_err(|_| "Could not inspect attachments.".to_string())??;
     if !confirm_risky_files(&app, risky_file_names(regular_file_names(&chosen))).await? {
         return Ok(0);
     }
@@ -303,8 +317,6 @@ pub async fn save_chosen_attachments(
         return Ok(0);
     };
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let chosen = chosen_message_files(&cached.attachments, &aliases, &current, &attachment_ids)?;
     let mut used = HashSet::new();
     let saved = write_message_files(&folder, &raw, &chosen, &mut used).await?;
     Ok(saved)
@@ -477,12 +489,27 @@ async fn write_message_files(
     attachments: &[Attachment],
     used: &mut HashSet<String>,
 ) -> Result<u32, String> {
+    let raw_owned = raw.to_vec();
+    let target_ids: Vec<(String, String)> = attachments
+        .iter()
+        .filter(|item| !item.inline)
+        .map(|item| (item.id.clone(), item.filename.clone()))
+        .collect();
+    let extracted = tokio::task::spawn_blocking(move || {
+        let mut items = Vec::with_capacity(target_ids.len());
+        for (id, filename) in target_ids {
+            let (_, bytes) = mail::extract_attachment(&raw_owned, &id)?;
+            items.push((filename, bytes));
+        }
+        Ok::<_, String>(items)
+    })
+    .await
+    .map_err(|_| "Could not read message attachments.".to_string())??;
     let mut saved = 0u32;
-    for attachment in attachments.iter().filter(|item| !item.inline) {
-        let (_, bytes) = mail::extract_attachment(raw, &attachment.id)?;
+    for (filename, bytes) in extracted {
         write_new_file(
             folder,
-            &attachment.filename,
+            &filename,
             &bytes,
             used,
             "Could not save the attachments in that folder.",
@@ -712,14 +739,21 @@ pub async fn preview_attachment(
     let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
-        .filter(|item| !item.inline)
-        .ok_or_else(|| "Attachment not found.".to_string())?;
-    if attachment.size > MAX_PREVIEW_BYTES as u64 {
-        return Err("This attachment is too large to preview.".into());
-    }
-    let (filename, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+    let (attachment, filename, bytes) = tokio::task::spawn_blocking(move || {
+        let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+        let attachment =
+            resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+                .filter(|item| !item.inline)
+                .ok_or_else(|| "Attachment not found.".to_string())?
+                .clone();
+        if attachment.size > MAX_PREVIEW_BYTES as u64 {
+            return Err("This attachment is too large to preview.".into());
+        }
+        let (filename, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+        Ok::<_, String>((attachment, filename, bytes))
+    })
+    .await
+    .map_err(|_| "Could not preview the attachment.".to_string())??;
     Ok(preview_bytes(filename, &attachment.content_type, bytes).await?)
 }
 
@@ -740,27 +774,25 @@ pub(crate) async fn preview_bytes(
     if is_pdf_candidate(&filename, content_type) && bytes.starts_with(b"%PDF-") {
         return crate::pdf_preview::render_pdf_pages(filename, bytes).await;
     }
-    if matches!(
-        content_type,
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    ) {
-        // Declared type alone is not trusted: sniff the bytes too.
-        if security::detect_image_mime(&bytes) != Some(content_type) {
+    if security::is_allowed_image_content_type(content_type) {
+        if let Some(sniffed) = security::detect_image_mime(&bytes) {
+            if !security::image_within_pixel_limit(&bytes, sniffed) {
+                return Err("This image format is not supported.".into());
+            }
+            return Ok(AttachmentPreview {
+                pages: None,
+                page_count: None,
+                pages_truncated: false,
+                filename,
+                content_type: sniffed.to_string(),
+                size: bytes.len() as u64,
+                text: None,
+                image_data_url: Some(format!("data:{sniffed};base64,{}", STANDARD.encode(&bytes))),
+            });
+        }
+        if content_type != "application/octet-stream" {
             return Err("This image format is not supported.".into());
         }
-        return Ok(AttachmentPreview {
-            pages: None,
-            page_count: None,
-            pages_truncated: false,
-            filename,
-            content_type: content_type.to_string(),
-            size: bytes.len() as u64,
-            text: None,
-            image_data_url: Some(format!(
-                "data:{content_type};base64,{}",
-                STANDARD.encode(&bytes)
-            )),
-        });
     }
     if content_type == "text/plain" {
         let Some(text) = preview_text(&bytes) else {
@@ -792,16 +824,19 @@ pub async fn view_attachment_message(
     let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
-        .ok_or_else(|| "Attachment not found.".to_string())?;
-    if !opened_mail::is_message_attachment(attachment) {
-        return Err("This attachment is not an email message.".into());
-    }
-    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
-    let opened = tokio::task::spawn_blocking(move || opened_mail::open_bytes(bytes))
-        .await
-        .map_err(|_| "Could not open the attached message.".to_string())??;
+    let opened = tokio::task::spawn_blocking(move || {
+        let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+        let attachment =
+            resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+                .ok_or_else(|| "Attachment not found.".to_string())?;
+        if !opened_mail::is_message_attachment(attachment) {
+            return Err("This attachment is not an email message.".to_string());
+        }
+        let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+        opened_mail::open_bytes(bytes)
+    })
+    .await
+    .map_err(|_| "Could not open the attached message.".to_string())??;
     Ok(opened)
 }
 
@@ -911,15 +946,20 @@ async fn prepare_message_attachments(
         .map_err(|_| "Could not create private draft storage.".to_string())?;
     let mut prepared = Vec::new();
     let mut created_tokens = Vec::new();
-    let chosen: Vec<&Attachment> = if files_only {
+    let chosen: Vec<Attachment> = if files_only {
         reply_files(&detail.attachments)
+            .into_iter()
+            .cloned()
+            .collect()
     } else {
-        detail.attachments.iter().collect()
+        detail.attachments.clone()
     };
-    let result = async {
+    let html_body = detail.html_body.clone();
+    let extracted = tokio::task::spawn_blocking(move || {
+        let mut items = Vec::with_capacity(chosen.len());
         let mut total = 0usize;
         for attachment in chosen {
-            let inline = !files_only && forward_as_inline(attachment, detail.html_body.as_deref());
+            let inline = !files_only && forward_as_inline(&attachment, html_body.as_deref());
             let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
             total = total.saturating_add(bytes.len());
             if total > mail::MAX_MESSAGE_BYTES {
@@ -928,8 +968,16 @@ async fn prepare_message_attachments(
                 } else {
                     "Forwarded attachments are too large to prepare safely."
                 }
-                .into());
+                .to_string());
             }
+            items.push((attachment, inline, bytes));
+        }
+        Ok::<_, String>(items)
+    })
+    .await
+    .map_err(|_| "Could not prepare attachments.".to_string())??;
+    let result = async {
+        for (attachment, inline, bytes) in extracted {
             let token = write_managed_file(&state, &account_id, &account_dir, &bytes).await?;
             created_tokens.push(token.clone());
             prepared.push(ComposeAttachment {
@@ -987,6 +1035,7 @@ pub fn pasted_image(data: &str) -> Result<(Vec<u8>, &'static str, String), Strin
         return Err("That image is too large.".into());
     }
     let mime = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     let extension = match mime {
         "image/jpeg" => "jpg",
@@ -1146,28 +1195,30 @@ pub async fn read_message_inline_image(
     let cached = state.db.message_meta(message_id, &account_id)?;
     ensure_message_content_for(&account_id, message_id, &state, Need::Full).await?;
     let raw = state.db.raw_message(message_id, &account_id)?;
-    let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
-    let attachment = resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
-        .filter(|item| item.inline && item.content_id.is_some())
-        .ok_or_else(|| "Inline image not found.".to_string())?;
-    if !matches!(
-        attachment.content_type.as_str(),
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    ) {
-        return Err("This inline image format is not supported.".into());
-    }
-    if attachment.size > 20 * 1024 * 1024 {
-        return Err("This inline image is too large.".into());
-    }
-    let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
-    if bytes.len() > 20 * 1024 * 1024 {
-        return Err("This inline image is too large.".into());
-    }
+    let (content_type, bytes) = tokio::task::spawn_blocking(move || {
+        let (aliases, current) = mail::parse::attachment_id_variants(&raw)?;
+        let attachment =
+            resolve_attachment_id(&cached.attachments, &aliases, &current, &attachment_id)
+                .filter(|item| item.inline && item.content_id.is_some())
+                .ok_or_else(|| "Inline image not found.".to_string())?;
+        if !security::is_allowed_image_content_type(&attachment.content_type) {
+            return Err("This inline image format is not supported.".to_string());
+        }
+        if attachment.size > 20 * 1024 * 1024 {
+            return Err("This inline image is too large.".to_string());
+        }
+        let (_, bytes) = mail::extract_attachment(&raw, &attachment.id)?;
+        if bytes.len() > 20 * 1024 * 1024 {
+            return Err("This inline image is too large.".to_string());
+        }
+        Ok::<_, String>((attachment.content_type.clone(), bytes))
+    })
+    .await
+    .map_err(|_| "Could not load the inline image.".to_string())??;
+    let _ = content_type;
     let sniffed = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "This inline image format is not supported.".to_string())?;
-    if sniffed != attachment.content_type {
-        return Err("This inline image format is not supported.".into());
-    }
     Ok(format!("data:{sniffed};base64,{}", STANDARD.encode(bytes)))
 }
 
@@ -1200,6 +1251,7 @@ pub async fn read_compose_image(
             BoundedFileError::Unavailable => "Could not read that image.".to_string(),
         })?;
     let mime = security::detect_image_mime(&bytes)
+        .filter(|mime| security::image_within_pixel_limit(&bytes, mime))
         .ok_or_else(|| "Choose a PNG, JPEG, GIF, or WebP image.".to_string())?;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
@@ -1241,6 +1293,10 @@ mod tests {
                 notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "preview@example.test".into(),
                 display_name: "Preview".into(),
                 sync_state: "idle".into(),
@@ -1294,8 +1350,11 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let image = dir.path().join("preview.png");
-        let bytes = b"\x89PNG\r\n\x1a\npreview";
-        std::fs::write(&image, bytes).unwrap();
+        // A 1x1 PNG header, so the header-only pixel budget accepts it.
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0preview");
+        std::fs::write(&image, &bytes).unwrap();
         let (app, _app_dir, account_id) = compose_preview_app(&image, "preview-token");
         let state = app.app_handle().state::<AppState>();
 

@@ -7,6 +7,7 @@ import { deleteLoadedConversation } from "../../deleteConversation";
 import {
   moveLoadedConversation,
   type ConversationMoveRole,
+  type MoveFailureReconciler,
 } from "../../moveConversation";
 import { rememberMoveMailboxId } from "../../recentMailbox";
 import { useAppStore } from "../../store";
@@ -49,6 +50,7 @@ interface Options {
   setMailboxes: Store["setMailboxes"];
   setError: (error?: string) => void;
   moveOperations: RefObject<Map<number, number>>;
+  reconcileMoveFailure?: MoveFailureReconciler;
 }
 
 export function useReaderMoves({
@@ -57,6 +59,7 @@ export function useReaderMoves({
   setMailboxes,
   setError,
   moveOperations,
+  reconcileMoveFailure,
 }: Options) {
   async function deleteForever() {
     const snapshot = useAppStore.getState();
@@ -92,9 +95,12 @@ export function useReaderMoves({
       return;
     }
     const after = useAppStore.getState();
+    const stillInList = after.messages.some(
+      (summary) => summary.id === message.id,
+    );
     if (
       after.activeAccountId !== message.accountId ||
-      after.activeMailboxId !== message.mailboxId ||
+      (after.activeMailboxId !== message.mailboxId && !stillInList) ||
       after.activeLocalView ||
       (after.selectedMessage && after.selectedMessage.id !== message.id)
     )
@@ -139,23 +145,27 @@ export function useReaderMoves({
       const detail = await api.getMessage(next.accountId, next.id);
       if (!isCurrentMessageOpen(request)) return;
       const current = useAppStore.getState();
+      const stillInList = current.messages.some((item) => item.id === next.id);
       if (
         current.activeAccountId !== next.accountId ||
-        current.activeMailboxId !== next.mailboxId ||
+        (current.activeMailboxId !== next.mailboxId && !stillInList) ||
         current.activeLocalView
       )
         return;
       selectMessage(detail);
-      if (next.isRead) return;
+      if (next.isRead && detail.isRead) return;
       const readyToMark = await waitToMarkRead(
         useAppStore.getState().settings.markRead,
         () => {
           const latest = useAppStore.getState();
+          const latestInList = latest.messages.some(
+            (item) => item.id === next.id,
+          );
           return (
             isCurrentMessageOpen(request) &&
             latest.selectedMessage?.id === next.id &&
             latest.activeAccountId === next.accountId &&
-            latest.activeMailboxId === next.mailboxId &&
+            (latest.activeMailboxId === next.mailboxId || latestInList) &&
             !latest.activeLocalView
           );
         },
@@ -433,14 +443,19 @@ export function useReaderMoves({
     if (!message) return;
     if (typeof target === "number")
       rememberMoveMailboxId(snapshot.mailboxes, target);
-    void moveLoadedConversation(message, target, (next, openWasMoved) => {
-      if (!openWasMoved) return;
-      if (next) void showNextMessage(next);
-      else {
-        beginMessageOpen();
-        selectMessage(undefined);
-      }
-    });
+    void moveLoadedConversation(
+      message,
+      target,
+      (next, openWasMoved) => {
+        if (!openWasMoved) return;
+        if (next) void showNextMessage(next);
+        else {
+          beginMessageOpen();
+          selectMessage(undefined);
+        }
+      },
+      reconcileMoveFailure,
+    );
   }
 
   function moveToInbox() {

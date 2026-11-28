@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 const focusable =
   'button, input, select, textarea, iframe, a[href], area[href], [tabindex], summary, [contenteditable]:not([contenteditable="false"]), audio[controls], video[controls]';
@@ -55,15 +55,25 @@ export function useDialogFocus(
   const internalRef = useRef<HTMLElement>(null);
   const ref = options?.ref ?? internalRef;
   const closeRef = useRef(onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const trapFocus = options?.trapFocus ?? true;
 
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+  useLayoutEffect(() => {
     const dialog = ref.current;
+    const active = document.activeElement as HTMLElement | null;
+    // Preserve the opener when StrictMode replays this effect after focusing inside.
+    if (
+      previousFocusRef.current === null &&
+      active &&
+      (!dialog || !dialog.contains(active))
+    ) {
+      previousFocusRef.current = active;
+    }
+    const previous = previousFocusRef.current;
     if (dialog) {
       if (trapFocus) dialog.setAttribute("data-dialog-focus-trap", "");
       // React applies autoFocus without leaving an attribute or property
@@ -83,16 +93,13 @@ export function useDialogFocus(
       const first =
         controls.find((element) => element.hasAttribute("autofocus")) ??
         controls[0];
-      window.setTimeout(() => {
-        if (
-          document.activeElement &&
-          document.activeElement !== document.body &&
-          dialog.contains(document.activeElement)
-        ) {
-          return;
-        }
+      if (
+        !document.activeElement ||
+        document.activeElement === document.body ||
+        !dialog.contains(document.activeElement)
+      ) {
         first?.focus();
-      }, 0);
+      }
     }
 
     function onKeyDown(event: KeyboardEvent) {
@@ -120,16 +127,12 @@ export function useDialogFocus(
       if (event.key !== "Tab" || !trapFocus || event.defaultPrevented) return;
       const items = [
         ...currentDialog.querySelectorAll<HTMLElement>(focusable),
-        ...document.querySelectorAll<HTMLElement>(
-          ".global-window-caption-controls button",
-        ),
       ].filter(isSequentiallyFocusable);
       if (items.length === 0) return;
       const firstItem = items[0];
       const lastItem = items.at(-1)!;
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
-      // Include the real window controls without leaking focus into inert mail.
-      // Explicit traversal also handles the caption controls' separate DOM root.
+      // Keep modal traversal inside the dialog, including on frameless Windows.
       if (currentIndex >= 0) {
         event.preventDefault();
         items[

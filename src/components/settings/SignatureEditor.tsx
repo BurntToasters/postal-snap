@@ -171,12 +171,6 @@ export function SignatureEditor({
           value={plainText}
           onChange={(event) => {
             const next = event.target.value;
-            if (
-              !next.trim() &&
-              editor?.isInitialized &&
-              editor.getText().trim()
-            )
-              return;
             customizedFallback.current = true;
             fallbackTextRef.current = next;
             onPlainTextChange(next);

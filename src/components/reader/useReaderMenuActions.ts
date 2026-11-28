@@ -274,6 +274,7 @@ export function useReaderMenuActions({
   useEffect(() => {
     const print = () => printMessageRef.current();
     const find = () => {
+      if (!useAppStore.getState().selectedMessage) return;
       setFindOpen(true);
       window.setTimeout(() => findInputRef.current?.focus(), 0);
     };
@@ -285,6 +286,7 @@ export function useReaderMenuActions({
     window.addEventListener("postal:find-in-message", find);
     window.addEventListener("postal:scroll-reader", scroll);
     const openSnooze = () => {
+      keepSnooze.current = true;
       setSnoozeConversation(false);
       setSnoozeOpen(true);
     };

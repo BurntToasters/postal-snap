@@ -106,7 +106,8 @@
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: transparent;
+  /* Opaque by default: a gutter is chrome, never native window material. */
+  background: var(--surface);
   touch-action: none;
 }
 
@@ -141,6 +142,7 @@
 
 .folder-splitter {
   grid-area: folder-splitter;
+  background: var(--sidebar-bg);
 }
 
 .reader-splitter {

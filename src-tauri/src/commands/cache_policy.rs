@@ -22,6 +22,7 @@ pub async fn set_account_cache_policy(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<CachePolicy> {
+    let _guard = state.lock_account(&account_id).await?;
     if !policy.is_valid() {
         return Err("Choose a valid download setting.".into());
     }
@@ -54,6 +55,7 @@ pub async fn clear_account_downloads(
     account_id: String,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    let _guard = state.lock_account(&account_id).await?;
     state.db.account(&account_id)?;
     let db = state.db.clone();
     let marker = state.compact_marker();

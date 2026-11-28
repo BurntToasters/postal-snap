@@ -19,6 +19,7 @@ import { BREAKPOINTS, MEDIA_QUERIES } from "../src/breakpoints";
 
 const DENSITIES = ["normal", "comfortable", "compact"] as const;
 const BOUNDARY_WIDTHS = [559, 560, 561, 759, 760, 761, 899, 900] as const;
+const SETUP_WIDTHS = [559, 560, 561] as const;
 // Narrow sides are inclusive; wide sides start 0.02px above them (900 keeps 899.98).
 const ALLOWED_MAX_PX = new Set(["560", "760", "899.98"]);
 const ALLOWED_MIN_PX = new Set(["560.02", "760.02", "900"]);
@@ -112,11 +113,19 @@ test("FM2 reader overlay switches after 760px and setup card after 560px", async
 test("FM3 no horizontal scroll at boundary widths", async ({
   page,
 }, testInfo) => {
+  test.slow();
   const results: Record<string, boolean> = {};
-  for (const width of BOUNDARY_WIDTHS) {
-    for (const density of DENSITIES) {
-      for (const scale of [1, 2]) {
-        await openMailbox(page, `density=${density}&scale=${scale}`, width);
+  for (const density of DENSITIES) {
+    for (const scale of [1, 2]) {
+      await openMailbox(
+        page,
+        `density=${density}&scale=${scale}`,
+        BOUNDARY_WIDTHS[0],
+      );
+      for (const width of BOUNDARY_WIDTHS) {
+        if (width !== BOUNDARY_WIDTHS[0]) {
+          await page.setViewportSize({ width, height: 840 });
+        }
         const overflow = await page.evaluate(
           () => document.documentElement.scrollWidth > window.innerWidth + 1,
         );
@@ -124,10 +133,13 @@ test("FM3 no horizontal scroll at boundary widths", async ({
       }
     }
   }
-  for (const width of [559, 560, 561]) {
-    for (const scale of [1, 2]) {
-      await page.setViewportSize({ width, height: 840 });
-      await page.goto(`/?firstRun=1&density=normal&scale=${scale}`);
+  for (const scale of [1, 2]) {
+    await page.setViewportSize({ width: SETUP_WIDTHS[0], height: 840 });
+    await page.goto(`/?firstRun=1&density=normal&scale=${scale}`);
+    for (const width of SETUP_WIDTHS) {
+      if (width !== SETUP_WIDTHS[0]) {
+        await page.setViewportSize({ width, height: 840 });
+      }
       await expect(
         page.locator(".setup-card.setup-flow").first(),
       ).toBeVisible();

@@ -85,7 +85,6 @@ pub async fn sync_all_accounts(
 
 pub(crate) struct SyncPassOutcome {
     pub more_work: bool,
-    pub rule_notify_suppressed_ids: Vec<i64>,
 }
 
 pub(crate) struct SyncPassOptions {
@@ -144,13 +143,27 @@ struct WorkerHooks<'a> {
     explicit: bool,
 }
 
+pub(crate) fn validate_connection_identity(
+    db: &Database,
+    account_id: &str,
+    previous: &crate::models::AccountRecord,
+) -> Result<(), String> {
+    let current = db.account(account_id)?;
+    if current.summary.id != previous.summary.id
+        || current.summary.provider != previous.summary.provider
+        || current.summary.email != previous.summary.email
+        || current.summary.auth_method != previous.summary.auth_method
+        || current.imap != previous.imap
+        || current.smtp != previous.smtp
+    {
+        return Err("Account connection changed. Restart the operation.".into());
+    }
+    Ok(())
+}
+
 impl mail::SyncHooks for WorkerHooks<'_> {
     fn validate_connection(&self, previous: &crate::models::AccountRecord) -> Result<(), String> {
-        let current = self.db.account(&self.account_id)?;
-        if current.imap != previous.imap || current.smtp != previous.smtp {
-            return Err("Account connection changed. Restart mail sync.".into());
-        }
-        Ok(())
+        validate_connection_identity(&self.db, &self.account_id, previous)
     }
 
     fn contended(&self) -> bool {
@@ -242,6 +255,14 @@ pub(crate) async fn run_sync_pass(
     let password = match crate::oauth::session_secret(&account).await {
         Ok(password) => password,
         Err(error) => {
+            if account.summary.auth_method == "password" && error.contains("is missing") {
+                let detail = "Sign-in failed. Update the account password in Settings > Accounts.";
+                let _ = state
+                    .db
+                    .set_account_state(account_id, "authFailed", Some(detail));
+                emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
+                return Err(PassError::AuthenticationFailed(error));
+            }
             let _ = state
                 .db
                 .set_account_state(account_id, "offline", Some(&error));
@@ -280,14 +301,25 @@ pub(crate) async fn run_sync_pass(
     // Everything below needs the account; the hooks hold it again after any
     // yield.
     let _guard = hooks.guard.take();
-    let rule_notify_suppressed_ids = finish_sync_rule_window(
+    let mut pending_rule_notice: Option<i64> = None;
+    finish_sync_rule_window(
         &state.db,
         &account,
         filter_watermark,
         result.is_ok(),
         allow_rule_notices,
-        &mut |message_id| crate::notify::rule_notice(app, &state.db, account_id, message_id),
+        &mut |message_id| {
+            pending_rule_notice = Some(message_id);
+            true
+        },
     );
+    let pending_rule_header = pending_rule_notice.and_then(|id| {
+        state
+            .db
+            .message_detail(id, account_id)
+            .ok()
+            .and_then(|detail| detail.summary.message_id)
+    });
     match result {
         Ok(outcome) => {
             let _ = state.db.file_muted_inbox(account_id);
@@ -295,9 +327,24 @@ pub(crate) async fn run_sync_pass(
                 replay_offline_operations(app, &state.db, &account, &password, &policy)
                     .await
                     .unwrap_or(true);
+            if let Some(id) = pending_rule_notice
+                .filter(|&id| state.db.message_meta(id, account_id).is_ok())
+                .or_else(|| {
+                    pending_rule_header.as_deref().and_then(|hdr| {
+                        state
+                            .db
+                            .find_message_by_header_id(account_id, hdr)
+                            .ok()
+                            .flatten()
+                            .map(|m| m.id)
+                    })
+                })
+            {
+                crate::notify::rule_notice(app, &state.db, account_id, id);
+            }
             sync_drafts_locked(state, &account, &password).await;
             replay_outbox_locked(account_id, app, state).await;
-            let now = chrono::Utc::now().to_rfc3339();
+            let now = crate::date_time::format_rfc3339(crate::date_time::now_utc());
             let _ = state.db.set_account_state(account_id, "idle", None);
             let detail = if pending_changes {
                 "Some changes are waiting to sync"
@@ -316,7 +363,6 @@ pub(crate) async fn run_sync_pass(
             emit_outbox_change(app, account_id, None, None);
             Ok(SyncPassOutcome {
                 more_work: outcome.more_work,
-                rule_notify_suppressed_ids,
             })
         }
         Err(error) => {
@@ -331,6 +377,14 @@ pub(crate) async fn run_sync_pass(
                     .set_account_state(account_id, "authFailed", Some(detail));
                 emit_sync(app, account_id, "authFailed", Some("Sign-in failed"), None);
                 Err(PassError::AuthenticationFailed(error.into()))
+            } else if error.kind == FailureKind::Certificate {
+                let detail =
+                    "Certificate verification failed. Check the trusted server certificate.";
+                let _ = state
+                    .db
+                    .set_account_state(account_id, "offline", Some(detail));
+                emit_sync(app, account_id, "offline", Some(detail), None);
+                Err(PassError::Other(error.into()))
             } else {
                 let _ = state.db.set_account_state(
                     account_id,
@@ -372,24 +426,22 @@ pub(crate) fn folder_poll_due(visible: Option<&VisibleFolder>, now: Instant) -> 
     Some((visible.polled_at + FOLDER_POLL).saturating_duration_since(now))
 }
 
-/// Folders a wake covers: INBOX for the watcher, and the visible folder once
-/// its poll is due. Each folder appears once, so a pass never repeats one.
+/// Folders a wake covers: the account's effective Inbox for the watcher, and
+/// the visible folder once its poll is due. The pass resolves the Inbox name,
+/// so an explicit assignment and a raw role never both join one pass.
 pub(crate) fn scope_for_wake(
     reasons: u16,
     visible_name: Option<&str>,
 ) -> Option<mail::sync::SyncScope> {
-    let mut folders = Vec::new();
+    let visible = (reasons & wake::FOLDER != 0)
+        .then(|| visible_name.map(str::to_string))
+        .flatten();
     if reasons & wake::INBOX != 0 {
-        folders.push("INBOX".to_string());
+        return Some(mail::sync::SyncScope::Inbox {
+            also: visible.into_iter().collect(),
+        });
     }
-    if reasons & wake::FOLDER != 0 {
-        if let Some(name) = visible_name {
-            if !folders.iter().any(|folder| folder == name) {
-                folders.push(name.to_string());
-            }
-        }
-    }
-    (!folders.is_empty()).then_some(mail::sync::SyncScope::Folders(folders))
+    visible.map(|name| mail::sync::SyncScope::Folders(vec![name]))
 }
 
 impl AppState {
@@ -514,14 +566,14 @@ async fn replay_due_operations_locked(account_id: &str, app: &AppHandle, state: 
     emit_folder_counts(app, account_id);
 }
 
-/// Rows newer than this mark are filed after the pass. A failed pass leaves
-/// its mark stored, so the next successful pass still files what it cached.
+/// A sentinel for arrival-only rule work. Durable per-message state owns the
+/// actual provenance; the legacy account mark keeps pre-v44 retries covered.
 pub(crate) fn begin_rule_window(db: &Database, account_id: &str) -> Option<i64> {
     let mark = db
         .rules_pending_from(account_id)
         .ok()
         .flatten()
-        .or_else(|| db.latest_message_rowid().ok())?;
+        .unwrap_or(0);
     db.keep_rules_pending_from(account_id, mark).ok()?;
     Some(mark)
 }
@@ -588,8 +640,12 @@ enum PlannedStep {
     Notify,
 }
 
-fn plan_step(db: &Database, account_id: &str, action: &RuleAction) -> Option<PlannedStep> {
-    match action.kind.as_str() {
+fn plan_step(
+    db: &Database,
+    account_id: &str,
+    action: &RuleAction,
+) -> Result<Option<PlannedStep>, String> {
+    let step = match action.kind.as_str() {
         "mark_read" => Some(PlannedStep::MarkRead),
         "pin" => Some(PlannedStep::Pin),
         "notify" => Some(PlannedStep::Notify),
@@ -599,35 +655,35 @@ fn plan_step(db: &Database, account_id: &str, action: &RuleAction) -> Option<Pla
             .map(PlannedStep::Flag),
         "move_archive" | "move_trash" | "move_junk" => {
             let role = action.kind.strip_prefix("move_").unwrap_or("archive");
-            db.mailbox_for_role(account_id, role).ok().flatten().map(
-                |(destination_id, destination)| PlannedStep::Move {
+            db.mailbox_for_rule_role(account_id, role)?
+                .map(|(destination_id, destination)| PlannedStep::Move {
                     destination_id,
                     destination,
-                },
-            )
+                })
         }
-        "move_mailbox" => action
+        "move_mailbox" => match action
             .target_mailbox
             .as_deref()
             .and_then(|id| id.parse::<i64>().ok())
-            .and_then(|id| {
-                db.mailbox(id)
-                    .ok()
-                    .filter(|(owner, _)| owner == account_id)
-                    .map(|(_, name)| PlannedStep::Move {
-                        destination_id: id,
-                        destination: name,
-                    })
-            }),
+        {
+            Some(id) => db
+                .mailbox_name_for_account(account_id, id)?
+                .map(|destination| PlannedStep::Move {
+                    destination_id: id,
+                    destination,
+                }),
+            None => None,
+        },
         _ => None,
-    }
+    };
+    Ok(step)
 }
 
 /// File newly synced inbox mail through enabled filter rules. Actions
 /// reuse the offline queue (local apply + queued op), so the replay later
 /// in this sync delivers them and failures stay queued, never half-applied.
-/// `newer_than_id` bounds the scan to rows cached by the current sync pass;
-/// `None` evaluates every unread inbox message (rule creation/update).
+/// `newer_than_id` selects durable catch-up arrivals; `None` evaluates every
+/// unread Inbox message for a retroactive rule edit.
 pub(crate) fn apply_filter_rules(
     db: &Database,
     account: &AccountRecord,
@@ -658,29 +714,64 @@ fn apply_filter_rules_collecting(
     let Ok(rules) = db.list_filter_rules(account_id) else {
         return (false, Vec::new());
     };
+    let arrival_ids = if newer_than_id.is_some() {
+        let Ok(ids) = db.pending_rule_arrival_ids(account_id) else {
+            return (false, Vec::new());
+        };
+        Some(ids)
+    } else {
+        None
+    };
     let mut planned: Vec<(PlannedStep, Vec<RuleHit>)> = Vec::new();
     let mut complete = true;
     let mut notice: Option<i64> = None;
     let mut notify_matched_ids: Vec<i64> = Vec::new();
+    let mut failed = std::collections::HashSet::new();
     for rule in rules.iter().filter(|rule| rule.enabled) {
         if validate_filter_rule(rule, account_id).is_err() {
             continue;
         }
+        let matches = match arrival_ids.as_deref() {
+            Some(ids) => db.find_rule_matches_in_arrivals(account_id, rule, ids),
+            None => db.find_rule_matches(account_id, rule, newer_than_id),
+        };
+        let Ok(matches) = matches else {
+            complete = false;
+            if let Some(ids) = arrival_ids.as_ref() {
+                failed.extend(ids.iter().copied());
+            }
+            continue;
+        };
+        if arrival_ids.is_none() {
+            complete &= matches.len() < 100;
+        }
+        if matches.is_empty() {
+            continue;
+        }
         let mut steps = Vec::new();
+        let mut unresolved = false;
+        let mut planning_failed = false;
         for action in &rule.actions {
             match plan_step(db, account_id, action) {
-                Some(step) => steps.push(step),
-                None => complete = false,
+                Ok(Some(step)) => steps.push(step),
+                Ok(None) => unresolved = true,
+                Err(_) => {
+                    complete = false;
+                    planning_failed = true;
+                }
             }
+        }
+        // Manual retroactive application remains incomplete when its target
+        // is unavailable; automatic arrivals skip it to avoid page starvation.
+        if unresolved && arrival_ids.is_none() {
+            complete = false;
+        }
+        if planning_failed {
+            failed.extend(matches.iter().map(|(id, _, _, _)| *id));
         }
         if steps.is_empty() {
             continue;
         }
-        let Ok(matches) = db.find_rule_matches(account_id, rule, newer_than_id) else {
-            complete = false;
-            continue;
-        };
-        complete &= matches.len() < 100;
         for step in steps {
             match step {
                 PlannedStep::Notify => {
@@ -694,12 +785,15 @@ fn apply_filter_rules_collecting(
             }
         }
     }
+    // Queue flag/pin updates before moves so replay never drops flags on removed source rows.
+    planned.sort_by_key(|(step, _)| matches!(step, PlannedStep::Move { .. }) as u8);
     for (step, matches) in planned {
         match step {
             PlannedStep::MarkRead => {
                 for (id, uid, mailbox, _) in &matches {
                     let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
                         complete = false;
+                        failed.insert(*id);
                         continue;
                     };
                     let operation = FlagOperation {
@@ -713,9 +807,10 @@ fn apply_filter_rules_collecting(
                     };
                     let Ok(queued) = serde_json::to_value(&operation) else {
                         complete = false;
+                        failed.insert(*id);
                         continue;
                     };
-                    complete &= db
+                    if db
                         .record_colored_flag_change(
                             account_id,
                             *id,
@@ -724,7 +819,11 @@ fn apply_filter_rules_collecting(
                             None,
                             Some(&queued),
                         )
-                        .is_ok();
+                        .is_err()
+                    {
+                        complete = false;
+                        failed.insert(*id);
+                    }
                 }
             }
             PlannedStep::Move {
@@ -737,6 +836,7 @@ fn apply_filter_rules_collecting(
                     }
                     let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, source) else {
                         complete = false;
+                        failed.insert(*id);
                         continue;
                     };
                     let operation = MoveOperation {
@@ -753,6 +853,7 @@ fn apply_filter_rules_collecting(
                         Ok(false) => {}
                         Err(_) => {
                             complete = false;
+                            failed.insert(*id);
                             continue;
                         }
                     }
@@ -761,15 +862,20 @@ fn apply_filter_rules_collecting(
                         .is_err()
                     {
                         complete = false;
+                        failed.insert(*id);
                         continue;
                     }
-                    complete &= db.mark_pending_move(*id, destination_id).is_ok();
+                    if db.mark_pending_move(*id, destination_id).is_err() {
+                        complete = false;
+                        failed.insert(*id);
+                    }
                 }
             }
             PlannedStep::Flag(color) => {
                 for (id, uid, mailbox, _) in &matches {
                     let Ok(Some(validity)) = db.mailbox_uid_validity(account_id, mailbox) else {
                         complete = false;
+                        failed.insert(*id);
                         continue;
                     };
                     // Same path as the manual color command: local color and
@@ -784,7 +890,7 @@ fn apply_filter_rules_collecting(
                         flag_color: Some(color),
                     };
                     let payload = serde_json::to_value(&operation).ok();
-                    complete &= db
+                    if db
                         .record_colored_flag_change(
                             account_id,
                             *id,
@@ -793,18 +899,47 @@ fn apply_filter_rules_collecting(
                             Some(ColorChange::Set(color)),
                             payload.as_ref(),
                         )
-                        .is_ok();
+                        .is_err()
+                    {
+                        complete = false;
+                        failed.insert(*id);
+                    }
                 }
             }
             PlannedStep::Pin => {
                 let ids: Vec<i64> = matches.iter().map(|(id, _, _, _)| *id).collect();
-                complete &= db.set_pinned(account_id, &ids, true).is_ok();
+                if db.set_pinned(account_id, &ids, true).is_err() {
+                    complete = false;
+                    failed.extend(ids);
+                }
             }
             PlannedStep::Notify => {}
         }
     }
     if let Some(message_id) = notice {
         on_notice(message_id);
+    }
+    if let Some(ids) = arrival_ids.as_ref() {
+        let handled: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|id| !failed.contains(id))
+            .collect();
+        if db
+            .finish_rule_arrivals(account_id, false, &handled, &notify_matched_ids)
+            .is_err()
+        {
+            complete = false;
+        } else if complete && failed.is_empty() {
+            match db.pending_rule_arrival_ids(account_id) {
+                Ok(remaining) if remaining.is_empty() => {
+                    complete = db.finish_rule_arrivals(account_id, true, &[], &[]).is_ok();
+                }
+                Ok(_) | Err(_) => complete = false,
+            }
+        } else {
+            complete = false;
+        }
     }
     (complete, notify_matched_ids)
 }
@@ -1046,10 +1181,14 @@ async fn import_remote_drafts_locked(
             continue;
         }
         let draft = ComposeDraft {
-            body_format: crate::models::BodyFormat::Html,
+            body_format: if remote.has_html {
+                crate::models::BodyFormat::Html
+            } else {
+                crate::models::BodyFormat::Plain
+            },
             source_message_id: None,
             source_kind: None,
-            include_signature: true,
+            include_signature: false,
             importance: String::new(),
             request_receipt: false,
             reply_to: None,
@@ -1154,7 +1293,7 @@ pub(crate) async fn replay_outbox_locked(account_id: &str, app: &AppHandle, stat
             let _ = deliver_outbox_locked(&id, account_id, "queued", app, state).await;
         }
     }
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = crate::date_time::format_rfc3339(crate::date_time::now_utc());
     if let Ok(ids) = state.db.scheduled_due_outbox_ids(account_id, &now) {
         for id in ids {
             let _ = deliver_outbox_locked(&id, account_id, "scheduled", app, state).await;
@@ -1203,7 +1342,7 @@ mod tests {
     fn wake_scope_scans_inbox_and_visible_folder_once() {
         assert_eq!(
             scope_for_wake(wake::INBOX, None),
-            Some(SyncScope::Folders(vec!["INBOX".into()]))
+            Some(SyncScope::Inbox { also: Vec::new() })
         );
         assert_eq!(
             scope_for_wake(wake::FOLDER, Some("Archive")),
@@ -1213,7 +1352,9 @@ mod tests {
         assert_eq!(scope_for_wake(wake::OUTBOX, Some("Archive")), None);
         assert_eq!(
             scope_for_wake(wake::INBOX | wake::FOLDER, Some("Archive")),
-            Some(SyncScope::Folders(vec!["INBOX".into(), "Archive".into()]))
+            Some(SyncScope::Inbox {
+                also: vec!["Archive".into()]
+            })
         );
     }
 
@@ -1249,6 +1390,10 @@ mod tests {
                 notify_new_mail: true,
                 id: "acct-rule-read".into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "sam@example.test".into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),
@@ -1344,5 +1489,171 @@ mod tests {
             .find(|box_| box_.id == inbox)
             .unwrap();
         assert_eq!(inbox_summary.unread_count, 0);
+    }
+
+    // Failure modes for Rules v2 execution:
+    // 1. Move queued before MarkRead/Flag drops flag updates when move deletes INBOX row.
+    // 2. Broken rule pointing at missing mailbox stalls ARRIVAL_RULE_PENDING for unrelated rules.
+    #[test]
+    fn rules_enqueue_flags_before_moves_and_isolate_missing_folders() {
+        use crate::db::{CachedMessage, Database};
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, FilterRule, MailboxRole, ProviderKind,
+            RuleAction, RuleCondition, ServerConfig, TlsMode,
+        };
+
+        let db = Database::memory();
+        let server = ServerConfig {
+            host: "mail.example.test".into(),
+            port: 993,
+            tls_mode: TlsMode::Tls,
+            username: "sam@example.test".into(),
+            trusted_certificate: None,
+        };
+        let account = AccountRecord {
+            summary: AccountSummary {
+                notify_new_mail: true,
+                id: "acct-rule-order".into(),
+                provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+                email: "sam@example.test".into(),
+                display_name: "Sam".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: vec![],
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Plain,
+            },
+            imap: server.clone(),
+            smtp: server,
+        };
+        db.insert_account(&account).unwrap();
+        let inbox = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "INBOX",
+                &MailboxRole::Inbox,
+                Some(1),
+                Some(2),
+                Some(1),
+                1,
+            )
+            .unwrap();
+        let archive = db
+            .upsert_mailbox(
+                &account.summary.id,
+                "Archive",
+                &MailboxRole::Archive,
+                Some(2),
+                Some(2),
+                Some(0),
+                0,
+            )
+            .unwrap();
+        let _ = archive;
+        let msg = CachedMessage {
+            internal_at: None,
+            uid: 11,
+            message_id: Some("<rule-order@example.test>".into()),
+            subject: "Bill ready".into(),
+            sender_name: "Power".into(),
+            sender_address: "billing@power.example.test".into(),
+            recipients: String::new(),
+            received_at: "2026-08-18T12:00:00Z".into(),
+            preview: String::new(),
+            is_read: false,
+            is_starred: false,
+            size: 100,
+            to: vec![],
+            cc: vec![],
+            bcc: vec![],
+            reply_to: None,
+            thread_parent: None,
+            text_body: String::new(),
+            html_body: None,
+            attachments: vec![],
+            raw_message: vec![],
+            has_attachments: false,
+            is_answered: false,
+            is_forwarded: false,
+            has_calendar: false,
+            calendar_json: None,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+            importance: String::new(),
+            disposition_to: String::new(),
+        };
+        db.upsert_message(&account.summary.id, inbox, &msg).unwrap();
+        // Rule 1 targets a non-existent folder and does not match this message.
+        db.create_filter_rule(&FilterRule {
+            id: "broken".into(),
+            account_id: account.summary.id.clone(),
+            name: "Broken".into(),
+            field: "from".into(),
+            contains: "nobody@elsewhere.test".into(),
+            action: "move_mailbox".into(),
+            target_mailbox: Some("99999".into()),
+            enabled: true,
+            match_mode: "all".into(),
+            conditions: vec![RuleCondition {
+                field: "from".into(),
+                value: "nobody@elsewhere.test".into(),
+            }],
+            actions: vec![RuleAction {
+                kind: "move_mailbox".into(),
+                target_mailbox: Some("99999".into()),
+                flag_color: None,
+            }],
+        })
+        .unwrap();
+        // Rule 2 has Move before Flag+MarkRead; queue order must still put flags first.
+        db.create_filter_rule(&FilterRule {
+            id: "move-and-flag".into(),
+            account_id: account.summary.id.clone(),
+            name: "File and flag".into(),
+            field: "from".into(),
+            contains: "power.example.test".into(),
+            action: "move_archive".into(),
+            target_mailbox: None,
+            enabled: true,
+            match_mode: "all".into(),
+            conditions: vec![RuleCondition {
+                field: "from".into(),
+                value: "power.example.test".into(),
+            }],
+            actions: vec![
+                RuleAction {
+                    kind: "move_archive".into(),
+                    target_mailbox: None,
+                    flag_color: None,
+                },
+                RuleAction {
+                    kind: "mark_read".into(),
+                    target_mailbox: None,
+                    flag_color: None,
+                },
+                RuleAction {
+                    kind: "flag".into(),
+                    target_mailbox: None,
+                    flag_color: Some(2),
+                },
+            ],
+        })
+        .unwrap();
+
+        let (complete, _) = super::apply_filter_rules_collecting(&db, &account, None, &mut |_| {});
+        assert!(complete, "unmatched broken rule must not stall completion");
+        let ops = db.queued_operations(&account.summary.id).unwrap();
+        let kinds: Vec<&str> = ops.iter().map(|op| op.1.as_str()).collect();
+        let last_non_move = kinds.iter().rposition(|k| *k != "move").unwrap();
+        let first_move = kinds.iter().position(|k| *k == "move").unwrap();
+        assert!(last_non_move < first_move, "ops order was {kinds:?}");
     }
 }

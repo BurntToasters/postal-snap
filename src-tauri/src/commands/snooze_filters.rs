@@ -14,22 +14,24 @@ pub fn snooze_message(
     until_iso: String,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    use chrono::{DateTime, Utc};
+    use crate::date_time::{format_rfc3339, now_utc, parse_rfc3339};
     state.db.account(&account_id)?;
-    let until = DateTime::parse_from_rfc3339(&until_iso)
-        .map_err(|_| "Pick a valid date and time.".to_string())?
-        .with_timezone(&Utc);
-    let now = Utc::now();
-    if until <= now - chrono::Duration::minutes(1) {
+    let requested =
+        parse_rfc3339(&until_iso).map_err(|_| "Pick a valid date and time.".to_string())?;
+    let now = now_utc();
+    if requested <= now - time::Duration::minutes(1) {
         return Err("Pick a future date and time.".into());
     }
-    if until > now + chrono::Duration::days(365) {
+    if requested > now + time::Duration::days(365) {
         return Err("Snooze up to a year ahead.".into());
     }
+    let until = requested
+        .checked_to_offset(time::UtcOffset::UTC)
+        .ok_or_else(|| "Pick a valid date and time.".to_string())?;
     command_result(
         state
             .db
-            .snooze_message(&account_id, message_id, &until.to_rfc3339()),
+            .snooze_message(&account_id, message_id, &format_rfc3339(until)),
     )
 }
 
@@ -40,23 +42,25 @@ pub fn snooze_messages(
     until_iso: String,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    use chrono::{DateTime, Utc};
+    use crate::date_time::{format_rfc3339, now_utc, parse_rfc3339};
     check_bulk_message_count(message_ids.len())?;
     state.db.account(&account_id)?;
-    let until = DateTime::parse_from_rfc3339(&until_iso)
-        .map_err(|_| "Pick a valid date and time.".to_string())?
-        .with_timezone(&Utc);
-    let now = Utc::now();
-    if until <= now - chrono::Duration::minutes(1) {
+    let requested =
+        parse_rfc3339(&until_iso).map_err(|_| "Pick a valid date and time.".to_string())?;
+    let now = now_utc();
+    if requested <= now - time::Duration::minutes(1) {
         return Err("Pick a future date and time.".into());
     }
-    if until > now + chrono::Duration::days(365) {
+    if requested > now + time::Duration::days(365) {
         return Err("Snooze up to a year ahead.".into());
     }
+    let until = requested
+        .checked_to_offset(time::UtcOffset::UTC)
+        .ok_or_else(|| "Pick a valid date and time.".to_string())?;
     command_result(
         state
             .db
-            .snooze_messages(&account_id, &message_ids, &until.to_rfc3339()),
+            .snooze_messages(&account_id, &message_ids, &format_rfc3339(until)),
     )
 }
 
@@ -212,6 +216,6 @@ pub fn list_snoozed(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<SnoozedSummary>> {
     state.db.account(&account_id)?;
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = crate::date_time::format_rfc3339(crate::date_time::now_utc());
     command_result(state.db.list_snoozed(&account_id, &now))
 }

@@ -4,27 +4,46 @@ Record the build commit, tester, date, operating-system version, and result for 
 
 Mocked frontend, Playwright, and unit tests do not by themselves mean the release is ready.
 
+Dated evidence from 0.5.0 and 0.5.2 does not apply to 0.5.4. Each 0.5.4 claim needs its own date, commit id, and artifact path.
+
 At the 2026-10-17 audit, npm audit reported zero vulnerabilities and the RustSec gate passed across 679 locked crates. The pinned GreenMail 2.1.11 integration run passed, including watcher, batched-move, deferred-move, and no-IDLE connection-limit coverage; see the [mail integration report](../artifacts/mail-integration/results.json). The local `npm run test:all` gate passed all 15 phases, and the audit-fix branch adds native and browser regression coverage for worker recovery, snooze accounting, outbox limits, and identity-save races; verification artifacts live under `artifacts/0.5.0/`. Manual and release-commit checkboxes below remain unchecked. The updater is vendored from upstream `plugins-workspace` commit `f36ba7ba` (zip 9.0.3), with a local macOS installation patch; `rustls` remains 0.23.46. [The dependency remediation note](0.5.0-DEPENDENCY-REMEDIATION.md) records the original overrides. Do not broaden advisory ignores, and keep the RustSec gate closed to every new advisory.
 
 ## Automated gates
 
 - [ ] Clean checkout uses Node.js 26.13.0 (CI and `package.json` `engines`; `24.22.1` is also allowed) and the Rust version pinned in `rust-toolchain.toml`.
 - [ ] `npm ci` succeeds without lockfile changes.
-- [ ] `npm run audit` passes: no npm high-severity advisory and no denied RustSec warning (online; signing host). Moderate dev-only npm advisories are tracked in `docs/partially_implemented.md`.
+- [ ] `npm run audit` passes online: no npm high-severity advisory and no denied RustSec warning. The scoped 0.5.4 candidate's `npm run audit:npm` reported zero vulnerabilities; see `docs/partially_implemented.md`.
 - [ ] `npm run workspace:prepare` passes (`SKIP_E2E=1`; Playwright is not required on the signing host).
-- [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`.
+- [ ] CI on the release commit is green, including merged Vitest + Playwright coverage from `npm run test:cov`. Only the instrumented Vite host runs with `node --no-turbo-fast-api-calls` to avoid the Node 26.13.1 `Buffer.byteLength` V8 abort in `ServerResponse.end`; the Playwright child and production remain unchanged.
 - [ ] `npm run test:mail-integration` passes against pinned GreenMail 2.1.11 TLS services.
 - [ ] A copy of the oldest supported v1 database opens, migrates transactionally, and preserves referenced draft/outbox attachments.
 - [ ] Direct feature builds compile. Store (`mas` / `msstore`) compile checks are optional for GitHub-only 0.5.0.
 - [ ] Generated npm and Cargo notices are present in every package.
 - [ ] `src-tauri/tauri.conf.json` updater pubkey is a real minisign key. `TAURI_UPDATER_PUBLIC_KEY` is not required in `.env`; if it is set, it matches the committed key.
 
+## 0.5.4 additions
+
+Behavior changes made for 0.5.4. Each must hold on the release commit.
+
+- [ ] The base Tauri window is opaque (`transparent: false`). Native transparency applies only to Windows Mica and direct macOS `macos-vibrancy` builds.
+- [ ] A folder explicitly assigned as Inbox drives Inbox badges, new-mail notifications, and filter rules (effective role).
+- [ ] Offline operations that exhaust retries move to `needs_attention` instead of being dropped. An ambiguous COPY or fallback MOVE is not reissued without Message-ID proof.
+- [ ] Notify-only rules do not notify again for the same message across sync passes.
+- [ ] Compact density reader and list controls meet the 32px target floor.
+- [ ] Instrumented E2E coverage teardown skips untouched `about:blank` pages and still rejects an app document without instrumentation (`e2e/coverage-lifecycle.spec.ts`).
+
+## 0.5.4 manual checks
+
+Record date, commit id, and artifact path for each item. These native checks are required before the 0.5.4 GitHub release.
+
+- [ ] The direct macOS build (DMG/ZIP) shows no desktop or window bleed through the list/reader divider in right, bottom, and hidden reading-pane modes. Capture a screenshot of each. The Mac App Store, Flatpak, and unsupported Mac builds stay opaque.
+
 ## 0.5.2 additions
 
 Automated gate decisions made for 0.5.2. Each must hold on the release commit.
 
 - [ ] `npm run audit:cargo` passes with the acknowledged list unchanged. `pin-utils` (RUSTSEC-2026-0441) is removed from the vendored `async-imap`, and `async-executor` is 1.14.1 because 1.14.0 is yanked. The five existing acknowledged IDs are still reported and stay listed in `scripts/audit-cargo.js`.
-- [ ] `npm run audit:npm` passes. Its gate is high severity; the 14 moderate advisories all come from `minimatch` and `glob` through dev tooling and are recorded in `docs/partially_implemented.md`.
+- [ ] `npm run audit:npm` passed for 0.5.2's high-severity gate. That baseline reported 14 moderate dev-tool advisories from `minimatch` and `glob`; they were resolved for 0.5.4 as recorded in `docs/partially_implemented.md`.
 
 ## 0.5.2 manual checks
 

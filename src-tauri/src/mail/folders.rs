@@ -16,6 +16,7 @@ const MAX_REPLAY_VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from
 #[derive(Debug, Clone)]
 pub struct MailboxOperationError {
     pub terminal: bool,
+    pub needs_attention: bool,
     pub message: String,
 }
 
@@ -23,6 +24,7 @@ impl MailboxOperationError {
     pub(crate) fn transient(message: String) -> Self {
         Self {
             terminal: false,
+            needs_attention: false,
             message,
         }
     }
@@ -30,6 +32,15 @@ impl MailboxOperationError {
     pub(crate) fn terminal(message: String) -> Self {
         Self {
             terminal: true,
+            needs_attention: false,
+            message,
+        }
+    }
+
+    pub(crate) fn needs_attention(message: String) -> Self {
+        Self {
+            terminal: false,
+            needs_attention: true,
             message,
         }
     }
@@ -367,29 +378,36 @@ pub async fn copy_remote(
         ));
     }
     if options.dedupe_existing {
-        if let Some(search) = options.message_id.and_then(header_message_id_search) {
-            match matching_destination_content(
-                &mut session,
-                &wire_source,
-                &wire_destination,
-                uid,
-                expected_uid_validity,
-                &search,
-                "Copy",
-            )
-            .await?
-            {
-                ReplayContentMatch::ExistingCopy { .. } => {
-                    session.release();
-                    return Ok(());
-                }
-                ReplayContentMatch::SourceMissing => {
-                    return Err(MailboxOperationError::terminal(
-                        "This message is no longer available on the server.".to_string(),
-                    ));
-                }
-                ReplayContentMatch::NoMatch => {}
+        let search = options
+            .message_id
+            .and_then(header_message_id_search)
+            .ok_or_else(|| {
+                MailboxOperationError::needs_attention(
+                    "Copy replay cannot be verified; the offline change needs attention."
+                        .to_string(),
+                )
+            })?;
+        match matching_destination_content(
+            &mut session,
+            &wire_source,
+            &wire_destination,
+            uid,
+            expected_uid_validity,
+            &search,
+            "Copy",
+        )
+        .await?
+        {
+            ReplayContentMatch::ExistingCopy { .. } => {
+                session.release();
+                return Ok(());
             }
+            ReplayContentMatch::SourceMissing => {
+                return Err(MailboxOperationError::terminal(
+                    "This message is no longer available on the server.".to_string(),
+                ));
+            }
+            ReplayContentMatch::NoMatch => {}
         }
     }
     tokio::time::timeout(
@@ -525,6 +543,7 @@ async fn fetch_replay_body(
     })
     .await
     .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
+    rows.retain(|item| item.uid == Some(uid) && item.body().is_some());
     if rows.len() > 1 {
         return Err(MailboxOperationError::transient(format!(
             "Could not safely verify whether the {action} already completed."
@@ -597,6 +616,7 @@ async fn verify_replayed_flags(
     })
     .await
     .map_err(|_| MailboxOperationError::transient(format!("{action} timed out.")))??;
+    rows.retain(|item| item.uid == Some(uid));
     if rows.len() != 1 {
         return Err(MailboxOperationError::transient(format!(
             "The copied message changed while verifying {action}; the source was kept."
@@ -822,21 +842,54 @@ async fn move_remote_inner(
     // Checked once per connection by the pool; saves a round trip per move.
     let can_move = session.capabilities.mv;
     let has_uidplus = session.capabilities.uidplus;
+    if options.dedupe_existing
+        && uids.len() == 1
+        && !can_move
+        && options
+            .message_id
+            .and_then(header_message_id_search)
+            .is_none()
+    {
+        return Err(MailboxOperationError::needs_attention(
+            "Fallback move replay cannot be verified; the offline change needs attention."
+                .to_string(),
+        ));
+    }
     let set = uids
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
     if let Some(to_junk) = options.junk_keyword {
-        // Best effort: a refused keyword STORE must not block the move.
+        // Best effort: NO/BAD is tolerated; timeout/IO discards the desynced socket.
         let keywords = keyword_permitted(&selected.permanent_flags, JUNK_KEYWORD)
             && keyword_permitted(&selected.permanent_flags, NOT_JUNK_KEYWORD);
+        let mut need_reselect = false;
         for (junk_set, command) in junk_store_plan(uids, to_junk, keywords) {
-            let _ = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            let outcome = tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
                 let stream = session.uid_store(junk_set, command).await?;
                 stream.try_collect::<Vec<_>>().await
             })
             .await;
+            let desynced = match outcome {
+                Err(_) => true,
+                Ok(Err(async_imap::error::Error::No(_) | async_imap::error::Error::Bad(_))) => {
+                    false
+                }
+                Ok(Err(_)) => true,
+                Ok(Ok(_)) => false,
+            };
+            if desynced {
+                session.discard();
+                session = super::pool::checkout(account, password)
+                    .await
+                    .map_err(|error| MailboxOperationError::transient(error.into()))?;
+                need_reselect = true;
+                break;
+            }
+        }
+        if need_reselect {
+            select_replay_source(&mut session, &wire_source, expected_uid_validity, "Move").await?;
         }
     }
     if options.dedupe_existing && uids.len() == 1 {
@@ -1196,8 +1249,7 @@ pub async fn empty_folder(
     Ok(())
 }
 
-/// Comma-separated UID set for one STORE / UID EXPUNGE. Empty, zero, and
-/// oversized sets are rejected so a bad caller cannot widen the command.
+/// Compressed UID range string (`1:3,5,7:9`) for STORE / COPY / EXPUNGE.
 pub(crate) fn uid_set(uids: &[u32]) -> Result<String, String> {
     if uids.is_empty() || uids.len() > 200 || uids.contains(&0) {
         return Err("Choose up to 200 messages.".into());
@@ -1205,11 +1257,28 @@ pub(crate) fn uid_set(uids: &[u32]) -> Result<String, String> {
     let mut ordered = uids.to_vec();
     ordered.sort_unstable();
     ordered.dedup();
-    Ok(ordered
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(","))
+    let mut ranges = Vec::new();
+    let mut start = ordered[0];
+    let mut end = ordered[0];
+    for &uid in &ordered[1..] {
+        if uid == end.saturating_add(1) {
+            end = uid;
+        } else {
+            ranges.push(if start == end {
+                start.to_string()
+            } else {
+                format!("{start}:{end}")
+            });
+            start = uid;
+            end = uid;
+        }
+    }
+    ranges.push(if start == end {
+        start.to_string()
+    } else {
+        format!("{start}:{end}")
+    });
+    Ok(ranges.join(","))
 }
 
 /// Delete specific Trash messages. UID EXPUNGE is limited to `uids`. A server
@@ -1307,25 +1376,48 @@ pub async fn mark_folder_read(
     if selected.uid_validity != Some(expected_uid_validity) {
         return Err("This mailbox changed; refresh mail and try again.".into());
     }
-    let newest = selected
-        .uid_next
-        .map(|next| next.saturating_sub(1))
-        .unwrap_or(0);
-    if selected.exists == 0 || newest == 0 {
+    if selected.exists == 0 {
         session.release();
         return Ok(());
     }
-    tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
-        session
-            .uid_store(format!("1:{newest}"), "+FLAGS.SILENT (\\Seen)")
+    if let Some(next) = selected.uid_next.filter(|&next| next > 1) {
+        let newest = next - 1;
+        tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+            session
+                .uid_store(format!("1:{newest}"), "+FLAGS.SILENT (\\Seen)")
+                .await
+                .map_err(|error| redact_error(&error, "Mark folder read"))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|error| redact_error(&error, "Mark folder read"))
+        })
+        .await
+        .map_err(|_| "Marking the folder read timed out.".to_string())??;
+    } else {
+        // Servers omitting UIDNEXT still have UNSEEN UIDs searchable on SELECT.
+        let mut unseen: Vec<u32> =
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, session.uid_search("UNSEEN"))
+                .await
+                .map_err(|_| "Marking the folder read timed out.".to_string())?
+                .map_err(|error| redact_error(&error, "Mark folder read"))?
+                .into_iter()
+                .collect();
+        unseen.sort_unstable();
+        for chunk in unseen.chunks(200) {
+            let set = uid_set(chunk)?;
+            tokio::time::timeout(IMAP_COMMAND_TIMEOUT, async {
+                session
+                    .uid_store(set, "+FLAGS.SILENT (\\Seen)")
+                    .await
+                    .map_err(|error| redact_error(&error, "Mark folder read"))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|error| redact_error(&error, "Mark folder read"))
+            })
             .await
-            .map_err(|error| redact_error(&error, "Mark folder read"))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|error| redact_error(&error, "Mark folder read"))
-    })
-    .await
-    .map_err(|_| "Marking the folder read timed out.".to_string())??;
+            .map_err(|_| "Marking the folder read timed out.".to_string())??;
+        }
+    }
     session.release();
     Ok(())
 }
@@ -1449,6 +1541,10 @@ mod tests {
                 notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::ProtonBridge,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "fixture@example.test".into(),
                 display_name: "Fixture".into(),
                 sync_state: "idle".into(),
@@ -1524,6 +1620,10 @@ mod tests {
                 notify_new_mail: true,
                 id: account_id.clone(),
                 provider: ProviderKind::ProtonBridge,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: "fixture@example.test".into(),
                 display_name: "Fixture".into(),
                 sync_state: "idle".into(),
@@ -1633,5 +1733,102 @@ mod failure_classification_tests {
         assert!(!classify_imap_failure(&Error::Io(std::io::Error::other(
             "reset"
         ))));
+    }
+
+    // Failure modes:
+    // 1. Contiguous UIDs are sent individually instead of compressed IMAP ranges.
+    // 2. mark_folder_read returns early when UIDNEXT is omitted.
+    // 3. Timed-out junk training leaves a desynced session for the move or pool.
+    #[test]
+    fn uid_set_compresses_contiguous_runs() {
+        assert_eq!(super::uid_set(&[1, 2, 3, 5, 7, 8, 9]).unwrap(), "1:3,5,7:9");
+        assert_eq!(super::uid_set(&[10, 9, 8, 10]).unwrap(), "8:10");
+    }
+
+    #[tokio::test]
+    async fn mark_folder_read_without_uidnext_marks_unseen_messages() {
+        use crate::models::{
+            AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let stored = Arc::new(Mutex::new(Vec::<String>::new()));
+        let stored_log = stored.clone();
+        let (port, _cmd_log, server) = crate::mail::test_tls::spawn_imap_server(move |tag, verb, rest| {
+            let stored_log = stored_log.clone();
+            let tag = tag.to_string();
+            let verb = verb.to_string();
+            let rest = rest.to_string();
+            Box::pin(async move {
+                let reply = match verb.as_str() {
+                    "CAPABILITY" => format!("* CAPABILITY IMAP4rev1\r\n{tag} OK done\r\n").into_bytes(),
+                    "LOGIN" => format!("{tag} OK logged in\r\n").into_bytes(),
+                    "SELECT" => format!(
+                        "* 2 EXISTS\r\n* OK [UIDVALIDITY 7]\r\n* OK [PERMANENTFLAGS (\\Seen)]\r\n{tag} OK selected\r\n"
+                    )
+                    .into_bytes(),
+                    "UID" => {
+                        let upper = rest.to_ascii_uppercase();
+                        if upper.starts_with("UID SEARCH UNSEEN") {
+                            format!("* SEARCH 4 5\r\n{tag} OK search\r\n").into_bytes()
+                        } else if upper.starts_with("UID STORE ") {
+                            stored_log.lock().unwrap().push(rest);
+                            format!("{tag} OK stored\r\n").into_bytes()
+                        } else {
+                            format!("{tag} NO unexpected\r\n").into_bytes()
+                        }
+                    }
+                    _ => format!("{tag} OK done\r\n").into_bytes(),
+                };
+                Some(reply)
+            })
+        })
+        .await;
+        let account = AccountRecord {
+            summary: AccountSummary {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
+                email: "markread@example.test".into(),
+                display_name: "Mark".into(),
+                sync_state: "idle".into(),
+                error: None,
+                aliases: Vec::new(),
+                auth_method: "password".into(),
+                signature: String::new(),
+                signature_html: String::new(),
+                reply_to: String::new(),
+                color: None,
+                default_body_format: BodyFormat::Html,
+                notify_new_mail: true,
+            },
+            imap: ServerConfig {
+                host: "127.0.0.1".into(),
+                port,
+                tls_mode: TlsMode::Tls,
+                username: "markread@example.test".into(),
+                trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+            },
+            smtp: ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 587,
+                tls_mode: TlsMode::StartTls,
+                username: "markread@example.test".into(),
+                trusted_certificate: Some(crate::mail::test_tls::CERT_PEM.into()),
+            },
+        };
+        crate::mail::pool::forget(&account.summary.id);
+        super::mark_folder_read(&account, "secret", "INBOX", 7)
+            .await
+            .unwrap();
+        server.abort();
+        let commands = stored.lock().unwrap();
+        assert_eq!(
+            commands.as_slice(),
+            &["UID STORE 4:5 +FLAGS.SILENT (\\Seen)"]
+        );
     }
 }

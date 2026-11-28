@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{db_error, Database};
+use crate::date_time::{format_utc_millis_z, now_utc};
 use rusqlite::params;
 
 const MAX_RECENT_SEARCHES: usize = 8;
@@ -9,11 +10,7 @@ const MAX_QUERY_CHARS: usize = 200;
 fn recent_stamp() -> String {
     static TICK: AtomicU64 = AtomicU64::new(0);
     let tick = TICK.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{}.{:06}",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        tick % 1_000_000
-    )
+    format!("{}.{:06}", format_utc_millis_z(now_utc()), tick % 1_000_000)
 }
 
 fn normalize_recent_query(query: &str) -> Result<String, String> {
@@ -146,12 +143,27 @@ mod tests {
         AccountRecord, AccountSummary, BodyFormat, ProviderKind, ServerConfig, TlsMode,
     };
 
+    #[test]
+    fn recent_search_stamp_keeps_millisecond_z_and_tiebreaker_shape() {
+        let stamp = recent_stamp();
+        let bytes = stamp.as_bytes();
+        assert_eq!(bytes.len(), 31, "{stamp}");
+        assert_eq!(&bytes[19..20], b".", "{stamp}");
+        assert!(bytes[20..23].iter().all(u8::is_ascii_digit), "{stamp}");
+        assert_eq!(&bytes[23..25], b"Z.", "{stamp}");
+        assert!(bytes[25..].iter().all(u8::is_ascii_digit), "{stamp}");
+    }
+
     fn account(id: &str, email: &str) -> AccountRecord {
         AccountRecord {
             summary: AccountSummary {
                 notify_new_mail: true,
                 id: id.into(),
                 provider: ProviderKind::Manual,
+                provider_id: None,
+                app_password_policy: None,
+                app_password_url: None,
+                password_format: None,
                 email: email.into(),
                 display_name: "Sam".into(),
                 sync_state: "idle".into(),

@@ -1,6 +1,6 @@
 [package]
 name = "postal-snap"
-version = "0.5.3"
+version = "0.5.4-beta.1"
 description = "A calm, accessible desktop email client."
 authors = ["BurntToasters <code@rosie.run>"]
 edition = "2021"
@@ -29,7 +29,6 @@ ammonia = "4.2.3"
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
 imap-proto = "0.16.7"
 base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 hayro = "0.9.0"
 keyring = "4.1.5"
@@ -38,7 +37,7 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "h
 mail-parser = "0.11"
 mime_guess = "2"
 reqwest = { version = "0.12", default-features = false, features = ["native-tls", "http2"] }
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -48,6 +47,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = { version = "2", optional = true }
+time = { version = "0.3", default-features = false, features = ["formatting", "large-dates", "local-offset", "macros", "parsing"] }
 # Based on upstream f36ba7ba; local macOS installation preserves app identity.
 tauri-plugin-updater = { path = "vendor/tauri-plugin-updater", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
@@ -109,6 +109,7 @@ unsafe_code = "deny"
 # See vendor/async-imap/POSTAL-SNAP.md.
 [patch.crates-io]
 async-imap = { path = "vendor/async-imap" }
+serde_with = { path = "vendor/serde_with" }
 
 [profile.release]
 # Unwind so a panic fails one task (a sync pass, one message parse) instead of

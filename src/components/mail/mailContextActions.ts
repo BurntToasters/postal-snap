@@ -1,4 +1,5 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { errorText } from "../../errors";
 import { api } from "../../api";
 import {
   addressMailbox,
@@ -38,8 +39,10 @@ import { setFlagColorFor } from "../../flagColor";
 import { FLAG_COLORS } from "../../flagColors";
 import { deleteLoadedConversation } from "../../deleteConversation";
 import {
+  moveListedMessage,
   moveLoadedConversation,
   type ConversationMoveRole,
+  type MoveFailureReconciler,
 } from "../../moveConversation";
 import { beginMessageOpen } from "../../messageOpen";
 import { conversationMessages } from "../../threads";
@@ -51,6 +54,7 @@ type OutboxState = AppState["outbox"][number]["state"];
 
 export interface ContextActionCtx {
   refreshAccount: (accountId: string) => Promise<void>;
+  reconcileMoveFailure: MoveFailureReconciler;
   selectAccount: AppState["selectAccount"];
   onOpenSettings: (tab?: "accounts", accountId?: string) => void;
   openComposer: AppState["openComposer"];
@@ -71,7 +75,7 @@ export interface ContextActionCtx {
   selectMailbox: AppState["selectMailbox"];
   selectLocalView: AppState["selectLocalView"];
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
-  loadMessages: () => Promise<void>;
+  loadMessages: () => Promise<boolean>;
   markMailboxReadById: (mailboxId: number) => Promise<void>;
   emptyTrashFolders: () => Promise<void>;
   emptyJunkFolders: () => Promise<void>;
@@ -101,6 +105,7 @@ export interface ContextActionCtx {
 export function handleContextAction(event: Event, ctx: ContextActionCtx) {
   const {
     refreshAccount,
+    reconcileMoveFailure,
     selectAccount,
     onOpenSettings,
     openComposer,
@@ -212,28 +217,38 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
             : id === "move-conversation-inbox"
               ? "inbox"
               : "archive";
-      void moveLoadedConversation(summary, role, (next, openWasMoved) => {
-        if (!openWasMoved) return;
-        if (next) void chooseMessage(next);
-        else {
-          beginMessageOpen();
-          selectMessage(undefined);
-        }
-      });
+      void moveLoadedConversation(
+        summary,
+        role,
+        (next, openWasMoved) => {
+          if (!openWasMoved) return;
+          if (next) void chooseMessage(next);
+          else {
+            beginMessageOpen();
+            selectMessage(undefined);
+          }
+        },
+        reconcileMoveFailure,
+      );
       return;
     }
     if (id.startsWith("move-conversation:")) {
       const mailboxId = Number(id.slice("move-conversation:".length));
       if (!Number.isFinite(mailboxId)) return;
       rememberMoveMailboxId(current.mailboxes, mailboxId);
-      void moveLoadedConversation(summary, mailboxId, (next, openWasMoved) => {
-        if (!openWasMoved) return;
-        if (next) void chooseMessage(next);
-        else {
-          beginMessageOpen();
-          selectMessage(undefined);
-        }
-      });
+      void moveLoadedConversation(
+        summary,
+        mailboxId,
+        (next, openWasMoved) => {
+          if (!openWasMoved) return;
+          if (next) void chooseMessage(next);
+          else {
+            beginMessageOpen();
+            selectMessage(undefined);
+          }
+        },
+        reconcileMoveFailure,
+      );
       return;
     }
     if (id === "delete-conversation") {
@@ -366,23 +381,136 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
       return;
     }
     if (id === "toggle-read") {
-      if (!summary.isRead && current.settings.markRead === "after2s") {
-        // Explicit Mark read must apply immediately instead of waiting 2s in chooseMessage.
-        void toggleListedRead(summary.id);
-        void chooseMessage({ ...summary, isRead: true });
+      void toggleListedRead(summary.id);
+      return;
+    }
+    if (id === "toggle-star") {
+      const nextStarred = !summary.isStarred;
+      const store = useAppStore.getState();
+      store.setMessages(
+        store.messages.map((item) =>
+          item.id === summary.id ? { ...item, isStarred: nextStarred } : item,
+        ),
+        store.messageCursor,
+        store.hasMoreMessages,
+      );
+      if (store.selectedMessage?.id === summary.id) {
+        store.selectMessage({
+          ...store.selectedMessage,
+          isStarred: nextStarred,
+        });
+      }
+      void api
+        .setMessageFlags(summary.accountId, summary.id, undefined, nextStarred)
+        .catch((cause) => {
+          const latest = useAppStore.getState();
+          latest.setMessages(
+            latest.messages.map((item) =>
+              item.id === summary.id
+                ? {
+                    ...item,
+                    isStarred: summary.isStarred,
+                    flagColor: summary.flagColor,
+                  }
+                : item,
+            ),
+            latest.messageCursor,
+            latest.hasMoreMessages,
+          );
+          if (latest.selectedMessage?.id === summary.id) {
+            latest.selectMessage({
+              ...latest.selectedMessage,
+              isStarred: summary.isStarred,
+              flagColor: summary.flagColor,
+            });
+          }
+          setError(errorText(cause));
+        });
+      return;
+    }
+    if (
+      id === "archive" ||
+      id === "trash" ||
+      id === "junk" ||
+      id.startsWith("move-mailbox:")
+    ) {
+      // Acts on the right-clicked row without opening it.
+      const onLeft = (next?: MessageSummary, openWasMoved?: boolean) => {
+        setSelectedIds((ids) => ids.filter((item) => item !== summary.id));
+        if (!openWasMoved) return;
+        if (next) void chooseMessage(next);
+        else {
+          beginMessageOpen();
+          selectMessage(undefined);
+        }
+      };
+      if (id.startsWith("move-mailbox:")) {
+        const mailboxId = Number(id.slice("move-mailbox:".length));
+        if (!Number.isFinite(mailboxId)) return;
+        rememberMoveMailboxId(current.mailboxes, mailboxId);
+        void moveListedMessage(
+          summary,
+          mailboxId,
+          onLeft,
+          reconcileMoveFailure,
+        );
+        return;
+      }
+      void moveListedMessage(
+        summary,
+        id as "archive" | "trash" | "junk",
+        onLeft,
+        reconcileMoveFailure,
+      );
+      return;
+    }
+    if (id.startsWith("copy-mailbox:")) {
+      const mailboxId = Number(id.slice("copy-mailbox:".length));
+      if (!Number.isFinite(mailboxId)) return;
+      rememberMoveMailboxId(current.mailboxes, mailboxId);
+      void (async () => {
+        try {
+          const outcome = await api.copyMessagesToMailbox(
+            summary.accountId,
+            [summary.id],
+            mailboxId,
+          );
+          if (outcome.failed > 0) {
+            setError(strings.mail.bulkPartial(outcome.failed));
+          } else if (outcome.queued > 0) {
+            useAppStore.getState().pushNotice({
+              severity: "info",
+              message: strings.mail.copyQueued,
+              timeoutMs: 4_000,
+            });
+          }
+          await loadMessages();
+        } catch (cause) {
+          setError(errorText(cause));
+        }
+      })();
+      return;
+    }
+    if (id === "snooze" || id === "snooze-conversation") {
+      if (current.selectedMessage?.id === summary.id) {
+        window.dispatchEvent(
+          new Event(
+            id === "snooze"
+              ? "postal:open-snooze"
+              : "postal:open-snooze-conversation",
+          ),
+        );
         return;
       }
       void (async () => {
         const opened = await chooseMessage(summary);
         if (!opened) return;
-        const latest = useAppStore.getState();
-        const isNowRead =
-          latest.selectedMessage?.id === summary.id
-            ? latest.selectedMessage.isRead
-            : summary.isRead;
-        if (!summary.isRead && isNowRead) return;
         window.dispatchEvent(
-          new CustomEvent("postal:menu-action", { detail: id }),
+          new Event(
+            id === "snooze"
+              ? "postal:open-snooze"
+              : "postal:open-snooze-conversation",
+          ),
         );
       })();
       return;
@@ -390,30 +518,6 @@ export function handleContextAction(event: Event, ctx: ContextActionCtx) {
     void (async () => {
       const opened = await chooseMessage(summary);
       if (!opened) return;
-      if (id === "snooze") {
-        window.dispatchEvent(new Event("postal:open-snooze"));
-        return;
-      }
-      if (id === "snooze-conversation") {
-        window.dispatchEvent(new Event("postal:open-snooze-conversation"));
-        return;
-      }
-      if (id.startsWith("move-mailbox:")) {
-        window.dispatchEvent(
-          new CustomEvent("postal:move-mailbox", {
-            detail: Number(id.slice("move-mailbox:".length)),
-          }),
-        );
-        return;
-      }
-      if (id.startsWith("copy-mailbox:")) {
-        window.dispatchEvent(
-          new CustomEvent("postal:copy-mailbox", {
-            detail: Number(id.slice("copy-mailbox:".length)),
-          }),
-        );
-        return;
-      }
       window.dispatchEvent(
         new CustomEvent("postal:menu-action", { detail: id }),
       );
