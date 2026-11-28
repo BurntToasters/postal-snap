@@ -738,8 +738,8 @@ test("finalize-release uses draft identity before upload and strict identity aft
     "utf8",
   );
   const draftIndex = finalize.indexOf("await verifyDraftReleaseCommit");
-  const uploadIndex = finalize.indexOf(
-    'runGitHub([\n    "release",\n    "upload",',
+  const uploadIndex = finalize.search(
+    /runGitHub\(\[\s*"release",\s*"upload",\s*tag,/,
   );
   const hardIndex = finalize.indexOf("await runHardFinalize({");
   const publishIndex = finalize.indexOf(
